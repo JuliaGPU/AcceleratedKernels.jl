@@ -2,6 +2,7 @@ import AcceleratedKernels as AK
 using KernelAbstractions
 using Test
 using Random
+using MappedArrays
 import Pkg
 
 
@@ -756,6 +757,12 @@ end
         max_tasks=16,
         min_elems=1000,
     )
+
+    # Range input
+    @test AK.sum(1234:100_000, backend) == sum(1234:100000)
+
+    # MappedArrays input
+    @test AK.sum(mappedarray(x->x*x, 1234:100_000), backend) == sum(x->x*x, 1234:100000)
 end
 
 
@@ -777,6 +784,7 @@ end
             end
         end
     end
+
 
     # Fuzzy correctness testing
     for _ in 1:100
@@ -964,6 +972,12 @@ end
     v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:10_042])
     temp = similar(v, Tuple{Float32, Float32})
     f(v, temp)
+
+    # Range input
+    @test AK.mapreduce(x->x*x, +, 1234:100_000, backend, init=Int64(10)) == sum(x->x*x, 1234:100000, init=Int64(10))
+
+    # MappedArrays input
+    @test AK.mapreduce(x->2*x, +, mappedarray(x->x*x, 1234:100_000), backend, init=Int64(10)) == sum(x->2*x*x, 1234:100000, init=Int64(10))
 end
 
 
