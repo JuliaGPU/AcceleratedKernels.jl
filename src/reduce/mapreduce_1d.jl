@@ -125,14 +125,14 @@ function mapreduce_1d(
     blocks = (len + num_per_block - 1) ÷ num_per_block
 
     if !isnothing(temp)
-        @argcheck get_backend(temp) === get_backend(src)
+        @argcheck get_backend(temp) === backend
         @argcheck eltype(temp) === typeof(init)
         @argcheck length(temp) >= blocks * 2
         dst = temp
     else
         # Figure out type for destination
         dst_type = typeof(init)
-        dst = similar(src, dst_type, blocks * 2)
+        dst = KernelAbstractions.allocate(backend, dst_type, blocks * 2)
     end
 
     # Later the kernel will be compiled for views anyways, so use same types
