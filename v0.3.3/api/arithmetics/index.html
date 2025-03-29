@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Arithmetics · AcceleratedKernels.jl</title><meta name="title" content="Arithmetics · AcceleratedKernels.jl"/><meta property="og:title" content="Arithmetics · AcceleratedKernels.jl"/><meta property="twitter:title" content="Arithmetics · AcceleratedKernels.jl"/><meta name="description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:description" content="Documentation for AcceleratedKernels.jl."/><meta property="twitter:description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/arithmetics/"/><meta property="twitter:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/arithmetics/"/><link rel="canonical" href="https://juliagpu.github.io/KernelAbstractions.jl/api/arithmetics/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.png" alt="AcceleratedKernels.jl logo"/></a><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Overview</a></li><li><a class="tocitem" href="../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../performance/">Performance Tips</a></li><li><span class="tocitem">Manual</span><ul><li><a class="tocitem" href="../using_backends/">Using Different Backends</a></li><li><a class="tocitem" href="../foreachindex/">General Loops</a></li><li><a class="tocitem" href="../map/">Map</a></li><li><a class="tocitem" href="../sort/">Sorting</a></li><li><a class="tocitem" href="../reduce/">Reduce</a></li><li><a class="tocitem" href="../mapreduce/">MapReduce</a></li><li><a class="tocitem" href="../accumulate/">Accumulate</a></li><li><a class="tocitem" href="../binarysearch/">Binary Search</a></li><li><a class="tocitem" href="../predicates/">Predicates</a></li><li class="is-active"><a class="tocitem" href>Arithmetics</a></li><li><a class="tocitem" href="../custom_structs/">Custom Structs</a></li><li><a class="tocitem" href="../task_partition/">Task Partitioning</a></li><li><a class="tocitem" href="../utilities/">Utilities</a></li></ul></li><li><a class="tocitem" href="../../testing/">Testing</a></li><li><a class="tocitem" href="../../debugging/">Debugging Kernels</a></li><li><a class="tocitem" href="../../roadmap/">Roadmap</a></li><li><a class="tocitem" href="../../references/">References</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Manual</a></li><li class="is-active"><a href>Arithmetics</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Arithmetics</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/main/docs/src/api/arithmetics.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h3 id="Arithmetics"><a class="docs-heading-anchor" href="#Arithmetics">Arithmetics</a><a id="Arithmetics-1"></a><a class="docs-heading-anchor-permalink" href="#Arithmetics" title="Permalink"></a></h3><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sum" href="#AcceleratedKernels.sum"><code>AcceleratedKernels.sum</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sum(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=zero(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings
+    scheduler=:static,
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    switch_below::Int=0,
+)</code></pre><p>Sum of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../reduce/#AcceleratedKernels.reduce"><code>reduce</code></a>.</p><p><strong>Examples</strong></p><p>Simple sum of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using Metal
+
+v = MtlArray(rand(Int32(1):Int32(100), 100_000))
+s = AK.sum(v)</code></pre><p>Row-wise sum of a matrix:</p><pre><code class="language-julia hljs">m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
+s = AK.sum(m, dims=1)</code></pre><p>If you know the shape of the resulting array (in case of a axis-wise sum, i.e. <code>dims</code> is not <code>nothing</code>), you can provide the <code>temp</code> argument to save results into and avoid allocations:</p><pre><code class="language-julia hljs">m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
+temp = MtlArray(zeros(Int32, 10))
+s = AK.sum(m, dims=2, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L1-L44">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.prod" href="#AcceleratedKernels.prod"><code>AcceleratedKernels.prod</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">prod(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=one(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings
+    scheduler=:static,
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    switch_below::Int=0,
+)</code></pre><p>Product of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../reduce/#AcceleratedKernels.reduce"><code>reduce</code></a>.</p><p><strong>Examples</strong></p><p>Simple product of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using AMDGPU
+
+v = ROCArray(rand(Int32(1):Int32(100), 100_000))
+p = AK.prod(v)</code></pre><p>Row-wise product of a matrix:</p><pre><code class="language-julia hljs">m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
+p = AK.prod(m, dims=1)</code></pre><p>If you know the shape of the resulting array (in case of a axis-wise product, i.e. <code>dims</code> is not <code>nothing</code>), you can provide the <code>temp</code> argument to save results into and avoid allocations:</p><pre><code class="language-julia hljs">m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
+temp = ROCArray(ones(Int32, 10))
+p = AK.prod(m, dims=2, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L76-L119">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.minimum" href="#AcceleratedKernels.minimum"><code>AcceleratedKernels.minimum</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">minimum(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=typemax(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings
+    scheduler=:static,
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    switch_below::Int=0,
+)</code></pre><p>Minimum of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../reduce/#AcceleratedKernels.reduce"><code>reduce</code></a>.</p><p><strong>Examples</strong></p><p>Simple minimum of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using CUDA
+
+v = CuArray(rand(Int32(1):Int32(100), 100_000))
+m = AK.minimum(v)</code></pre><p>Row-wise minimum of a matrix:</p><pre><code class="language-julia hljs">m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
+m = AK.minimum(m, dims=1)</code></pre><p>If you know the shape of the resulting array (in case of a axis-wise minimum, i.e. <code>dims</code> is not <code>nothing</code>), you can provide the <code>temp</code> argument to save results into and avoid allocations:</p><pre><code class="language-julia hljs">m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
+temp = CuArray(ones(Int32, 10))
+m = AK.minimum(m, dims=2, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L226-L269">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.maximum" href="#AcceleratedKernels.maximum"><code>AcceleratedKernels.maximum</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">maximum(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=typemin(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings
+    scheduler=:static,
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    switch_below::Int=0,
+)</code></pre><p>Maximum of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../reduce/#AcceleratedKernels.reduce"><code>reduce</code></a>.</p><p><strong>Examples</strong></p><p>Simple maximum of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using oneAPI
+
+v = oneArray(rand(Int32(1):Int32(100), 100_000))
+m = AK.maximum(v)</code></pre><p>Row-wise maximum of a matrix:</p><pre><code class="language-julia hljs">m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
+m = AK.maximum(m, dims=1)</code></pre><p>If you know the shape of the resulting array (in case of a axis-wise maximum, i.e. <code>dims</code> is not <code>nothing</code>), you can provide the <code>temp</code> argument to save results into and avoid allocations:</p><pre><code class="language-julia hljs">m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
+temp = oneArray(zeros(Int32, 10))
+m = AK.maximum(m, dims=2, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L151-L194">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.count" href="#AcceleratedKernels.count"><code>AcceleratedKernels.count</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">count(
+    [f=identity], src::AbstractArray, backend::Backend=get_backend(src);
+    init=0,
+    dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings
+    scheduler=:static,
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    switch_below::Int=0,
+)</code></pre><p>Count the number of elements in <code>src</code> for which the function <code>f</code> returns <code>true</code>. If <code>f</code> is omitted, count the number of <code>true</code> elements in <code>src</code>. Arguments are the same as for <a href="../mapreduce/#AcceleratedKernels.mapreduce"><code>mapreduce</code></a>.</p><p><strong>Examples</strong></p><p>Simple count of <code>true</code> elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using Metal
+
+v = MtlArray(rand(Bool, 100_000))
+c = AK.count(v)</code></pre><p>Count of elements greater than 50 in a vector:</p><pre><code class="language-julia hljs">v = MtlArray(rand(Int32(1):Int32(100), 100_000))
+c = AK.count(x -&gt; x &gt; 50, v)</code></pre><p>Row-wise count of <code>true</code> elements in a matrix:</p><pre><code class="language-julia hljs">m = MtlArray(rand(Bool, 10, 100_000))
+c = AK.count(m, dims=1)</code></pre><p>If you know the shape of the resulting array (in case of a axis-wise count, i.e. <code>dims</code> is not <code>nothing</code>), you can provide the <code>temp</code> argument to save results into and avoid allocations:</p><pre><code class="language-julia hljs">m = MtlArray(rand(Bool, 10, 100_000))
+temp = MtlArray(zeros(Int32, 10))
+c = AK.count(m, dims=2, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L301-L350">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.cumsum" href="#AcceleratedKernels.cumsum"><code>AcceleratedKernels.cumsum</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">cumsum(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=zero(eltype(src)),
+    neutral=zero(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # Algorithm choice
+    alg::AccumulateAlgorithm=DecoupledLookback(),
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    temp_flags::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Cumulative sum of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../accumulate/#AcceleratedKernels.accumulate"><code>accumulate</code></a>.</p><p><strong>Platform-Specific Notes</strong></p><p>On Apple Metal, the <code>alg=ScanPrefixes()</code> algorithm is used by default.</p><p><strong>Examples</strong></p><p>Simple cumulative sum of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using AMDGPU
+
+v = ROCArray(rand(Int32(1):Int32(100), 100_000))
+s = AK.cumsum(v)</code></pre><p>Row-wise cumulative sum of a matrix:</p><pre><code class="language-julia hljs">m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
+s = AK.cumsum(m, dims=1)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L415-L452">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.cumprod" href="#AcceleratedKernels.cumprod"><code>AcceleratedKernels.cumprod</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">cumprod(
+    src::AbstractArray, backend::Backend=get_backend(src);
+    init=one(eltype(src)),
+    neutral=one(eltype(src)),
+    dims::Union{Nothing, Int}=nothing,
+
+    # Algorithm choice
+    alg::AccumulateAlgorithm=DecoupledLookback(),
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+    temp_flags::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Cumulative product of elements of an array, with optional <code>init</code> and <code>dims</code>. Arguments are the same as for <a href="../accumulate/#AcceleratedKernels.accumulate"><code>accumulate</code></a>.</p><p><strong>Platform-Specific Notes</strong></p><p>On Apple Metal, the <code>alg=ScanPrefixes()</code> algorithm is used by default.</p><p><strong>Examples</strong></p><p>Simple cumulative product of elements in a vector:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using oneAPI
+
+v = oneArray(rand(Int32(1):Int32(100), 100_000))
+p = AK.cumprod(v)</code></pre><p>Row-wise cumulative product of a matrix:</p><pre><code class="language-julia hljs">m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
+p = AK.cumprod(m, dims=1)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/0b99fbf767ff8c6f7bbd862082c34b178f1189ce/src/arithmetics.jl#L483-L520">source</a></section></article></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../predicates/">« Predicates</a><a class="docs-footer-nextpage" href="../custom_structs/">Custom Structs »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.9.0 on <span class="colophon-date" title="Saturday 29 March 2025 18:36">Saturday 29 March 2025</span>. Using Julia version 1.11.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
