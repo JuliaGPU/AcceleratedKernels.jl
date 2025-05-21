@@ -45,30 +45,12 @@ s = AK.sum(m, dims=2, temp=temp)
 function sum(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=zero(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     reduce(
         +, src, backend;
-        init=init,
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        init,
+        kwargs...
     )
 end
 
@@ -120,30 +102,12 @@ p = AK.prod(m, dims=2, temp=temp)
 function prod(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=one(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     reduce(
         *, src, backend;
-        init=init,
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        init,
+        kwargs...
     )
 end
 
@@ -195,30 +159,12 @@ m = AK.maximum(m, dims=2, temp=temp)
 function maximum(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=typemin(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     reduce(
         max, src, backend;
-        init=init,
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        init,
+        kwargs...
     )
 end
 
@@ -270,30 +216,12 @@ m = AK.minimum(m, dims=2, temp=temp)
 function minimum(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=typemax(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     reduce(
         min, src, backend;
-        init=init,
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        init,
+        kwargs...
     )
 end
 
@@ -351,31 +279,13 @@ c = AK.count(m, dims=2, temp=temp)
 function count(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=0,
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     mapreduce(
         x -> x ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init=init,
+        init,
         neutral=zero(typeof(init)),
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        kwargs...
     )
 end
 
@@ -383,31 +293,13 @@ end
 function count(
     f, src::AbstractArray, backend::Backend=get_backend(src);
     init=0,
-    dims::Union{Nothing, Int}=nothing,
-
-    # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    kwargs...
 )
     mapreduce(
         x -> f(x) ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init=init,
+        init,
         neutral=zero(typeof(init)),
-        dims=dims,
-
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-
-        block_size=block_size,
-        temp=temp,
-        switch_below=switch_below,
+        kwargs...
     )
 end
 
@@ -454,28 +346,13 @@ function cumsum(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=zero(eltype(src)),
     neutral=zero(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # Algorithm choice
-    alg::AccumulateAlgorithm=DecoupledLookback(),
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_flags::Union{Nothing, AbstractArray}=nothing,
+    kwargs...
 )
     accumulate(
         +, src, backend;
-        init=init,
-        neutral=neutral,
-        dims=dims,
+        init, neutral,
         inclusive=true,
-
-        alg=alg,
-
-        block_size=block_size,
-        temp=temp,
-        temp_flags=temp_flags,
+        kwargs...
     )
 end
 
@@ -522,27 +399,12 @@ function cumprod(
     src::AbstractArray, backend::Backend=get_backend(src);
     init=one(eltype(src)),
     neutral=one(eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
-
-    # Algorithm choice
-    alg::AccumulateAlgorithm=DecoupledLookback(),
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_flags::Union{Nothing, AbstractArray}=nothing,
+    kwargs...
 )
     accumulate(
         *, src, backend;
-        init=init,
-        neutral=neutral,
-        dims=dims,
+        init, neutral,
         inclusive=true,
-
-        alg=alg,
-
-        block_size=block_size,
-        temp=temp,
-        temp_flags=temp_flags,
+        kwargs...
     )
 end

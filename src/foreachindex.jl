@@ -165,14 +165,12 @@ function foreachindex(
     if backend isa GPU
         _forindices_gpu(
             f, eachindex(itr), backend;
-            block_size=block_size,
+            block_size,
         )
     else
         _forindices_cpu(
             f, eachindex(itr), backend;
-            scheduler=scheduler,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
+            scheduler, max_tasks, min_elems
         )
     end
 end
@@ -270,24 +268,20 @@ function foraxes(
     if isnothing(dims)
         return foreachindex(
             f, itr, backend;
-            scheduler=scheduler,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
-            block_size=block_size,
+            scheduler, max_tasks,
+            min_elems, block_size,
         )
     end
 
     if backend isa GPU
         _forindices_gpu(
             f, axes(itr, dims), backend;
-            block_size=block_size,
+            block_size,
         )
     else
         _forindices_cpu(
             f, axes(itr, dims), backend;
-            scheduler=scheduler,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
+            scheduler, max_tasks, min_elems,
         )
     end
 end

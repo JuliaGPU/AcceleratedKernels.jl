@@ -96,23 +96,11 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function any(
     pred, v::AbstractArray, backend::Backend=get_backend(v);
-
-    # Algorithm choice
-    alg::PredicatesAlgorithm=ConcurrentWrite(),
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
+    kwargs...
 )
     _any_impl(
         pred, v, backend;
-        alg=alg,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        kwargs...
     )
 end
 
@@ -240,23 +228,11 @@ complex_all(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function all(
     pred, v::AbstractArray, backend::Backend=get_backend(v);
-
-    # Algorithm choice
-    alg::PredicatesAlgorithm=ConcurrentWrite(),
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
+    kwargs...
 )
     _all_impl(
         pred, v, backend;
-        alg=alg,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        kwargs...,
     )
 end
 

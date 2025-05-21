@@ -208,19 +208,11 @@ end
 """
 function merge_sort(
     v::AbstractGPUArray, backend::Backend=get_backend(v);
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractGPUArray}=nothing,
+    kwargs...
 )
     v_copy = copy(v)
     merge_sort!(
-        v_copy, backend,
-        lt=lt, by=by, rev=rev, order=order,
-        block_size=block_size, temp=temp,
+        v_copy, backend;
+        kwargs...
     )
 end

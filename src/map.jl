@@ -40,11 +40,9 @@ function map!(
 )
     @argcheck length(dst) == length(src)
     foreachindex(
-        src, backend,
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        src, backend;
+        scheduler, max_tasks,
+        min_elems, block_size,
     ) do idx
         dst[idx] = f(src[idx])
     end
@@ -62,7 +60,7 @@ end
         min_elems=1,
 
         # GPU settings
-        block_size=256,    
+        block_size=256,
     )
 
 Apply the function `f` to each element of `src` and store the results in a copy of `src` (if `f`
@@ -71,21 +69,11 @@ settings are the same as for [`foreachindex`](@ref).
 """
 function map(
     f, src::AbstractArray, backend::Backend=get_backend(src);
-
-    # CPU settings
-    scheduler=:threads,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size=256,
+    kwargs...
 )
     dst = similar(src)
     map!(
-        f, dst, src, backend,
-        scheduler=scheduler,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        f, dst, src, backend;
+        kwargs...
     )
 end

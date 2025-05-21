@@ -117,7 +117,7 @@ function mapreduce_1d(
     len == 1 && return @allowscalar f(src[1])
     if len < switch_below
         h_src = Vector(src)
-        return Base.mapreduce(f, op, h_src, init=init)
+        return Base.mapreduce(f, op, h_src; init)
     end
 
     # Each thread will handle two elements
@@ -147,7 +147,7 @@ function mapreduce_1d(
     len = blocks
     if len < switch_below
         h_src = Vector(@view(dst[1:len]))
-        return Base.reduce(op, h_src, init=init)
+        return Base.reduce(op, h_src; init)
     end
 
     # Now all src elements have been passed through f; just do final reduction, no map needed
@@ -163,7 +163,7 @@ function mapreduce_1d(
 
         if len < switch_below
             h_src = Vector(@view(p2[1:len]))
-            return Base.reduce(op, h_src, init=init)
+            return Base.reduce(op, h_src; init)
         end
 
         p1, p2 = p2, p1

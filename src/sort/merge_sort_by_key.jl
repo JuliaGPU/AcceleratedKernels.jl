@@ -259,22 +259,13 @@ function merge_sort_by_key(
     keys::AbstractGPUArray,
     values::AbstractGPUArray,
     backend::Backend=get_backend(keys);
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    temp_keys::Union{Nothing, AbstractGPUArray}=nothing,
-    temp_values::Union{Nothing, AbstractGPUArray}=nothing,
+    kwargs...
 )
     keys_copy = copy(keys)
     values_copy = copy(values)
 
     merge_sort_by_key!(
-        keys_copy, values_copy, backend,
-        lt=lt, by=by, rev=rev, order=order,
-        block_size=block_size, temp_keys=temp_keys, temp_values=temp_values,
+        keys_copy, values_copy, backend;
+        kwargs...
     )
 end

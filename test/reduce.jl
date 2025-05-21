@@ -153,10 +153,10 @@ end
                 for ksize in 0:3
                     sh = rand(Int32(1):Int32(100), isize, jsize, ksize)
                     s = array_from_host(sh)
-                    d = AK.reduce(+, s; init=Int32(10), dims=dims)
+                    d = AK.reduce(+, s; init=Int32(10), dims)
                     dh = Array(d)
-                    @test dh == sum(sh, init=Int32(10), dims=dims)
-                    @test eltype(dh) == eltype(sum(sh, init=Int32(10), dims=dims))
+                    @test dh == sum(sh; init=Int32(10), dims)
+                    @test eltype(dh) == eltype(sum(sh; init=Int32(10), dims))
                 end
             end
         end
@@ -170,9 +170,9 @@ end
             n3 = rand(1:100)
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
-            s = AK.reduce(+, v; init=Int32(0), dims=dims)
+            s = AK.reduce(+, v; init=Int32(0), dims)
             sh = Array(s)
-            @test sh == sum(vh, dims=dims)
+            @test sh == sum(vh; dims)
         end
     end
 
@@ -183,9 +183,9 @@ end
             n3 = rand(1:100)
             vh = rand(UInt32(1):UInt32(100), n1, n2, n3)
             v = array_from_host(vh)
-            s = AK.reduce(+, v; init=UInt32(0), dims=dims)
+            s = AK.reduce(+, v; init=UInt32(0), dims)
             sh = Array(s)
-            @test sh == sum(vh, dims=dims)
+            @test sh == sum(vh; dims)
         end
     end
 
@@ -196,9 +196,9 @@ end
             n3 = rand(1:100)
             vh = rand(Float32, n1, n2, n3)
             v = array_from_host(vh)
-            s = AK.reduce(+, v; init=Float32(0), dims=dims)
+            s = AK.reduce(+, v; init=Float32(0), dims)
             sh = Array(s)
-            @test sh ≈ sum(vh, dims=dims)
+            @test sh ≈ sum(vh; dims)
         end
     end
 
@@ -211,9 +211,9 @@ end
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
             init = rand(1:100)
-            s = AK.reduce(+, v; init=Int32(init), dims=dims)
+            s = AK.reduce(+, v; init=Int32(init), dims)
             sh = Array(s)
-            @test sh == reduce(+, vh, dims=dims, init=init)
+            @test sh == reduce(+, vh; dims, init)
         end
     end
 
@@ -321,7 +321,7 @@ end
         init = rand(1:100)
         s = AK.mapreduce(abs, +, v; switch_below=switch_below, init=Int32(init))
         vh = Array(v)
-        @test s == mapreduce(abs, +, vh, init=init)
+        @test s == mapreduce(abs, +, vh; init)
     end
 
     # Test with unmaterialised ranges
@@ -363,10 +363,10 @@ end
                 for ksize in 0:3
                     sh = rand(Int32(-100):Int32(100), isize, jsize, ksize)
                     s = array_from_host(sh)
-                    d = AK.mapreduce(-, +, s; init=Int32(-10), dims=dims)
+                    d = AK.mapreduce(-, +, s; init=Int32(-10), dims)
                     dh = Array(d)
-                    @test dh == mapreduce(-, +, sh, init=Int32(-10), dims=dims)
-                    @test eltype(dh) == eltype(mapreduce(-, +, sh, init=Int32(-10), dims=dims))
+                    @test dh == mapreduce(-, +, sh; init=Int32(-10), dims)
+                    @test eltype(dh) == eltype(mapreduce(-, +, sh; init=Int32(-10), dims))
                 end
             end
         end
@@ -380,9 +380,9 @@ end
             n3 = rand(1:100)
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
-            s = AK.mapreduce(-, +, v; init=Int32(0), dims=dims)
+            s = AK.mapreduce(-, +, v; init=Int32(0), dims)
             sh = Array(s)
-            @test sh == mapreduce(-, +, vh, init=Int32(0), dims=dims)
+            @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
         end
     end
 
@@ -394,7 +394,7 @@ end
             s;
             init=(typemax(Float32), typemax(Float32)),
             neutral=(typemax(Float32), typemax(Float32)),
-            dims=dims,
+            dims,
         )
     end
 
@@ -405,7 +405,7 @@ end
             (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
             s;
             init=(typemax(Float32), typemax(Float32)),
-            dims=dims,
+            dims,
         )
     end
 
@@ -439,9 +439,9 @@ end
             vh = rand(Int32(-100):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
             init = rand(1:100)
-            s = AK.mapreduce(-, +, v; init=Int32(init), dims=dims)
+            s = AK.mapreduce(-, +, v; init=Int32(init), dims)
             sh = Array(s)
-            @test sh == mapreduce(-, +, vh, dims=dims, init=init)
+            @test sh == mapreduce(-, +, vh; dims, init)
         end
     end
 
@@ -502,8 +502,8 @@ end
             @test AK.sum(v) == sum(vh)
 
             # Along dimensions
-            r = Array(AK.sum(v, dims=dims))
-            rh = sum(vh, dims=dims)
+            r = Array(AK.sum(v; dims))
+            rh = sum(vh; dims)
 
             @test r == rh
         end
@@ -544,8 +544,8 @@ end
             @test AK.sum(v) == sum(vh)
 
             # Along dimensions
-            r = Array(AK.sum(v, dims=dims))
-            rh = sum(vh, dims=dims)
+            r = Array(AK.sum(v; dims))
+            rh = sum(vh; dims)
 
             @test r == rh
         end
@@ -586,8 +586,8 @@ end
             @test AK.minimum(v) == minimum(vh)
 
             # Along dimensions
-            r = Array(AK.minimum(v, dims=dims))
-            rh = minimum(vh, dims=dims)
+            r = Array(AK.minimum(v; dims))
+            rh = minimum(vh; dims)
 
             @test r == rh
         end
@@ -628,8 +628,8 @@ end
             @test AK.maximum(v) == maximum(vh)
 
             # Along dimensions
-            r = Array(AK.maximum(v, dims=dims))
-            rh = maximum(vh, dims=dims)
+            r = Array(AK.maximum(v; dims))
+            rh = maximum(vh; dims)
 
             @test r == rh
         end
@@ -670,8 +670,8 @@ end
             @test AK.count(x->x>0.5, v) == count(x->x>0.5, vh)
 
             # Along dimensions
-            r = Array(AK.count(x->x>0.5, v, dims=dims))
-            rh = count(x->x>0.5, vh, dims=dims)
+            r = Array(AK.count(x->x>0.5, v; dims))
+            rh = count(x->x>0.5, vh; dims)
 
             @test r == rh
         end

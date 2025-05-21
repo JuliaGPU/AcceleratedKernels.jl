@@ -12,20 +12,12 @@ function AK.any(
 
     # Algorithm choice
     alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
+    kwargs...
 )
     AK._any_impl(
         pred, v, backend;
-        alg=alg,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        alg,
+        kwargs...
     )
 end
 
@@ -35,20 +27,12 @@ function AK.all(
 
     # Algorithm choice
     alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size::Int=256,
+    kwargs...
 )
     AK._all_impl(
         pred, v, backend;
-        alg=alg,
-        max_tasks=max_tasks,
-        min_elems=min_elems,
-        block_size=block_size,
+        alg,
+        kwargs...
     )
 end
 
