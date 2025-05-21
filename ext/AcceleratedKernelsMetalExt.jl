@@ -10,23 +10,14 @@ import AcceleratedKernels as AK
 function AK.accumulate!(
     op, v::AbstractArray, backend::MetalBackend;
     init,
-    neutral=AK.neutral_element(op, eltype(v)),
-    dims::Union{Nothing, Int}=nothing,
-    inclusive::Bool=true,
-
-    # Algorithm choice
+    # Algorithm choice is the only differing default
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_flags::Union{Nothing, AbstractArray}=nothing,
+    kwargs...
 )
     AK._accumulate_impl!(
-        op, v, backend,
-        init=init, neutral=neutral, dims=dims, inclusive=inclusive,
-        alg=alg,
-        block_size=block_size, temp=temp, temp_flags=temp_flags,
+        op, v, backend;
+        init, alg,
+        kwargs...
     )
 end
 
@@ -35,24 +26,15 @@ end
 function AK.accumulate!(
     op, dst::AbstractArray, src::AbstractArray, backend::MetalBackend;
     init,
-    neutral=AK.neutral_element(op, eltype(dst)),
-    dims::Union{Nothing, Int}=nothing,
-    inclusive::Bool=true,
-
-    # Algorithm choice
+    # Algorithm choice is the only differing default
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),
-
-    # GPU settings
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_flags::Union{Nothing, AbstractArray}=nothing,
+    kwargs...
 )
     copyto!(dst, src)
     AK._accumulate_impl!(
-        op, dst, backend,
-        init=init, neutral=neutral, dims=dims, inclusive=inclusive,
-        alg=alg,
-        block_size=block_size, temp=temp, temp_flags=temp_flags,
+        op, dst, backend;
+        init, alg,
+        kwargs...
     )
 end
 
