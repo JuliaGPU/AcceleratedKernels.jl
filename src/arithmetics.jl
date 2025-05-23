@@ -5,7 +5,6 @@
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -48,7 +47,6 @@ function sum(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -62,7 +60,6 @@ function sum(
         init=init,
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 
@@ -80,7 +77,6 @@ end
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -123,7 +119,6 @@ function prod(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -137,7 +132,6 @@ function prod(
         init=init,
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 
@@ -155,7 +149,6 @@ end
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -198,7 +191,6 @@ function maximum(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -212,7 +204,6 @@ function maximum(
         init=init,
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 
@@ -230,7 +221,6 @@ end
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -273,7 +263,6 @@ function minimum(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -287,7 +276,6 @@ function minimum(
         init=init,
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 
@@ -305,7 +293,6 @@ end
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -354,7 +341,6 @@ function count(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -369,7 +355,6 @@ function count(
         neutral=zero(typeof(init)),
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 
@@ -386,7 +371,6 @@ function count(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -401,7 +385,6 @@ function count(
         neutral=zero(typeof(init)),
         dims=dims,
 
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
 

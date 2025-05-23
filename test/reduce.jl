@@ -127,7 +127,6 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         block_size=64,
         temp=array_from_host(zeros(Int32, 10_000)),
         switch_below=50,
-        scheduler=:dynamic,
         max_tasks=10,
         min_elems=100,
     )
@@ -136,7 +135,6 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         rand(Int32, 10_000),
         init=Int32(0),
         neutral=Int64(0),
-        scheduler=:greedy,
         max_tasks=16,
         min_elems=1000,
     )
@@ -227,7 +225,6 @@ end
         block_size=64,
         temp=array_from_host(zeros(Int32, 3, 1, 5)),
         switch_below=50,
-        scheduler=:dynamic,
         max_tasks=10,
         min_elems=100,
     )
@@ -240,7 +237,6 @@ end
         block_size=64,
         temp=array_from_host(zeros(Int32, 3, 4, 1)),
         switch_below=50,
-        scheduler=:greedy,
         max_tasks=16,
         min_elems=1000,
     )
@@ -343,7 +339,6 @@ end
         block_size=64,
         temp=temp,
         switch_below=50,
-        scheduler=:dynamic,
         max_tasks=10,
         min_elems=100,
     )
@@ -456,7 +451,6 @@ end
         block_size=64,
         temp=array_from_host(zeros(Int32, 3, 1, 5)),
         switch_below=50,
-        scheduler=:dynamic,
         max_tasks=10,
         min_elems=100,
     )
@@ -470,7 +464,6 @@ end
         block_size=64,
         temp=array_from_host(zeros(Int32, 3, 4, 1)),
         switch_below=50,
-        scheduler=:greedy,
         max_tasks=16,
         min_elems=1000,
     )

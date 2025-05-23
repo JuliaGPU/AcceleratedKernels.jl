@@ -78,7 +78,6 @@ end
         by=identity, lt=isless, rev::Bool=false,
 
         # CPU settings
-        scheduler=:threads,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
 
@@ -98,7 +97,6 @@ function searchsortedfirst!(
     by=identity, lt=isless, rev::Bool=false,
 
     # CPU settings
-    scheduler=:threads,
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 
@@ -114,7 +112,7 @@ function searchsortedfirst!(
 
     foreachindex(
         x, backend,
-        scheduler=scheduler, max_tasks=max_tasks, min_elems=min_elems,
+        max_tasks=max_tasks, min_elems=min_elems,
         block_size=block_size,
     ) do i
         @inbounds ix[i] = _searchsortedfirst(v, x[i], firstindex(v), lastindex(v), comp)
@@ -131,7 +129,6 @@ end
         by=identity, lt=isless, rev::Bool=false,
 
         # CPU settings
-        scheduler=:threads,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
 
@@ -150,7 +147,6 @@ function searchsortedfirst(
     by=identity, lt=isless, rev::Bool=false,
 
     # CPU settings
-    scheduler=:threads,
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 
@@ -161,7 +157,7 @@ function searchsortedfirst(
     searchsortedfirst!(
         ix, v, x, backend;
         by=by, lt=lt, rev=rev,
-        scheduler=scheduler, max_tasks=max_tasks, min_elems=min_elems,
+        max_tasks=max_tasks, min_elems=min_elems,
         block_size=block_size,
     )
     ix
@@ -178,7 +174,6 @@ end
         by=identity, lt=isless, rev::Bool=false,
 
         # CPU settings
-        scheduler=:threads,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
 
@@ -198,7 +193,6 @@ function searchsortedlast!(
     by=identity, lt=isless, rev::Bool=false,
 
     # CPU settings
-    scheduler=:threads,
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 
@@ -215,7 +209,7 @@ function searchsortedlast!(
 
     foreachindex(
         x, backend,
-        scheduler=scheduler, max_tasks=max_tasks, min_elems=min_elems,
+        max_tasks=max_tasks, min_elems=min_elems,
         block_size=block_size,
     ) do i
         @inbounds ix[i] = _searchsortedlast(v, x[i], firstindex(v), lastindex(v), comp)
@@ -232,7 +226,6 @@ end
         by=identity, lt=isless, rev::Bool=false,
 
         # CPU settings
-        scheduler=:threads,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
 
@@ -251,7 +244,6 @@ function searchsortedlast(
     by=identity, lt=isless, rev::Bool=false,
 
     # CPU settings
-    scheduler=:threads,
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 
@@ -262,7 +254,7 @@ function searchsortedlast(
     searchsortedlast!(
         ix, v, x, backend;
         by=by, lt=lt, rev=rev,
-        scheduler=scheduler, max_tasks=max_tasks, min_elems=min_elems,
+        max_tasks=max_tasks, min_elems=min_elems,
         block_size=block_size,
     )
     ix

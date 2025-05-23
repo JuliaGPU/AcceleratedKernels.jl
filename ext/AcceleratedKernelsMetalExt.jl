@@ -14,6 +14,10 @@ function AK.accumulate!(
     dims::Union{Nothing, Int}=nothing,
     inclusive::Bool=true,
 
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
     # Algorithm choice
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),
 
@@ -39,6 +43,10 @@ function AK.accumulate!(
     dims::Union{Nothing, Int}=nothing,
     inclusive::Bool=true,
 
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
     # Algorithm choice
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),
 
@@ -62,6 +70,10 @@ function AK.cumsum(
     init=zero(eltype(src)),
     neutral=zero(eltype(src)),
     dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # Algorithm choice
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),
@@ -92,6 +104,10 @@ function AK.cumprod(
     init=one(eltype(src)),
     neutral=one(eltype(src)),
     dims::Union{Nothing, Int}=nothing,
+
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # Algorithm choice
     alg::AK.AccumulateAlgorithm=AK.ScanPrefixes(),

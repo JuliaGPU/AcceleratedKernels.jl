@@ -322,7 +322,6 @@ Help is very welcome for any of the below:
       switch_below=(1, 10, 100, 1000, 10000)
   end
   ```
-- We need multithreaded implementations of `sort`, N-dimensional `mapreduce` (in `OhMyThreads.tmapreduce`) and `accumulate` (again, probably in `OhMyThreads`).
 - Any way to expose the warp-size from the backends? Would be useful in reductions.
 - Add a performance regressions runner.
 - **Other ideas?** Post an issue, or open a discussion on the Julia Discourse.

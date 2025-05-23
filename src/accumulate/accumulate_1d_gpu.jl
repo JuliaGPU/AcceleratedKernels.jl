@@ -254,6 +254,11 @@ function accumulate_1d!(
     neutral,
     inclusive::Bool=true,
 
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
+    # GPU settings
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
@@ -308,6 +313,11 @@ function accumulate_1d!(
     neutral,
     inclusive::Bool=true,
 
+    # CPU settings - not used
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
+    # GPU settings
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,

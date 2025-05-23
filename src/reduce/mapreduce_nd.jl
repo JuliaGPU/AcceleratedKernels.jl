@@ -1,10 +1,201 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
-    @Const(src),
-    dst,
-    f,
-    op,
+function mapreduce_nd(
+    f, op, src::AbstractArray, backend::Backend;
+    init,
+    neutral=neutral_element(op, eltype(src)),
+    dims::Int,
+
+    # CPU settings - ignored here
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
+    # GPU settings
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractArray}=nothing,
+)
+    @argcheck 1 <= block_size <= 1024
+
+    # Degenerate cases begin; order of priority matters
+
+    # Invalid dims
+    if dims < 1
+        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
+    end
+
+    # If dims > number of dimensions, just map each element through f and add init, e.g.:
+    #   julia> x = rand(Float64, 3, 5);
+    #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))
+    #   3×5 Matrix{Float32}     # Negative numbers
+    src_sizes = size(src)
+    if dims > length(src_sizes)
+        if isnothing(temp)
+            dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
+        else
+            @argcheck get_backend(temp) == backend
+            @argcheck size(temp) == src_sizes
+            @argcheck eltype(temp) == typeof(init)
+            dst = temp
+        end
+        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
+        return dst
+    end
+
+    # The per-dimension sizes of the destination array; construct tuple without allocations
+    dst_sizes = unrolled_map_index(src_sizes) do i
+        i == dims ? 1 : src_sizes[i]
+    end
+
+    # If any dimension except dims is zero, return empty similar array except with the dims
+    # dimension = 1. Weird, see example below:
+    #   julia> x = rand(3, 0, 5);
+    #   julia> reduce(+, x, dims=3)
+    #   3×0×1 Array{Float64, 3}
+    for isize in eachindex(src_sizes)
+        isize == dims && continue
+        if src_sizes[isize] == 0
+            if isnothing(temp)
+                dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
+            else
+                @argcheck size(temp) == dst_sizes
+                @argcheck eltype(temp) == typeof(init)
+                dst = temp
+            end
+            return dst
+        end
+    end
+
+    # If sizes[dims] == 0, return array filled with init; same shape except sizes[dims] = 1:
+    #   julia> x = rand(3, 0, 5);
+    #   julia> mapreduce(+, x, dims=2)
+    #   3×1×5 Array{Float64, 3}:
+    #   [:, :, 1] =
+    #    0.0
+    #    0.0
+    #    0.0
+    #   [...]
+    len = src_sizes[dims]
+    if len == 0
+        if isnothing(temp)
+            dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
+        else
+            @argcheck get_backend(temp) == backend
+            @argcheck size(temp) == dst_sizes
+            @argcheck eltype(temp) == typeof(init)
+            dst = temp
+        end
+        fill!(dst, init)
+        return dst
+    end
+
+    # If sizes[dims] == 1, just map each element through f. Again, keep same type as init
+    if len == 1
+        if isnothing(temp)
+            dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
+        else
+            @argcheck get_backend(temp) == backend
+            @argcheck size(temp) == src_sizes
+            @argcheck eltype(temp) == typeof(init)
+            dst = temp
+        end
+        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
+        return dst
+    end
+
+    # Degenerate cases end
+
+    # Allocate destination array
+    if isnothing(temp)
+        dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
+    else
+        @argcheck get_backend(temp) == backend
+        @argcheck size(temp) == dst_sizes
+        @argcheck eltype(temp) == typeof(init)
+        dst = temp
+    end
+    dst_size = length(dst)
+
+    if backend isa CPU
+        _mapreduce_nd_cpu_sections!(
+            f, op, dst, src;
+            init,
+            dims,
+            max_tasks=max_tasks,
+            min_elems=min_elems,
+        )
+    else
+        # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
+        #   - If the dimension we are reducing has more elements, (e.g. reduce(+, rand(3, 1000), dims=2)),
+        #     we use a block of threads per dst element - thus, a block of threads reduces the dims axis
+        #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
+        #     use a single thread per dst element - thus, a thread reduces the dims axis sequentially,
+        #     while the other dimensions are processed in parallel, independently
+        if dst_size >= src_sizes[dims]
+            blocks = (dst_size + block_size - 1) ÷ block_size
+            kernel1! = _mapreduce_nd_by_thread!(backend, block_size)
+            kernel1!(
+                src, dst, f, op, init, dims,
+                ndrange=(block_size * blocks,),
+            )
+        else
+            # One block per output element
+            blocks = dst_size
+            kernel2! = _mapreduce_nd_by_block!(backend, block_size)
+            kernel2!(
+                src, dst, f, op, init, neutral, dims,
+                ndrange=(block_size * blocks,),
+            )
+        end
+    end
+
+    return dst
+end
+
+
+function _mapreduce_nd_cpu_sections!(
+    f, op, dst, src;
     init,
     dims,
+    max_tasks, min_elems,
+)
+    src_sizes = size(src)
+    src_strides = strides(src)
+    dst_strides = strides(dst)
+
+    reduce_size = src_sizes[dims]
+    ndims = length(src_sizes)
+
+    # Each thread handles a section of the output array - i.e. reducing along the dims, for
+    # multiple output strides
+    foreachindex(dst, max_tasks=max_tasks, min_elems=min_elems) do idst
+
+        @inbounds begin
+            # Compute the base index in src (excluding the reduced axis)
+            input_base_idx = 0
+            tmp = idst - 1
+            KernelAbstractions.Extras.@unroll for i in ndims:-1:1
+                if i != dims
+                    input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
+                end
+                tmp = tmp % dst_strides[i]
+            end
+
+            # Go over each element in the reduced dimension
+            res = init
+            for i in 0:reduce_size - 1
+                src_idx = input_base_idx + i * src_strides[dims]
+                res = op(res, f(src[src_idx + 1]))
+            end
+            dst[idst] = res
+        end
+    end
+
+    dst
+end
+
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
+    @Const(src), dst,
+    f, op,
+    init, dims,
 )
     # One thread per output element, when there are more outer elements than in the reduced dim
     # e.g. reduce(+, rand(3, 1000), dims=1) => only 3 elements in the reduced dim
@@ -71,12 +262,9 @@ end
 
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
-    @Const(src),
-    dst,
-    f,
-    op,
-    init,
-    neutral,
+    @Const(src), dst,
+    f, op,
+    init, neutral,
     dims,
 )
     # One block per output element, when there are more elements in the reduced dim than in outer
@@ -182,167 +370,4 @@ end
     if ithread == 0x0
         dst[iblock + 0x1] = op(init, sdata[0x1])
     end
-end
-
-
-function mapreduce_nd(
-    f, op, src::AbstractArray, backend::GPU;
-    init,
-    neutral=neutral_element(op, eltype(src)),
-    dims::Int,
-    block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
-)
-    @argcheck 1 <= block_size <= 1024
-
-    # Degenerate cases begin; order of priority matters
-
-    # Invalid dims
-    if dims < 1
-        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
-    end
-
-    # If dims > number of dimensions, just map each element through f and add init, e.g.:
-    #   julia> x = rand(Float64, 3, 5);
-    #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))
-    #   3×5 Matrix{Float32}     # Negative numbers
-    src_sizes = size(src)
-    if dims > length(src_sizes)
-        if isnothing(temp)
-            dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
-        else
-            @argcheck get_backend(temp) == backend
-            @argcheck size(temp) == src_sizes
-            @argcheck eltype(temp) == typeof(init)
-            dst = temp
-        end
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend, init, block_size)
-        return dst
-    end
-
-    # The per-dimension sizes of the destination array; construct tuple without allocations
-    dst_sizes = unrolled_map_index(src_sizes) do i
-        i == dims ? 1 : src_sizes[i]
-    end
-
-    # If any dimension except dims is zero, return empty similar array except with the dims
-    # dimension = 1. Weird, see example below:
-    #   julia> x = rand(3, 0, 5);
-    #   julia> reduce(+, x, dims=3)
-    #   3×0×1 Array{Float64, 3}
-    for isize in eachindex(src_sizes)
-        isize == dims && continue
-        if src_sizes[isize] == 0
-            if isnothing(temp)
-                dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
-            else
-                @argcheck size(temp) == dst_sizes
-                @argcheck eltype(temp) == typeof(init)
-                dst = temp
-            end
-            return dst
-        end
-    end
-
-    # If sizes[dims] == 0, return array filled with init; same shape except sizes[dims] = 1:
-    #   julia> x = rand(3, 0, 5);
-    #   julia> mapreduce(+, x, dims=2)
-    #   3×1×5 Array{Float64, 3}:
-    #   [:, :, 1] =
-    #    0.0
-    #    0.0
-    #    0.0
-    #   [...]
-    len = src_sizes[dims]
-    if len == 0
-        if isnothing(temp)
-            dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
-        else
-            @argcheck get_backend(temp) == backend
-            @argcheck size(temp) == dst_sizes
-            @argcheck eltype(temp) == typeof(init)
-            dst = temp
-        end
-        fill!(dst, init)
-        return dst
-    end
-
-    # If sizes[dims] == 1, just map each element through f. Again, keep same type as init
-    if len == 1
-        if isnothing(temp)
-            dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
-        else
-            @argcheck get_backend(temp) == backend
-            @argcheck size(temp) == src_sizes
-            @argcheck eltype(temp) == typeof(init)
-            dst = temp
-        end
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend, init, block_size)
-        return dst
-    end
-
-    # Degenerate cases end
-
-    # Allocate destination array
-    if isnothing(temp)
-        dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
-    else
-        @argcheck get_backend(temp) == backend
-        @argcheck size(temp) == dst_sizes
-        @argcheck eltype(temp) == typeof(init)
-        dst = temp
-    end
-    dst_size = length(dst)
-
-    # We have two parallelisation approaches, based on which dimension has more elements:
-    #   - If the dimension we are reducing has more elements, (e.g. reduce(+, rand(3, 1000), dims=2)),
-    #     we use a block of threads per dst element - thus, a block of threads reduces the dims axis
-    #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
-    #     use a single thread per dst element - thus, a thread reduces the dims axis sequentially,
-    #     while the other dimensions are processed in parallel, independently
-    if dst_size >= src_sizes[dims]
-        blocks = (dst_size + block_size - 1) ÷ block_size
-        kernel! = _mapreduce_nd_by_thread!(backend, block_size)
-        kernel!(
-            src, dst, f, op, init, dims,
-            ndrange=(block_size * blocks,),
-        )
-    else
-        # One block per output element
-        blocks = dst_size
-        kernel! = _mapreduce_nd_by_block!(backend, block_size)
-        kernel!(
-            src, dst, f, op, init, neutral, dims,
-            ndrange=(block_size * blocks,),
-        )
-    end
-
-    return dst
-end
-
-
-function _mapreduce_nd_apply_init!(f, op, dst, src, backend, init, block_size)
-    foreachindex(
-        dst, backend,
-        block_size=block_size,
-    ) do i
-        dst[i] = op(init, f(src[i]))
-    end
-end
-
-
-# Unrolled map constructing a tuple
-@inline function unrolled_map_index(f, tuple_vector::Tuple)
-    _unrolled_map_index(f, tuple_vector, (), 1)
-end
-
-
-@inline function _unrolled_map_index(f, rest::Tuple{}, acc, i)
-    acc
-end
-
-
-@inline function _unrolled_map_index(f, rest::Tuple, acc, i)
-    result = f(i)
-    _unrolled_map_index(f, Base.tail(rest), (acc..., result), i + 1)
 end

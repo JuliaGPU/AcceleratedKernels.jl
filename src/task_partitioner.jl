@@ -16,6 +16,7 @@ elements per task.
 - `min_elems::Int` : (user-defined) minimum number of elements per task.
 - `num_tasks::Int` : (computed) number of tasks actually needed.
 - `task_istarts::Vector{Int}` : (computed) element starting index for each task.
+- `tasks::Vector{Task}` : (computed) array of tasks; can be reused.
 
 # Examples
 
@@ -51,6 +52,10 @@ tp[i] = 6:10
 tp[i] = 11:15
 tp[i] = 16:20
 ```
+
+The `TaskPartitioner` is used internally by [`task_partition`](@ref) and [`itask_partition`](@ref);
+you can construct one manually if you want to reuse the same partitioning for multiple tasks - this
+also reuses the `tasks` array and minimises allocations.
 """
 struct TaskPartitioner
     num_elems::Int
@@ -60,6 +65,7 @@ struct TaskPartitioner
     # Computed
     num_tasks::Int
     task_istarts::Vector{Int}
+    tasks::Vector{Task}
 end
 
 
@@ -73,7 +79,7 @@ function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     num_tasks = min(max_tasks, num_elems ÷ min_elems)
     if num_tasks <= 1
         num_tasks = 1
-        return TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, Int[])
+        return TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, Int[], Task[])
     end
 
     # Each task gets at least (num_elems ÷ num_tasks) elements; the remaining are redistributed
@@ -88,7 +94,10 @@ function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
         istart += i <= remaining ? per_task + 1 : per_task
     end
 
-    TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, task_istarts)
+    # Pre-allocate tasks array; this can be reused
+    tasks = Vector{Task}(undef, num_tasks)
+
+    TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, task_istarts, tasks)
 end
 
 
@@ -144,6 +153,19 @@ task_partition(4) do irange
     some_long_computation(param1, param2, irange)
 end
 ```
+
+The [`TaskPartitioner`](@ref) form allows you to reuse the same partitioning for multiple tasks -
+this also reuses the `tasks` array and minimises allocations:
+```julia
+tp = TaskPartitioner(4)
+task_partition(tp) do irange
+    some_long_computation(param1, param2, irange)
+end
+# Reuse same partitioning and tasks array
+task_partition(tp) do irange
+    some_other_long_computation(param1, param2, irange)
+end
+```
 """
 function task_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     num_elems >= 0 || throw(ArgumentError("num_elems must be >= 0"))
@@ -151,7 +173,7 @@ function task_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     min_elems > 0 || throw(ArgumentError("min_elems must be > 0"))
 
     if min(max_tasks, num_elems ÷ min_elems) <= 1
-        @inline f(1:num_elems)
+        f(1:num_elems)
     else
         # Compiler should decide if this should be inlined; threading adds quite a bit of code, it
         # is faster (as seen in Cthulhu) to keep it in a separate self-contained function
@@ -163,19 +185,11 @@ end
 
 
 function task_partition(f, tp::TaskPartitioner)
-    tasks = Vector{Task}(undef, tp.num_tasks - 1)
-
-    # Launch first N - 1 tasks
-    for i in 1:tp.num_tasks - 1
-        tasks[i] = Threads.@spawn f(@inbounds(tp[i]))
+    for i in 1:tp.num_tasks
+        tp.tasks[i] = Threads.@spawn f(@inbounds(tp[i]))
     end
-
-    # Execute task N on this main thread
-    f(@inbounds(tp[tp.num_tasks]))
-
-    # Wait for the tasks to finish
-    @inbounds for i in 1:tp.num_tasks - 1
-        wait(tasks[i])
+    @inbounds for i in 1:tp.num_tasks
+        wait(tp.tasks[i])
     end
 end
 
@@ -210,6 +224,19 @@ task_partition(4) do itask, irange
     some_long_computation_needing_itask(param1, param2, irange)
 end
 ```
+
+The [`TaskPartitioner`](@ref) form allows you to reuse the same partitioning for multiple tasks -
+this also reuses the `tasks` array and minimises allocations:
+```julia
+tp = TaskPartitioner(4)
+itask_partition(tp) do itask, irange
+    some_long_computation_needing_itask(param1, param2, irange)
+end
+# Reuse same partitioning and tasks array
+itask_partition(tp) do itask, irange
+    some_other_long_computation_needing_itask(param1, param2, irange)
+end
+```
 """
 function itask_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     num_elems >= 0 || throw(ArgumentError("num_elems must be >= 0"))
@@ -217,7 +244,7 @@ function itask_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1
     min_elems > 0 || throw(ArgumentError("min_elems must be > 0"))
 
     if min(max_tasks, num_elems ÷ min_elems) <= 1
-        @inline f(1, 1:num_elems)
+        f(1, 1:num_elems)
     else
         # Compiler should decide if this should be inlined; threading adds quite a bit of code, it
         # is faster (as seen in Cthulhu) to keep it in a separate self-contained function
@@ -229,18 +256,10 @@ end
 
 
 function itask_partition(f, tp::TaskPartitioner)
-    tasks = Vector{Task}(undef, tp.num_tasks - 1)
-
-    # Launch first N - 1 tasks
-    for i in 1:tp.num_tasks - 1
-        tasks[i] = Threads.@spawn f(i, @inbounds(tp[i]))
+    for i in 1:tp.num_tasks
+        tp.tasks[i] = Threads.@spawn f(i, @inbounds(tp[i]))
     end
-
-    # Execute task N on this main thread
-    f(tp.num_tasks, @inbounds(tp[tp.num_tasks]))
-
-    # Wait for the tasks to finish
-    @inbounds for i in 1:tp.num_tasks - 1
-        wait(tasks[i])
+    @inbounds for i in 1:tp.num_tasks
+        wait(tp.tasks[i])
     end
 end

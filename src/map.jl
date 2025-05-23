@@ -3,7 +3,6 @@
         f, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
 
         # CPU settings
-        scheduler=:threads,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -31,7 +30,6 @@ function map!(
     f, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
 
     # CPU settings
-    scheduler=:threads,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -41,7 +39,6 @@ function map!(
     @argcheck length(dst) == length(src)
     foreachindex(
         src, backend,
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
         block_size=block_size,
@@ -57,7 +54,6 @@ end
         f, src::AbstractArray, backend::Backend=get_backend(src);
 
         # CPU settings
-        scheduler=:threads,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -73,7 +69,6 @@ function map(
     f, src::AbstractArray, backend::Backend=get_backend(src);
 
     # CPU settings
-    scheduler=:threads,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -83,7 +78,6 @@ function map(
     dst = similar(src)
     map!(
         f, dst, src, backend,
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
         block_size=block_size,

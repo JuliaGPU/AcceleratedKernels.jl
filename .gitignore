@@ -25,3 +25,6 @@ Manifest.toml
 
 # Local environment files
 .vscode/settings.json
+
+# Profile files
+profile.pb.gz

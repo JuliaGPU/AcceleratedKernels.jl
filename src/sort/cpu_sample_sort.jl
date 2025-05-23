@@ -22,7 +22,7 @@ function _sample_sort_compute_offsets!(histograms, max_tasks)
                 offsets[j] += histograms[j, itask]
             end
         end
-        accumulate!(+, offsets, init=0, inclusive=false)
+        accumulate!(+, offsets, init=0, inclusive=false, max_tasks=1)
 
         # Compute each task's local offset into each bucket
         for itask in 1:max_tasks
@@ -30,6 +30,7 @@ function _sample_sort_compute_offsets!(histograms, max_tasks)
                 +, @view(histograms[itask, 1:max_tasks]),
                 init=0,
                 inclusive=false,
+                max_tasks=1,
             )
         end
     end
@@ -114,8 +115,8 @@ function _sample_sort_parallel!(
     end
 
     # Compute the global and local (per-bucket) offsets for each task
-    offsets = @view histograms[1:max_tasks, max_tasks + 1]
     _sample_sort_compute_offsets!(histograms, max_tasks)
+    offsets = @view histograms[1:max_tasks, max_tasks + 1]
 
     # Move the elements into the destination buffer
     itask_partition(tp) do itask, irange

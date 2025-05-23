@@ -22,9 +22,9 @@ end
 
 
 # Implementations, then interfaces
-include("accumulate_1d.jl")
+include("accumulate_1d_cpu.jl")
+include("accumulate_1d_gpu.jl")
 include("accumulate_nd.jl")
-include("accumulate_cpu.jl")
 
 
 """
@@ -34,6 +34,10 @@ include("accumulate_cpu.jl")
         neutral=neutral_element(op, eltype(v)),
         dims::Union{Nothing, Int}=nothing,
         inclusive::Bool=true,
+
+        # CPU settings
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=2,
 
         # Algorithm choice
         alg::AccumulateAlgorithm=DecoupledLookback(),
@@ -50,6 +54,10 @@ include("accumulate_cpu.jl")
         neutral=neutral_element(op, eltype(dst)),
         dims::Union{Nothing, Int}=nothing,
         inclusive::Bool=true,
+
+        # CPU settings
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=2,
 
         # Algorithm choice
         alg::AccumulateAlgorithm=DecoupledLookback(),
@@ -72,8 +80,7 @@ we do not need the constraint of `dst` and `src` being different; to minimise me
 recommend using the single-array interface (the first one above).
 
 ## CPU
-The CPU implementation is currently single-threaded; we are waiting on a multithreaded
-implementation in OhMyThreads.jl ([issue](https://github.com/JuliaFolds2/OhMyThreads.jl/issues/129)).
+Use at most `max_tasks` threads with at least `min_elems` elements per task.
 
 ## GPU
 For the 1D case (`dims=nothing`), the `alg` can be one of the following:
@@ -121,6 +128,10 @@ function accumulate!(
     dims::Union{Nothing, Int}=nothing,
     inclusive::Bool=true,
 
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=2,
+
     # Algorithm choice
     alg::AccumulateAlgorithm=DecoupledLookback(),
 
@@ -132,6 +143,7 @@ function accumulate!(
     _accumulate_impl!(
         op, v, backend,
         init=init, neutral=neutral, dims=dims, inclusive=inclusive,
+        max_tasks=max_tasks, min_elems=min_elems,
         alg=alg,
         block_size=block_size, temp=temp, temp_flags=temp_flags,
     )
@@ -145,6 +157,10 @@ function accumulate!(
     dims::Union{Nothing, Int}=nothing,
     inclusive::Bool=true,
 
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=2,
+
     # Algorithm choice
     alg::AccumulateAlgorithm=DecoupledLookback(),
 
@@ -157,6 +173,7 @@ function accumulate!(
     _accumulate_impl!(
         op, dst, backend,
         init=init, neutral=neutral, dims=dims, inclusive=inclusive,
+        max_tasks=max_tasks, min_elems=min_elems,
         alg=alg,
         block_size=block_size, temp=temp, temp_flags=temp_flags,
     )
@@ -172,37 +189,29 @@ function _accumulate_impl!(
 
     alg::AccumulateAlgorithm=DecoupledLookback(),
 
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=2,
+
     # GPU settings
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
-    if backend isa GPU
-        if isnothing(dims)
-            return accumulate_1d!(
-                op, v, backend, alg,
-                init=init, neutral=neutral, inclusive=inclusive,
-                block_size=block_size, temp=temp, temp_flags=temp_flags,
-            )
-        else
-            return accumulate_nd!(
-                op, v, backend,
-                init=init, neutral=neutral, dims=dims, inclusive=inclusive,
-                block_size=block_size,
-            )
-        end
+    if isnothing(dims)
+        return accumulate_1d!(
+            op, v, backend, alg,
+            init=init, neutral=neutral, inclusive=inclusive,
+            max_tasks=max_tasks, min_elems=min_elems,
+            block_size=block_size, temp=temp, temp_flags=temp_flags,
+        )
     else
-        if isnothing(dims)
-            return accumulate_1d!(
-                op, v,
-                init=init, inclusive=inclusive,
-            )
-        else
-            return accumulate_nd!(
-                op, v,
-                init=init, dims=dims, inclusive=inclusive,
-            )
-        end
+        return accumulate_nd!(
+            op, v, backend,
+            init=init, neutral=neutral, dims=dims, inclusive=inclusive,
+            max_tasks=max_tasks, min_elems=min_elems,
+            block_size=block_size,
+        )
     end
 end
 
@@ -214,6 +223,10 @@ end
         neutral=neutral_element(op, eltype(v)),
         dims::Union{Nothing, Int}=nothing,
         inclusive::Bool=true,
+
+        # CPU settings
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=2,
 
         # Algorithm choice
         alg::AccumulateAlgorithm=DecoupledLookback(),
@@ -233,6 +246,10 @@ function accumulate(
     dims::Union{Nothing, Int}=nothing,
     inclusive::Bool=true,
 
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=2,
+
     # Algorithm choice
     alg::AccumulateAlgorithm=DecoupledLookback(),
 
@@ -246,16 +263,10 @@ function accumulate(
     copyto!(vcopy, v)
     accumulate!(
         op, vcopy, backend;
-        init=init,
-        neutral=neutral,
-        dims=dims,
-        inclusive=inclusive,
-
+        init=init, neutral=neutral, dims=dims, inclusive=inclusive,
+        max_tasks=max_tasks, min_elems=min_elems,
         alg=alg,
-
-        block_size=block_size,
-        temp=temp,
-        temp_flags=temp_flags,
+        block_size=block_size, temp=temp, temp_flags=temp_flags,
     )
     vcopy
 end

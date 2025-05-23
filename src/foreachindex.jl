@@ -27,14 +27,7 @@ function _forindices_gpu(
 end
 
 
-function _forindices_polyester(f, indices, min_elems)
-    @batch minbatch=min_elems per=thread for i in indices
-        @inline f(i)
-    end
-end
-
-
-function _forindices_threads(f, indices, max_tasks, min_elems)
+function _forindices_threads(f, indices; max_tasks, min_elems)
     task_partition(length(indices), max_tasks, min_elems) do irange
         # Task partition returns static ranges indexed from 1:length(indices); use those to index
         # into indices, which supports arbitrary indices (and gets compiled away when using 1-based
@@ -47,34 +40,11 @@ function _forindices_threads(f, indices, max_tasks, min_elems)
 end
 
 
-@inline function _forindices_cpu(
-    f,
-    indices,
-    backend::CPU;
-
-    scheduler=:threads,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-)
-    # CPU implementation
-    if scheduler === :threads
-        _forindices_threads(f, indices, max_tasks, min_elems)
-    elseif scheduler === :polyester
-        _forindices_polyester(f, indices, min_elems)
-    else
-        throw(ArgumentError("`scheduler` must be `:threads` or `:polyester`. Received $scheduler"))
-    end
-
-    nothing
-end
-
-
 """
     foreachindex(
         f, itr, backend::Backend=get_backend(itr);
 
         # CPU settings
-        scheduler=:threads,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -90,9 +60,7 @@ MtlArray, oneArray - with one GPU thread per index.
 On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
 `min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
 launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs). The scheduler can be `:polyester`
-to use Polyester.jl cheap threads or `:threads` to use normal Julia threads; either can be faster
-depending on the function, but in general the latter is more composable.
+amortise the cost of launching a thread (which is a few μs).
 
 # Examples
 Normally you would write a for loop like this:
@@ -155,7 +123,6 @@ function foreachindex(
     f, itr, backend::Backend=get_backend(itr);
 
     # CPU settings
-    scheduler=:threads,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -163,17 +130,9 @@ function foreachindex(
     block_size=256,
 )
     if backend isa GPU
-        _forindices_gpu(
-            f, eachindex(itr), backend;
-            block_size=block_size,
-        )
+        _forindices_gpu(f, eachindex(itr), backend; block_size)
     else
-        _forindices_cpu(
-            f, eachindex(itr), backend;
-            scheduler=scheduler,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
-        )
+        _forindices_threads(f, eachindex(itr); max_tasks, min_elems)
     end
 end
 
@@ -183,7 +142,6 @@ end
         f, itr, dims::Union{Nothing, <:Integer}=nothing, backend::Backend=get_backend(itr);
 
         # CPU settings
-        scheduler=:threads,
         max_tasks=Threads.nthreads(),
         min_elems=1,
 
@@ -199,9 +157,7 @@ MtlArray, oneArray - with one GPU thread per index.
 On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
 `min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
 launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs). The scheduler can be `:polyester`
-to use Polyester.jl cheap threads or `:threads` to use normal Julia threads; either can be faster
-depending on the function, but in general the latter is more composable.
+amortise the cost of launching a thread (which is a few μs).
 
 # Examples
 Normally you would write a for loop like this:
@@ -260,7 +216,6 @@ function foraxes(
     f, itr, dims::Union{Nothing, <:Integer}=nothing, backend::Backend=get_backend(itr);
 
     # CPU settings
-    scheduler=:threads,
     max_tasks=Threads.nthreads(),
     min_elems=1,
 
@@ -270,7 +225,6 @@ function foraxes(
     if isnothing(dims)
         return foreachindex(
             f, itr, backend;
-            scheduler=scheduler,
             max_tasks=max_tasks,
             min_elems=min_elems,
             block_size=block_size,
@@ -278,16 +232,8 @@ function foraxes(
     end
 
     if backend isa GPU
-        _forindices_gpu(
-            f, axes(itr, dims), backend;
-            block_size=block_size,
-        )
+        _forindices_gpu(f, axes(itr, dims), backend; block_size)
     else
-        _forindices_cpu(
-            f, axes(itr, dims), backend;
-            scheduler=scheduler,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
-        )
+        _forindices_threads(f, axes(itr, dims); max_tasks, min_elems)
     end
 end

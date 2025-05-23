@@ -17,13 +17,13 @@
         @test y == map(i -> i^2, x)
 
         x = rand(Float32, 1000)
-        y = AK.map(x, scheduler=:threads, max_tasks=2, min_elems=100) do i
+        y = AK.map(x, max_tasks=2, min_elems=100) do i
             i > 0.5 ? i : 0
         end
         @test y == map(i -> i > 0.5 ? i : 0, x)
 
         x = rand(Float32, 1000)
-        y = AK.map(x, scheduler=:polyester, max_tasks=4, min_elems=500) do i
+        y = AK.map(x, max_tasks=4, min_elems=500) do i
             i > 0.5 ? i : 0
         end
         @test y == map(i -> i > 0.5 ? i : 0, x)

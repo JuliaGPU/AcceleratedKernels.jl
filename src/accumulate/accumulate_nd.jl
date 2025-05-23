@@ -1,3 +1,125 @@
+function accumulate_nd!(
+    op, v::AbstractArray, backend::Backend;
+    init,
+    neutral=neutral_element(op, eltype(v)),
+    dims::Int,
+    inclusive::Bool=true,
+
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
+    # GPU settings
+    block_size::Int=256,
+)
+    # Correctness checks
+    @argcheck block_size > 0
+    @argcheck ispow2(block_size)
+
+    # Degenerate cases begin; order of priority matters
+
+    # Invalid dims
+    if dims < 1
+        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
+    end
+
+    # Nothing to accumulate
+    vsizes = size(v)
+    if length(v) == 0 || dims > length(vsizes)
+        return v
+    end
+    for s in vsizes
+        s == 0 && return v
+    end
+
+    # Degenerate cases end
+
+    if backend isa CPU
+        _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
+    else
+        # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
+        #   - If the dimension we are accumulating along has more elements than the "outer" dimensions,
+        #     (e.g. accumulate(+, rand(3, 1000), dims=2)), we use a block of threads per outer
+        #     dimension - thus, a block of threads reduces the dims axis
+        #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
+        #     use a single thread per outer dimension - thus, a thread reduces the dims axis
+        #     sequentially, while the other dimensions are processed in parallel, independently
+        length_dims = vsizes[dims]
+        length_outer = length(v) ÷ length_dims
+
+        if length_outer >= length_dims
+            # One thread per outer dimension
+            blocks = (length_outer + block_size - 1) ÷ block_size
+            kernel1! = _accumulate_nd_by_thread!(backend, block_size)
+            kernel1!(
+                v, op, init, dims, inclusive,
+                ndrange=(block_size * blocks,),
+            )
+        else
+            # One block per outer dimension
+            blocks = length_outer
+            kernel2! = _accumulate_nd_by_block!(backend, block_size)
+            kernel2!(
+                v, op, init, neutral, dims, inclusive,
+                ndrange=(block_size, blocks),
+            )
+        end
+    end
+
+    return v
+end
+
+
+function _accumulate_nd_cpu_sections!(
+    op, v::AbstractArray;
+    init, dims, inclusive,
+    max_tasks, min_elems,
+)
+    vsizes = size(v)
+    vstrides = strides(v)
+
+    ndims = length(vsizes)
+
+    length_dims = vsizes[dims]
+    length_outer = length(v) ÷ length_dims
+
+    # Each thread handles a section of the output array - i.e. reducing along the dims, for
+    # multiple output strides
+    foreachindex(1:length_outer, CPU(), max_tasks=max_tasks, min_elems=min_elems) do idst
+
+        @inbounds begin
+            # Compute the base index in v for this outer axis
+            input_base_idx = 0
+            tmp = idst
+            KernelAbstractions.Extras.@unroll for i in 1:ndims
+                if i != dims
+                    input_base_idx += (tmp % vsizes[i]) * vstrides[i]
+                    tmp = tmp ÷ vsizes[i]
+                end
+            end
+
+            # Go over each element in the accumulated dimension
+            if inclusive
+                running = init
+                for i in 0:length_dims - 1
+                    v_idx = input_base_idx + i * vstrides[dims]
+                    running = op(running, v[v_idx + 1])
+                    v[v_idx + 1] = running
+                end
+            else
+                running = init
+                for i in 0:length_dims - 1
+                    v_idx = input_base_idx + i * vstrides[dims]
+                    v[v_idx + 1], running = running, op(running, v[v_idx + 1])
+                end
+            end
+        end
+    end
+
+    v
+end
+
+
 @kernel inbounds=true cpu=false unsafe_indices=true function _accumulate_nd_by_thread!(
     v, op, init, dims, inclusive,
 )
@@ -248,67 +370,4 @@ end
 
         ichunk += 0x1
     end
-end
-
-
-function accumulate_nd!(
-    op, v::AbstractArray, backend::GPU;
-    init,
-    neutral=neutral_element(op, eltype(v)),
-    dims::Int,
-    inclusive::Bool=true,
-
-    block_size::Int=256,
-)
-    # Correctness checks
-    @argcheck block_size > 0
-    @argcheck ispow2(block_size)
-
-    # Degenerate cases begin; order of priority matters
-
-    # Invalid dims
-    if dims < 1
-        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
-    end
-
-    # Nothing to accumulate
-    vsizes = size(v)
-    if length(v) == 0 || dims > length(vsizes)
-        return v
-    end
-    for s in vsizes
-        s == 0 && return v
-    end
-
-    # Degenerate cases end
-
-    # We have two parallelisation approaches, based on which dimension has more elements:
-    #   - If the dimension we are accumulating along has more elements than the "outer" dimensions,
-    #     (e.g. accumulate(+, rand(3, 1000), dims=2)), we use a block of threads per outer
-    #     dimension - thus, a block of threads reduces the dims axis
-    #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
-    #     use a single thread per outer dimension - thus, a thread reduces the dims axis
-    #     sequentially, while the other dimensions are processed in parallel, independently
-    length_dims = vsizes[dims]
-    length_outer = length(v) ÷ length_dims
-
-    if length_outer >= length_dims
-        # One thread per outer dimension
-        blocks = (length_outer + block_size - 1) ÷ block_size
-        kernel! = _accumulate_nd_by_thread!(backend, block_size)
-        kernel!(
-            v, op, init, dims, inclusive,
-            ndrange=(block_size * blocks,),
-        )
-    else
-        # One block per outer dimension
-        blocks = length_outer
-        kernel! = _accumulate_nd_by_block!(backend, block_size)
-        kernel!(
-            v, op, init, neutral, dims, inclusive,
-            ndrange=(block_size, blocks),
-        )
-    end
-
-    return v
 end

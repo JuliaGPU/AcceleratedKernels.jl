@@ -30,6 +30,4 @@ v = Vector(-1000:1000)                          # Normal CPU array
 AK.reduce(+, v, max_tasks=Threads.nthreads())
 ```
 
-Note the `reduce` and `mapreduce` CPU implementations forward arguments to [OhMyThreads.jl](https://github.com/JuliaFolds2/OhMyThreads.jl), an excellent package for multithreading. The focus of AcceleratedKernels.jl is to provide a unified interface to high-performance implementations of common algorithmic kernels, for both CPUs and GPUs - if you need fine-grained control over threads, scheduling, communication for specialised algorithms (e.g. with highly unequal workloads), consider using [OhMyThreads.jl](https://github.com/JuliaFolds2/OhMyThreads.jl) or [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) directly.
-
-There is ongoing work on multithreaded CPU `sort` and `accumulate` implementations - at the moment, they fall back to single-threaded algorithms; the rest of the library is fully parallelised for both CPUs and GPUs.
+By default all algorithms use the number of threads Julia was started with.

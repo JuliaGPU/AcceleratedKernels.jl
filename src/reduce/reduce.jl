@@ -1,19 +1,7 @@
-# neutral_element moved over from GPUArrays.jl
-neutral_element(op, T) =
-    error("""AcceleratedKernels.jl needs to know the neutral element for your operator `$op`.
-             Please pass it as an explicit keyword argument `neutral`.""")
-neutral_element(::typeof(Base.:(|)), T) = zero(T)
-neutral_element(::typeof(Base.:(+)), T) = zero(T)
-neutral_element(::typeof(Base.add_sum), T) = zero(T)
-neutral_element(::typeof(Base.:(&)), T) = one(T)
-neutral_element(::typeof(Base.:(*)), T) = one(T)
-neutral_element(::typeof(Base.mul_prod), T) = one(T)
-neutral_element(::typeof(Base.min), T) = typemax(T)
-neutral_element(::typeof(Base.max), T) = typemin(T)
-neutral_element(::typeof(Base._extrema_rf), ::Type{<:NTuple{2,T}}) where {T} = typemax(T), typemin(T)
-
-
-include("mapreduce_1d.jl")
+# Backend implementations
+include("utilities.jl")
+include("mapreduce_1d_cpu.jl")
+include("mapreduce_1d_gpu.jl")
 include("mapreduce_nd.jl")
 
 
@@ -25,9 +13,8 @@ include("mapreduce_nd.jl")
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
 
         # GPU settings
         block_size::Int=256,
@@ -39,13 +26,12 @@ Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` i
 `src` to a scalar. If `dims` is an integer, reduce `src` along that dimension. The `init` value is
 used as the initial value for the reduction; `neutral` is the neutral element for the operator `op`.
 
-## CPU settings
-The `scheduler` can be one of the [OhMyThreads.jl schedulers](https://juliafolds2.github.io/OhMyThreads.jl/dev/refs/api/#Schedulers),
-i.e. `:static`, `:dynamic`, `:greedy` or `:serial`. Assuming the workload is uniform (as the GPU
-algorithm prefers), `:static` is used by default; if you need fine-grained control over your
-threads, consider using [`OhMyThreads.jl`](https://github.com/JuliaFolds2/OhMyThreads.jl) directly.
+The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
-Use at most `max_tasks` threads with at least `min_elems` elements per task.
+## CPU settings
+Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
+arrays (`dims::Int`) multithreading currently only becomes faster for `max_tasks >= 4`; all other
+cases are scaling linearly with the number of threads.
 
 ## GPU settings
 The `block_size` parameter controls the number of threads per block.
@@ -59,10 +45,6 @@ zero, check against `Base.reduce` for CPU arrays for exact behavior.
 
 The `switch_below` parameter controls the threshold below which the reduction is performed on the
 CPU and is only used for 1D reductions (i.e. `dims=nothing`).
-
-# Platform-Specific Notes
-N-dimensional reductions on the CPU are not parallel yet ([issue](https://github.com/JuliaFolds2/OhMyThreads.jl/issues/128)),
-and defer to `Base.reduce`.
 
 # Examples
 Computing a sum, reducing down to a scalar that is copied to host:
@@ -91,9 +73,8 @@ function reduce(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # GPU settings
     block_size::Int=256,
@@ -105,7 +86,6 @@ function reduce(
         init=init,
         neutral=neutral,
         dims=dims,
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
         block_size=block_size,
@@ -122,9 +102,8 @@ function _reduce_impl(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # GPU settings
     block_size::Int=256,
@@ -136,7 +115,6 @@ function _reduce_impl(
         init=init,
         neutral=neutral,
         dims=dims,
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
         block_size=block_size,
@@ -156,9 +134,8 @@ end
         dims::Union{Nothing, Int}=nothing,
 
         # CPU settings
-        scheduler=:static,
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
 
         # GPU settings
         block_size::Int=256,
@@ -173,13 +150,12 @@ dimension. The `init` value is used as the initial value for the reduction (i.e.
 The `neutral` value is the neutral element (zero) for the operator `op`, which is needed for an
 efficient GPU implementation that also allows a nonzero `init`.
 
-## CPU settings
-The `scheduler` can be one of the [OhMyThreads.jl schedulers](https://juliafolds2.github.io/OhMyThreads.jl/dev/refs/api/#Schedulers),
-i.e. `:static`, `:dynamic`, `:greedy` or `:serial`. Assuming the workload is uniform (as the GPU
-algorithm prefers), `:static` is used by default; if you need fine-grained control over your
-threads, consider using [`OhMyThreads.jl`](https://github.com/JuliaFolds2/OhMyThreads.jl) directly.
+The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
-Use at most `max_tasks` threads with at least `min_elems` elements per task.
+## CPU settings
+Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
+arrays (`dims::Int`) multithreading currently only becomes faster for `max_tasks >= 4`; all other
+cases are scaling linearly with the number of threads.
 
 ## GPU settings
 The `block_size` parameter controls the number of threads per block.
@@ -222,9 +198,8 @@ function mapreduce(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # GPU settings
     block_size::Int=256,
@@ -236,7 +211,6 @@ function mapreduce(
         init=init,
         neutral=neutral,
         dims=dims,
-        scheduler=scheduler,
         max_tasks=max_tasks,
         min_elems=min_elems,
         block_size=block_size,
@@ -253,51 +227,35 @@ function _mapreduce_impl(
     dims::Union{Nothing, Int}=nothing,
 
     # CPU settings
-    scheduler=:static,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 
     # GPU settings
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
 )
-    if backend isa GPU
-        if isnothing(dims)
-            return mapreduce_1d(
-                f, op, src, backend;
-                init=init,
-                neutral=neutral,
-                block_size=block_size,
-                temp=temp,
-                switch_below=switch_below,
-            )
-        else
-            return mapreduce_nd(
-                f, op, src, backend;
-                init=init,
-                neutral=neutral,
-                dims=dims,
-                block_size=block_size,
-                temp=temp,
-            )
-        end
+    if isnothing(dims)
+        return mapreduce_1d(
+            f, op, src, backend;
+            init=init,
+            neutral=neutral,
+            max_tasks=max_tasks,
+            min_elems=min_elems,
+            block_size=block_size,
+            temp=temp,
+            switch_below=switch_below,
+        )
     else
-        if isnothing(dims)
-            num_elems = length(src)
-            num_tasks = min(max_tasks, num_elems ÷ min_elems)
-            if num_tasks <= 1
-                return Base.mapreduce(f, op, src; init=init)
-            end
-            return op(init, OMT.tmapreduce(
-                f, op, src; init=neutral,
-                scheduler=scheduler,
-                outputtype=typeof(init),
-                nchunks=num_tasks,
-            ))
-        else
-            # FIXME: waiting on OhMyThreads.jl for n-dimensional reduction
-            return Base.mapreduce(f, op, src; init=init, dims=dims)
-        end
+        return mapreduce_nd(
+            f, op, src, backend;
+            init=init,
+            neutral=neutral,
+            dims=dims,
+            max_tasks=max_tasks,
+            min_elems=min_elems,
+            block_size=block_size,
+            temp=temp,
+        )
     end
 end

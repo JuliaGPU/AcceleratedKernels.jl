@@ -104,6 +104,11 @@ function mapreduce_1d(
     init,
     neutral=neutral_element(op, eltype(src)),
 
+    # CPU settings - ignored here
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+
+    # GPU settings
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
