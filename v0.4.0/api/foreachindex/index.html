@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>General Loops · AcceleratedKernels.jl</title><meta name="title" content="General Loops · AcceleratedKernels.jl"/><meta property="og:title" content="General Loops · AcceleratedKernels.jl"/><meta property="twitter:title" content="General Loops · AcceleratedKernels.jl"/><meta name="description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:description" content="Documentation for AcceleratedKernels.jl."/><meta property="twitter:description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/foreachindex/"/><meta property="twitter:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/foreachindex/"/><link rel="canonical" href="https://juliagpu.github.io/KernelAbstractions.jl/api/foreachindex/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.png" alt="AcceleratedKernels.jl logo"/></a><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Overview</a></li><li><a class="tocitem" href="../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../performance/">Performance Tips</a></li><li><span class="tocitem">Manual</span><ul><li><a class="tocitem" href="../using_backends/">Using Different Backends</a></li><li class="is-active"><a class="tocitem" href>General Loops</a></li><li><a class="tocitem" href="../map/">Map</a></li><li><a class="tocitem" href="../sort/">Sorting</a></li><li><a class="tocitem" href="../reduce/">Reduce</a></li><li><a class="tocitem" href="../mapreduce/">MapReduce</a></li><li><a class="tocitem" href="../accumulate/">Accumulate</a></li><li><a class="tocitem" href="../binarysearch/">Binary Search</a></li><li><a class="tocitem" href="../predicates/">Predicates</a></li><li><a class="tocitem" href="../arithmetics/">Arithmetics</a></li><li><a class="tocitem" href="../custom_structs/">Custom Structs</a></li><li><a class="tocitem" href="../task_partition/">Task Partitioning</a></li><li><a class="tocitem" href="../utilities/">Utilities</a></li></ul></li><li><a class="tocitem" href="../../testing/">Testing</a></li><li><a class="tocitem" href="../../debugging/">Debugging Kernels</a></li><li><a class="tocitem" href="../../roadmap/">Roadmap</a></li><li><a class="tocitem" href="../../references/">References</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Manual</a></li><li class="is-active"><a href>General Loops</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>General Loops</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/main/docs/src/api/foreachindex.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h3 id="General-Looping:-foreachindex-/-foraxes"><a class="docs-heading-anchor" href="#General-Looping:-foreachindex-/-foraxes">General Looping: <code>foreachindex</code> / <code>foraxes</code></a><a id="General-Looping:-foreachindex-/-foraxes-1"></a><a class="docs-heading-anchor-permalink" href="#General-Looping:-foreachindex-/-foraxes" title="Permalink"></a></h3><p>General workhorses for converting normal Julia <code>for</code> loops into GPU code, for example:</p><pre><code class="language-julia hljs"># Copy kernel testing throughput
+function cpu_copy!(dst, src)
+    for i in eachindex(src)
+        dst[i] = src[i]
+    end
+end</code></pre><p>Would be written for GPU as:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+
+function gpu_copy!(dst, src)
+    AK.foreachindex(src) do i
+        dst[i] = src[i]
+    end
+end</code></pre><p>Yes, simply change <code>for i in eachindex(itr)</code> into <code>AK.foreachindex(itr) do i</code> to run it on GPUs / multithreaded - magic! (or just amazing language design)</p><p>This is a parallelised for-loop over the indices of an iterable; converts normal Julia code to GPU kernels running one thread per index. On CPUs it executes static index ranges on <code>max_tasks</code> threads, with user-defined <code>min_elems</code> to be processed by each thread; if only a single thread ends up being needed, the loop is inlined and executed without spawning threads.</p><ul><li><strong>Other names</strong>: <code>Kokkos::parallel_for</code>, <code>RAJA::forall</code>, <code>thrust::transform</code>.</li></ul><p>Example:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+
+function f(a, b)
+    # Don&#39;t use global arrays inside a `foreachindex`; types must be known
+    @assert length(a) == length(b)
+    AK.foreachindex(a) do i
+        # Note that we don&#39;t have to explicitly pass b into the lambda
+        if b[i] &gt; 0.5
+            a[i] = 1
+        else
+            a[i] = 0
+        end
+
+        # Showing arbitrary if conditions; can also be written as:
+        # @inbounds a[i] = b[i] &gt; 0.5 ? 1 : 0
+    end
+end
+
+# Use any backend, e.g. CUDA, ROCm, oneAPI, Metal, or CPU
+using oneAPI
+v1 = oneArray{Float32}(undef, 100_000)
+v2 = oneArray(rand(Float32, 100_000))
+f(v1, v2)</code></pre><p>All GPU functions allow you to specify a block size - this is often a power of two (mostly 64, 128, 256, 512); the optimum depends on the algorithm, input data and hardware - you can try the different values and <code>@time</code> or <code>@benchmark</code> them:</p><pre><code class="language-julia hljs">@time AK.foreachindex(f, itr_gpu, block_size=512)</code></pre><p>Similarly, for performance on the CPU the overhead of spawning threads should be masked by processing more elements per thread (but there is no reason here to launch more threads than <code>Threads.nthreads()</code>, the number of threads Julia was started with); the optimum depends on how expensive <code>f</code> is - again, benchmarking is your friend:</p><pre><code class="language-julia hljs">@time AK.foreachindex(f, itr_cpu, max_tasks=16, min_elems=1000)</code></pre><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.foreachindex" href="#AcceleratedKernels.foreachindex"><code>AcceleratedKernels.foreachindex</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">foreachindex(
+    f, itr, backend::Backend=get_backend(itr);
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size=256,
+)</code></pre><p>Parallelised <code>for</code> loop over the indices of an iterable.</p><p>It allows you to run normal Julia code on a GPU over multiple arrays - e.g. CuArray, ROCArray, MtlArray, oneArray - with one GPU thread per index.</p><p>On CPUs at most <code>max_tasks</code> threads are launched, or fewer such that each thread processes at least <code>min_elems</code> indices; if a single task ends up being needed, <code>f</code> is inlined and no thread is launched. Tune it to your function - the more expensive it is, the fewer elements are needed to amortise the cost of launching a thread (which is a few μs).</p><p><strong>Examples</strong></p><p>Normally you would write a for loop like this:</p><pre><code class="language-julia hljs">function f()
+    x = Array(1:100)
+    y = similar(x)
+    for i in eachindex(x)
+        @inbounds y[i] = 2 * x[i] + 1
+    end
+end</code></pre><p>Using this function you can have the same for loop body over a GPU array:</p><pre><code class="language-julia hljs">using CUDA
+import AcceleratedKernels as AK
+
+function f()
+    x = CuArray(1:100)
+    y = similar(x)
+    AK.foreachindex(x) do i
+        @inbounds y[i] = 2 * x[i] + 1
+    end
+end</code></pre><p>Note that the above code is pure arithmetic, which you can write directly (and on some platforms it may be faster) as:</p><pre><code class="language-julia hljs">using CUDA
+x = CuArray(1:100)
+y = 2 .* x .+ 1</code></pre><p><strong>Important note</strong>: to use this function on a GPU, the objects referenced inside the loop body must have known types - i.e. be inside a function. For example:</p><pre><code class="language-julia hljs">using oneAPI
+import AcceleratedKernels as AK
+
+x = oneArray(1:100)
+
+# CRASHES - typical error message: &quot;Reason: unsupported dynamic function invocation&quot;
+# AK.foreachindex(x) do i
+#     x[i] = i
+# end
+
+function somecopy!(v)
+    # Because it is inside a function, the type of `v` will be known
+    AK.foreachindex(v) do i
+        v[i] = i
+    end
+end
+
+somecopy!(x)    # This works</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/14de3f24e44b16062012668e5935ae798d67ab0c/src/foreachindex.jl#L43-L121">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.foraxes" href="#AcceleratedKernels.foraxes"><code>AcceleratedKernels.foraxes</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">foraxes(
+    f, itr, dims::Union{Nothing, &lt;:Integer}=nothing, backend::Backend=get_backend(itr);
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size=256,
+)</code></pre><p>Parallelised <code>for</code> loop over the indices along axis <code>dims</code> of an iterable.</p><p>It allows you to run normal Julia code on a GPU over multiple arrays - e.g. CuArray, ROCArray, MtlArray, oneArray - with one GPU thread per index.</p><p>On CPUs at most <code>max_tasks</code> threads are launched, or fewer such that each thread processes at least <code>min_elems</code> indices; if a single task ends up being needed, <code>f</code> is inlined and no thread is launched. Tune it to your function - the more expensive it is, the fewer elements are needed to amortise the cost of launching a thread (which is a few μs).</p><p><strong>Examples</strong></p><p>Normally you would write a for loop like this:</p><pre><code class="language-julia hljs">function f()
+    x = Array(reshape(1:30, 3, 10))
+    y = similar(x)
+    for i in axes(x, 2)
+        for j in axes(x, 1)
+            @inbounds y[j, i] = 2 * x[j, i] + 1
+        end
+    end
+end</code></pre><p>Using this function you can have the same for loop body over a GPU array:</p><pre><code class="language-julia hljs">using CUDA
+import AcceleratedKernels as AK
+
+function f()
+    x = CuArray(reshape(1:3000, 3, 1000))
+    y = similar(x)
+    AK.foraxes(x, 2) do i
+        for j in axes(x, 1)
+            @inbounds y[j, i] = 2 * x[j, i] + 1
+        end
+    end
+end</code></pre><p><strong>Important note</strong>: to use this function on a GPU, the objects referenced inside the loop body must have known types - i.e. be inside a function. For example:</p><pre><code class="language-julia hljs">using oneAPI
+import AcceleratedKernels as AK
+
+x = oneArray(reshape(1:3000, 3, 1000))
+
+# CRASHES - typical error message: &quot;Reason: unsupported dynamic function invocation&quot;
+# AK.foraxes(x) do i
+#     x[i] = i
+# end
+
+function somecopy!(v)
+    # Because it is inside a function, the type of `v` will be known
+    AK.foraxes(v) do i
+        v[i] = i
+    end
+end
+
+somecopy!(x)    # This works</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/14de3f24e44b16062012668e5935ae798d67ab0c/src/foreachindex.jl#L140-L214">source</a></section></article></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../using_backends/">« Using Different Backends</a><a class="docs-footer-nextpage" href="../map/">Map »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.11.4 on <span class="colophon-date" title="Sunday 25 May 2025 20:39">Sunday 25 May 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
