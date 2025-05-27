@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Sorting · AcceleratedKernels.jl</title><meta name="title" content="Sorting · AcceleratedKernels.jl"/><meta property="og:title" content="Sorting · AcceleratedKernels.jl"/><meta property="twitter:title" content="Sorting · AcceleratedKernels.jl"/><meta name="description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:description" content="Documentation for AcceleratedKernels.jl."/><meta property="twitter:description" content="Documentation for AcceleratedKernels.jl."/><meta property="og:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/sort/"/><meta property="twitter:url" content="https://juliagpu.github.io/KernelAbstractions.jl/api/sort/"/><link rel="canonical" href="https://juliagpu.github.io/KernelAbstractions.jl/api/sort/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.png" alt="AcceleratedKernels.jl logo"/></a><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Overview</a></li><li><a class="tocitem" href="../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../performance/">Performance Tips</a></li><li><span class="tocitem">Manual</span><ul><li><a class="tocitem" href="../using_backends/">Using Different Backends</a></li><li><a class="tocitem" href="../foreachindex/">General Loops</a></li><li><a class="tocitem" href="../map/">Map</a></li><li class="is-active"><a class="tocitem" href>Sorting</a></li><li><a class="tocitem" href="../reduce/">Reduce</a></li><li><a class="tocitem" href="../mapreduce/">MapReduce</a></li><li><a class="tocitem" href="../accumulate/">Accumulate</a></li><li><a class="tocitem" href="../binarysearch/">Binary Search</a></li><li><a class="tocitem" href="../predicates/">Predicates</a></li><li><a class="tocitem" href="../arithmetics/">Arithmetics</a></li><li><a class="tocitem" href="../custom_structs/">Custom Structs</a></li><li><a class="tocitem" href="../task_partition/">Task Partitioning</a></li><li><a class="tocitem" href="../utilities/">Utilities</a></li></ul></li><li><a class="tocitem" href="../../testing/">Testing</a></li><li><a class="tocitem" href="../../debugging/">Debugging Kernels</a></li><li><a class="tocitem" href="../../roadmap/">Roadmap</a></li><li><a class="tocitem" href="../../references/">References</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Manual</a></li><li class="is-active"><a href>Sorting</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Sorting</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/main/docs/src/api/sort.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h3 id="sort-and-friends"><a class="docs-heading-anchor" href="#sort-and-friends"><code>sort</code> and friends</a><a id="sort-and-friends-1"></a><a class="docs-heading-anchor-permalink" href="#sort-and-friends" title="Permalink"></a></h3><p>Sorting algorithms with similar interface and default settings as the Julia Base ones, on GPUs:</p><ul><li><code>sort!</code> (in-place), <code>sort</code> (out-of-place)</li><li><code>sortperm!</code>, <code>sortperm</code></li><li><strong>Other names</strong>: <code>sort</code>, <code>sort_team</code>, <code>sort_team_by_key</code>, <code>stable_sort</code> or variations in Kokkos, RAJA, Thrust that I know of.</li></ul><p>Function signatures:</p><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sort!" href="#AcceleratedKernels.sort!"><code>AcceleratedKernels.sort!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sort!(
+    v::AbstractArray, backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+
+    # Temporary buffer, same size as `v`
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Sorts the array <code>v</code> in-place using the specified backend. The <code>lt</code>, <code>by</code>, <code>rev</code>, and <code>order</code> arguments are the same as for <code>Base.sort</code>.</p><p><strong>CPU</strong></p><p>CPU settings: use at most <code>max_tasks</code> threads to sort the array such that at least <code>min_elems</code> elements are sorted by each thread. A parallel <a href="#AcceleratedKernels.sample_sort!"><code>sample_sort!</code></a> is used, processing independent slices of the array and deferring to <code>Base.sort!</code> for the final local sorts.</p><p>Note that the Base Julia <code>sort!</code> is mainly memory-bound, so multithreaded sorting only becomes faster if it is a more compute-heavy operation to hide memory latency - that includes:</p><ul><li>Sorting more complex types, e.g. lexicographic sorting of tuples / structs / strings.</li><li>More complex comparators, e.g. <code>by=custom_complex_function</code> or <code>lt=custom_lt_function</code>.</li><li>Less cache-predictable data movement, e.g. <code>sortperm</code>.</li></ul><p><strong>GPU</strong></p><p>GPU settings: use <code>block_size</code> threads per block to sort the array. A parallel <a href="#AcceleratedKernels.merge_sort!"><code>merge_sort!</code></a> is used.</p><p>For both CPU and GPU backends, the <code>temp</code> argument can be used to reuse a temporary buffer of the same size as <code>v</code> to store the sorted output.</p><p><strong>Examples</strong></p><p>Simple parallel CPU sort using all available threads (as given by <code>julia --threads N</code>):</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+v = rand(1000)
+AK.sort!(v)</code></pre><p>Parallel GPU sorting, passing a temporary buffer to avoid allocating a new one:</p><pre><code class="language-julia hljs">using oneAPI
+import AcceleratedKernels as AK
+v = oneArray(rand(1000))
+temp = similar(v)
+AK.sort!(v, temp=temp)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/sort.jl#L12-L69">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sort" href="#AcceleratedKernels.sort"><code>AcceleratedKernels.sort</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sort(
+    v::AbstractArray, backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+
+    # Temporary buffer, same size as `v`
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Out-of-place sort, same settings as <a href="#AcceleratedKernels.sort!"><code>sort!</code></a>.</p></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/sort.jl#L116-L137">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sortperm!" href="#AcceleratedKernels.sortperm!"><code>AcceleratedKernels.sortperm!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sortperm!(
+    ix::AbstractArray,
+    v::AbstractArray,
+    backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+
+    # Temporary buffer, same size as `v`
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Save into <code>ix</code> the index permutation of <code>v</code> such that <code>v[ix]</code> is sorted. The <code>lt</code>, <code>by</code>, <code>rev</code>, and <code>order</code> arguments are the same as for <code>Base.sortperm</code>. The same algorithms are used as for <a href="#AcceleratedKernels.sort!"><code>sort!</code></a> with custom by-index comparators.</p></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/sort.jl#L150-L175">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sortperm" href="#AcceleratedKernels.sortperm"><code>AcceleratedKernels.sortperm</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sortperm(
+    v::AbstractArray,
+    backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    # CPU settings
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+
+    # GPU settings
+    block_size::Int=256,
+
+    # Temporary buffer, same size as `v`
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre><p>Out-of-place sortperm, same settings as <a href="#AcceleratedKernels.sortperm!"><code>sortperm!</code></a>.</p></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/sort.jl#L226-L248">source</a></section></article><p>Specific implementations that the interfaces above forward to:</p><ul><li><code>sample_sort!</code> - multithreaded CPU sample sort, deferring to Base.sort! on independent slices.</li><li><code>merge_sort!</code> (in-place), <code>merge_sort</code> (out-of-place) - sort arbitrary objects with custom comparisons.</li><li><code>merge_sort_by_key!</code>, <code>merge_sort_by_key</code> - sort a vector of keys along with a &quot;payload&quot;, a vector of corresponding values.</li><li><code>merge_sortperm!</code>, <code>merge_sortperm</code>, <code>merge_sortperm_lowmem!</code>, <code>merge_sortperm_lowmem</code> - compute a sorting index permutation. </li></ul><p>Function signatures:</p><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sample_sort!" href="#AcceleratedKernels.sample_sort!"><code>AcceleratedKernels.sample_sort!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sample_sort!(
+    v::AbstractArray;
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/cpu_sample_sort.jl#L174-L187">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.sample_sortperm!" href="#AcceleratedKernels.sample_sortperm!"><code>AcceleratedKernels.sample_sortperm!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">sample_sortperm!(
+    ix::AbstractArray, v::AbstractArray;
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    max_tasks=Threads.nthreads(),
+    min_elems=1,
+    temp::Union{Nothing, AbstractArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/cpu_sample_sort.jl#L260-L273">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sort!" href="#AcceleratedKernels.merge_sort!"><code>AcceleratedKernels.merge_sort!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sort!(
+    v::AbstractGPUArray, backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sort.jl#L126-L138">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sort" href="#AcceleratedKernels.merge_sort"><code>AcceleratedKernels.merge_sort</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sort(
+    v::AbstractGPUArray, backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sort.jl#L196-L208">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sort_by_key!" href="#AcceleratedKernels.merge_sort_by_key!"><code>AcceleratedKernels.merge_sort_by_key!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sort_by_key!(
+    keys::AbstractArray,
+    values::AbstractArray,
+    backend::Backend=get_backend(keys);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp_keys::Union{Nothing, AbstractArray}=nothing,
+    temp_values::Union{Nothing, AbstractArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sort_by_key.jl#L156-L171">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sort_by_key" href="#AcceleratedKernels.merge_sort_by_key"><code>AcceleratedKernels.merge_sort_by_key</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sort_by_key(
+    keys::AbstractGPUArray,
+    values::AbstractGPUArray,
+    backend::Backend=get_backend(keys);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp_keys::Union{Nothing, AbstractGPUArray}=nothing,
+    temp_values::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sort_by_key.jl#L242-L257">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sortperm!" href="#AcceleratedKernels.merge_sortperm!"><code>AcceleratedKernels.merge_sortperm!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sortperm!(
+    ix::AbstractGPUArray,
+    v::AbstractGPUArray,
+    backend::Backend=get_backend(v);
+
+    lt=(&lt;),
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    inplace::Bool=false,
+    block_size::Int=256,
+    temp_ix::Union{Nothing, AbstractGPUArray}=nothing,
+    temp_v::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sortperm.jl#L1-L17">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sortperm" href="#AcceleratedKernels.merge_sortperm"><code>AcceleratedKernels.merge_sortperm</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sortperm(
+    v::AbstractGPUArray, backend::Backend=get_backend(v);
+
+    lt=(&lt;),
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    inplace::Bool=false,
+    block_size::Int=256,
+    temp_ix::Union{Nothing, AbstractGPUArray}=nothing,
+    temp_v::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sortperm.jl#L62-L76">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sortperm_lowmem!" href="#AcceleratedKernels.merge_sortperm_lowmem!"><code>AcceleratedKernels.merge_sortperm_lowmem!</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sortperm_lowmem!(
+    ix::AbstractGPUArray,
+    v::AbstractGPUArray,
+    backend::Backend=get_backend(v);
+
+    lt=(&lt;),
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sortperm.jl#L89-L103">source</a></section></article><article class="docstring"><header><a class="docstring-article-toggle-button fa-solid fa-chevron-down" href="javascript:;" title="Collapse docstring"></a><a class="docstring-binding" id="AcceleratedKernels.merge_sortperm_lowmem" href="#AcceleratedKernels.merge_sortperm_lowmem"><code>AcceleratedKernels.merge_sortperm_lowmem</code></a> — <span class="docstring-category">Function</span><span class="is-flex-grow-1 docstring-article-toggle-button" title="Collapse docstring"></span></header><section><div><pre><code class="language-julia hljs">merge_sortperm_lowmem(
+    v::AbstractGPUArray, backend::Backend=get_backend(v);
+
+    lt=(&lt;),
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    temp::Union{Nothing, AbstractGPUArray}=nothing,
+)</code></pre></div><a class="docs-sourcelink" target="_blank" href="https://github.com/JuliaGPU/AcceleratedKernels.jl/blob/6e38e60284a2d447c8a1afc58fa78fb86984a888/src/sort/merge_sortperm.jl#L169-L181">source</a></section></article><p>Example:</p><pre><code class="language-julia hljs">import AcceleratedKernels as AK
+using AMDGPU
+
+v = ROCArray(rand(Int32, 100_000))
+AK.sort!(v)</code></pre><p>As GPU memory is more expensive, all functions in AcceleratedKernels.jl expose any temporary arrays they will use (the <code>temp</code> argument); you can supply your own buffers to make the algorithms not allocate additional GPU storage, e.g.:</p><pre><code class="language-julia hljs">v = ROCArray(rand(Float32, 100_000))
+temp = similar(v)
+AK.sort!(v, temp=temp)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../map/">« Map</a><a class="docs-footer-nextpage" href="../reduce/">Reduce »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.11.4 on <span class="colophon-date" title="Tuesday 27 May 2025 15:58">Tuesday 27 May 2025</span>. Using Julia version 1.11.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
