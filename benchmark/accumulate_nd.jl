@@ -50,7 +50,7 @@ display(@benchmark AK.accumulate(+, v, init=Int64(0), dims=1) setup=(v = ArrayTy
 
 println("\n===\nBenchmarking accumulate(+, dims=2) on $n1 × $n2 Int64 - Base vs. AK")
 display(@benchmark Base.accumulate(+, v, init=Int64(0), dims=2) setup=(v = ArrayType(rand(Int64(1):Int64(100), n1, n2))))
-display(@benchmark AK.reduce(+, v, init=Int64(0), dims=2) setup=(v = ArrayType(rand(Int64(1):Int64(100), n1, n2))))
+display(@benchmark AK.accumulate(+, v, init=Int64(0), dims=2) setup=(v = ArrayType(rand(Int64(1):Int64(100), n1, n2))))
 
 
 
