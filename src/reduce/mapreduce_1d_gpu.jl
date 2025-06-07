@@ -99,8 +99,8 @@
 end
 
 
-function mapreduce_1d(
-    f, op, src::AbstractArray, backend::GPU;
+function mapreduce_1d_gpu(
+    f, op, src::AbstractArray, backend::Backend;
     init,
     neutral,
 

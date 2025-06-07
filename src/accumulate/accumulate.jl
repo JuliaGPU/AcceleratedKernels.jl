@@ -38,6 +38,7 @@ include("accumulate_nd.jl")
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=2,
+        use_KA::Bool=false,
 
         # Algorithm choice
         alg::AccumulateAlgorithm=DecoupledLookback(),
@@ -58,6 +59,7 @@ include("accumulate_nd.jl")
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=2,
+        use_KA::Bool=false,
 
         # Algorithm choice
         alg::AccumulateAlgorithm=DecoupledLookback(),
@@ -80,7 +82,8 @@ we do not need the constraint of `dst` and `src` being different; to minimise me
 recommend using the single-array interface (the first one above).
 
 ## CPU
-Use at most `max_tasks` threads with at least `min_elems` elements per task.
+Use at most `max_tasks` threads with at least `min_elems` elements per task. `use_KA` will force the
+use of the KernelAbstractions implementation even on CPU arrays.
 
 Note that accumulation is typically a memory-bound operation, so multithreaded accumulation only
 becomes faster if it is a more compute-heavy operation to hide memory latency - that includes:
@@ -165,6 +168,7 @@ function _accumulate_impl!(
     # CPU settings
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=2,
+    use_KA::Bool=false,
 
     # GPU settings
     block_size::Int=256,
@@ -172,17 +176,26 @@ function _accumulate_impl!(
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
     if isnothing(dims)
-        return accumulate_1d!(
-            op, v, backend, alg;
-            init, neutral, inclusive,
-            max_tasks, min_elems,
-            block_size, temp, temp_flags,
-        )
+        return if use_KA_algo(v, use_KA)
+            accumulate_1d_gpu!(
+                op, v, backend, alg;
+                init, neutral, inclusive,
+                max_tasks, min_elems,
+                block_size, temp, temp_flags,
+            )
+        else
+            accumulate_1d_cpu!(
+                op, v, backend, alg;
+                init, neutral, inclusive,
+                max_tasks, min_elems,
+                block_size, temp, temp_flags,
+            )
+        end
     else
         return accumulate_nd!(
             op, v, backend;
             init, neutral, dims, inclusive,
-            max_tasks, min_elems,
+            max_tasks, min_elems, use_KA,
             block_size,
         )
     end

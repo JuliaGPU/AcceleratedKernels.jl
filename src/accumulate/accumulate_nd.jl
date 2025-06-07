@@ -8,6 +8,7 @@ function accumulate_nd!(
     # CPU settings
     max_tasks::Int,
     min_elems::Int,
+    use_KA::Bool=false,
 
     # GPU settings
     block_size::Int,
@@ -34,7 +35,7 @@ function accumulate_nd!(
 
     # Degenerate cases end
 
-    if backend isa CPU
+    if !use_KA_algo(v, use_KA)
         _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
     else
         # On GPUs we have two parallelisation approaches, based on which dimension has more elements:

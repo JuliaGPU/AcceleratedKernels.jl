@@ -5,6 +5,7 @@
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,
@@ -53,6 +54,7 @@ end
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,

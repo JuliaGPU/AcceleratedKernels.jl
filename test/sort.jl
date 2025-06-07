@@ -1,4 +1,4 @@
-if BACKEND != CPU()
+if BACKEND != get_backend([]) || use_KA
 @testset "merge_sort" begin
     Random.seed!(0)
 
@@ -98,7 +98,7 @@ end
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Int32, num_elems))
-        AK.sort!(v)
+        AK.sort!(v; use_KA)
         vh = Array(v)
         @test issorted(vh)
     end
@@ -106,7 +106,7 @@ end
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(UInt32, num_elems))
-        AK.sort!(v)
+        AK.sort!(v; use_KA)
         vh = Array(v)
         @test issorted(vh)
     end
@@ -114,39 +114,39 @@ end
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
-        AK.sort!(v)
+        AK.sort!(v; use_KA)
         vh = Array(v)
         @test issorted(vh)
     end
 
     # Testing different settings
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    AK.sort!(v, lt=(>), by=abs, rev=true,
+    AK.sort!(v; use_KA, lt=(>), by=abs, rev=true,
             max_tasks=64, min_elems=8, block_size=64,
             temp=array_from_host(1:10_000, Float32))
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    AK.sort!(v, lt=(>), rev=true,
+    AK.sort!(v; use_KA, lt=(>), rev=true,
             max_tasks=64, min_elems=8, block_size=64,
             temp=array_from_host(1:10_000, Int32))
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    v = AK.sort(v, lt=(>), by=abs, rev=true,
+    v = AK.sort(v; use_KA, lt=(>), by=abs, rev=true,
                 max_tasks=64, min_elems=8, block_size=64,
                 temp=array_from_host(1:10_000, Float32))
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    v = AK.sort(v, lt=(>), by=abs, rev=true,
+    v = AK.sort(v; use_KA, lt=(>), by=abs, rev=true,
                 max_tasks=64, min_elems=8, block_size=64,
                 temp=array_from_host(1:10_000, Int32))
     @test issorted(Array(v))
 end
 
 
-if BACKEND != CPU()
+if BACKEND != get_backend([]) || use_KA
 @testset "merge_sort_by_key" begin
     Random.seed!(0)
 
@@ -228,7 +228,7 @@ end
 end
 
 
-if BACKEND != CPU()
+if BACKEND != get_backend([]) || use_KA
 @testset "merge_sortperm" begin
     Random.seed!(0)
 
@@ -337,7 +337,7 @@ end
 end
 
 
-if BACKEND != CPU()
+if BACKEND != get_backend([]) || use_KA
 @testset "merge_sortperm_lowmem" begin
     Random.seed!(0)
 
@@ -404,7 +404,7 @@ end
         num_elems = rand(1:100_000)
         ix = array_from_host(zeros(Int32, num_elems))
         v = array_from_host(rand(Int32, num_elems))
-        AK.sortperm!(ix, v)
+        AK.sortperm!(ix, v; use_KA)
         ixh = Array(ix)
         vh = Array(v)
         @test issorted(vh[ixh])
@@ -414,7 +414,7 @@ end
         num_elems = rand(1:100_000)
         ix = array_from_host(zeros(Int32, num_elems))
         v = array_from_host(rand(UInt32, num_elems))
-        AK.sortperm!(ix, v)
+        AK.sortperm!(ix, v; use_KA)
         ixh = Array(ix)
         vh = Array(v)
         @test issorted(vh[ixh])
@@ -424,7 +424,7 @@ end
         num_elems = rand(1:100_000)
         ix = array_from_host(zeros(Int32, num_elems))
         v = array_from_host(rand(Float32, num_elems))
-        AK.sortperm!(ix, v)
+        AK.sortperm!(ix, v; use_KA)
         ixh = Array(ix)
         vh = Array(v)
         @test issorted(vh[ixh])
@@ -434,7 +434,8 @@ end
     ix = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
     AK.sortperm!(ix,
-                v,
+                v;
+                use_KA,
                 lt=(>), by=abs, rev=true,
                 block_size=64,
                 temp=array_from_host(1:10_000, Int32))
@@ -443,7 +444,8 @@ end
     @test issorted(vh[ixh])
 
     v = array_from_host(1:10_000, Float32)
-    ix = AK.sortperm(v,
+    ix = AK.sortperm(v;
+                    use_KA,
                     lt=(>), by=abs, rev=true,
                     block_size=64,
                     temp=array_from_host(1:10_000, Int))

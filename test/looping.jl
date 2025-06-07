@@ -3,27 +3,27 @@
     Random.seed!(0)
 
     # CPU
-    if BACKEND == CPU()
+    if BACKEND == get_backend([])
         x = zeros(Int, 1000)
-        AK.foreachindex(x) do i
+        AK.foreachindex(x; use_KA) do i
             x[i] = i
         end
         @test all(x .== 1:length(x))
 
         x = zeros(Int, 1000)
-        AK.foreachindex(x, max_tasks=1, min_elems=1) do i
+        AK.foreachindex(x; use_KA, max_tasks=1, min_elems=1) do i
             x[i] = i
         end
         @test all(x .== 1:length(x))
 
         x = zeros(Int, 1000)
-        AK.foreachindex(x, max_tasks=10, min_elems=1) do i
+        AK.foreachindex(x; use_KA, max_tasks=10, min_elems=1) do i
             x[i] = i
         end
         @test all(x .== 1:length(x))
 
         x = zeros(Int, 1000)
-        AK.foreachindex(x, max_tasks=10, min_elems=10) do i
+        AK.foreachindex(x; use_KA, max_tasks=10, min_elems=10) do i
             x[i] = i
         end
         @test all(x .== 1:length(x))
@@ -31,7 +31,7 @@
     # GPU
     else
         x = array_from_host(zeros(Int, 10_000))
-        f1(x) = AK.foreachindex(x) do i     # This must be inside a function to have a known type!
+        f1(x) = AK.foreachindex(x; use_KA) do i     # This must be inside a function to have a known type!
             x[i] = i
         end
         f1(x)
@@ -39,7 +39,7 @@
         @test all(xh .== 1:length(xh))
 
         x = array_from_host(zeros(Int, 10_000))
-        f2(x) = AK.foreachindex(x, block_size=64) do i
+        f2(x) = AK.foreachindex(x; use_KA, block_size=64) do i
             x[i] = i
         end
         f2(x)
@@ -59,12 +59,12 @@ end
     end
 
     x = array_from_host(zeros(Int, 10, 1000))
-    f1(x)
+    f1(x; use_KA)
     xh = Array(x)
     @test all(xh .== (1:10) .+ (1:1000)')
 
     x = array_from_host(zeros(UInt32, 10, 1000))
-    f1(x, max_tasks=2, min_elems=100, block_size=64)
+    f1(x; use_KA, max_tasks=2, min_elems=100, block_size=64)
     xh = Array(x)
     @test all(xh .== (1:10) .+ (1:1000)')
 
@@ -75,12 +75,12 @@ end
     end
 
     x = array_from_host(zeros(Int, 10, 1000))
-    f2(x)
+    f2(x; use_KA)
     xh = Array(x)
     @test all(xh .== (1:10) .+ (1:1000)')
 
     x = array_from_host(zeros(UInt32, 10, 1000))
-    f2(x, max_tasks=2, min_elems=100, block_size=64)
+    f2(x; use_KA, max_tasks=2, min_elems=100, block_size=64)
     xh = Array(x)
     @test all(xh .== (1:10) .+ (1:1000)')
 
@@ -90,7 +90,7 @@ end
     end
 
     x = array_from_host(zeros(Int, 10, 1000))
-    f3(x)
+    f3(x; use_KA)
     xh = Array(x)
     @test all(xh[:] .== 1:length(x))
 end

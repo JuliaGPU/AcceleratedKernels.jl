@@ -125,7 +125,7 @@ end
 
 """
     merge_sort!(
-        v::AbstractGPUArray, backend::Backend=get_backend(v);
+        v::AbstractArray, backend::Backend=get_backend(v);
 
         lt=isless,
         by=identity,
@@ -133,11 +133,11 @@ end
         order::Base.Order.Ordering=Base.Order.Forward,
 
         block_size::Int=256,
-        temp::Union{Nothing, AbstractGPUArray}=nothing,
+        temp::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sort!(
-    v::AbstractGPUArray, backend::Backend=get_backend(v);
+    v::AbstractArray, backend::Backend=get_backend(v);
 
     lt=isless,
     by=identity,
@@ -145,7 +145,7 @@ function merge_sort!(
     order::Base.Order.Ordering=Base.Order.Forward,
 
     block_size::Int=256,
-    temp::Union{Nothing, AbstractGPUArray}=nothing,
+    temp::Union{Nothing, AbstractArray}=nothing,
 )
     # Simple sanity checks
     @argcheck block_size > 0
@@ -195,7 +195,7 @@ end
 
 """
     merge_sort(
-        v::AbstractGPUArray, backend::Backend=get_backend(v);
+        v::AbstractArray, backend::Backend=get_backend(v);
 
         lt=isless,
         by=identity,
@@ -203,11 +203,11 @@ end
         order::Base.Order.Ordering=Base.Order.Forward,
 
         block_size::Int=256,
-        temp::Union{Nothing, AbstractGPUArray}=nothing,
+        temp::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sort(
-    v::AbstractGPUArray, backend::Backend=get_backend(v);
+    v::AbstractArray, backend::Backend=get_backend(v);
     kwargs...
 )
     v_copy = copy(v)

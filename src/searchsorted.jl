@@ -80,6 +80,7 @@ end
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size::Int=256,
@@ -128,6 +129,7 @@ end
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size::Int=256,
@@ -163,6 +165,7 @@ end
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size::Int=256,
@@ -211,6 +214,7 @@ end
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size::Int=256,

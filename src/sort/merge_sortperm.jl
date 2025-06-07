@@ -1,7 +1,7 @@
 """
     merge_sortperm!(
-        ix::AbstractGPUArray,
-        v::AbstractGPUArray,
+        ix::AbstractArray,
+        v::AbstractArray,
         backend::Backend=get_backend(v);
 
         lt=(<),
@@ -11,13 +11,13 @@
 
         inplace::Bool=false,
         block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractGPUArray}=nothing,
-        temp_v::Union{Nothing, AbstractGPUArray}=nothing,
+        temp_ix::Union{Nothing, AbstractArray}=nothing,
+        temp_v::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sortperm!(
-    ix::AbstractGPUArray,
-    v::AbstractGPUArray,
+    ix::AbstractArray,
+    v::AbstractArray,
     backend::Backend=get_backend(v);
 
     lt=(<),
@@ -27,8 +27,8 @@ function merge_sortperm!(
 
     inplace::Bool=false,
     block_size::Int=256,
-    temp_ix::Union{Nothing, AbstractGPUArray}=nothing,
-    temp_v::Union{Nothing, AbstractGPUArray}=nothing,
+    temp_ix::Union{Nothing, AbstractArray}=nothing,
+    temp_v::Union{Nothing, AbstractArray}=nothing,
 )
     # Simple sanity checks
     @argcheck block_size > 0
@@ -61,7 +61,7 @@ end
 
 """
     merge_sortperm(
-        v::AbstractGPUArray, backend::Backend=get_backend(v);
+        v::AbstractArray, backend::Backend=get_backend(v);
 
         lt=(<),
         by=identity,
@@ -70,12 +70,12 @@ end
 
         inplace::Bool=false,
         block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractGPUArray}=nothing,
-        temp_v::Union{Nothing, AbstractGPUArray}=nothing,
+        temp_ix::Union{Nothing, AbstractArray}=nothing,
+        temp_v::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sortperm(
-    v::AbstractGPUArray, backend::Backend=get_backend(v);
+    v::AbstractArray, backend::Backend=get_backend(v);
     kwargs...
 )
     ix = similar(v, Int)
@@ -88,8 +88,8 @@ end
 
 """
     merge_sortperm_lowmem!(
-        ix::AbstractGPUArray,
-        v::AbstractGPUArray,
+        ix::AbstractArray,
+        v::AbstractArray,
         backend::Backend=get_backend(v);
 
         lt=(<),
@@ -98,12 +98,12 @@ end
         order::Base.Order.Ordering=Base.Order.Forward,
 
         block_size::Int=256,
-        temp::Union{Nothing, AbstractGPUArray}=nothing,
+        temp::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sortperm_lowmem!(
-    ix::AbstractGPUArray,
-    v::AbstractGPUArray,
+    ix::AbstractArray,
+    v::AbstractArray,
     backend::Backend=get_backend(v);
 
     lt=(<),
@@ -112,7 +112,7 @@ function merge_sortperm_lowmem!(
     order::Base.Order.Ordering=Base.Order.Forward,
 
     block_size::Int=256,
-    temp::Union{Nothing, AbstractGPUArray}=nothing,
+    temp::Union{Nothing, AbstractArray}=nothing,
 )
     # Simple sanity checks
     @argcheck block_size > 0
@@ -168,7 +168,7 @@ end
 
 """
     merge_sortperm_lowmem(
-        v::AbstractGPUArray, backend::Backend=get_backend(v);
+        v::AbstractArray, backend::Backend=get_backend(v);
 
         lt=(<),
         by=identity,
@@ -176,11 +176,11 @@ end
         order::Base.Order.Ordering=Base.Order.Forward,
 
         block_size::Int=256,
-        temp::Union{Nothing, AbstractGPUArray}=nothing,
+        temp::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sortperm_lowmem(
-    v::AbstractGPUArray, backend::Backend=get_backend(v);
+    v::AbstractArray, backend::Backend=get_backend(v);
     kwargs...
 )
     ix = similar(v, Int)

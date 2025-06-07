@@ -11,11 +11,11 @@
         v = array_from_host(sort(rand(Int32, num_elems_v)))
         x = array_from_host(rand(Int32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedfirst!(ix, v, x)
+        AK.searchsortedfirst!(ix, v, x; use_KA)
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh)
+        ixh = AK.searchsortedfirst(vh, xh; use_KA)
         ixh_base = [searchsortedfirst(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -24,11 +24,11 @@
         v = array_from_host(sort(rand(Float32, num_elems_v)))
         x = array_from_host(rand(Float32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedfirst!(ix, v, x)
+        AK.searchsortedfirst!(ix, v, x; use_KA)
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh)
+        ixh = AK.searchsortedfirst(vh, xh; use_KA)
         ixh_base = [searchsortedfirst(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -43,11 +43,11 @@
         v = array_from_host(sort(rand(Int32, num_elems_v)))
         x = array_from_host(rand(Int32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedlast!(ix, v, x)
+        AK.searchsortedlast!(ix, v, x; use_KA)
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh)
+        ixh = AK.searchsortedlast(vh, xh; use_KA)
         ixh_base = [searchsortedlast(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -56,11 +56,11 @@
         v = array_from_host(sort(rand(Float32, num_elems_v)))
         x = array_from_host(rand(Float32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedlast!(ix, v, x)
+        AK.searchsortedlast!(ix, v, x; use_KA)
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh)
+        ixh = AK.searchsortedlast(vh, xh; use_KA)
         ixh_base = [searchsortedlast(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -71,23 +71,23 @@
     x = array_from_host(rand(Int32, 10_000))
     ix = similar(x, Int32)
 
-    AK.searchsortedfirst!(ix, v, x, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedfirst(v, x, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedlast!(ix, v, x, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedlast(v, x, by=abs, lt=(>), rev=true, block_size=64)
+    AK.searchsortedfirst!(ix, v, x; use_KA, by=abs, lt=(>), rev=true, block_size=64)
+    AK.searchsortedfirst(v, x; use_KA, by=abs, lt=(>), rev=true, block_size=64)
+    AK.searchsortedlast!(ix, v, x; use_KA, by=abs, lt=(>), rev=true, block_size=64)
+    AK.searchsortedlast(v, x; use_KA, by=abs, lt=(>), rev=true, block_size=64)
 
     vh = Array(v)
     xh = Array(x)
     ixh = similar(xh, Int32)
 
-    AK.searchsortedfirst!(ixh, vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedfirst(vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast!(ixh, vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast(vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedfirst!(ixh, vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedfirst(vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedlast!(ixh, vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedlast(vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.searchsortedfirst!(ixh, vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedfirst(vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast!(ixh, vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast(vh, xh, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedfirst!(ixh, vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedfirst(vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedlast!(ixh, vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedlast(vh, xh; use_KA, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
 end

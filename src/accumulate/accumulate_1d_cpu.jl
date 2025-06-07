@@ -1,5 +1,5 @@
-function accumulate_1d!(
-    op, v::AbstractArray, backend::CPU, alg;
+function accumulate_1d_cpu!(
+    op, v::AbstractArray, backend::Backend, alg;
     init,
     neutral,
     inclusive::Bool,

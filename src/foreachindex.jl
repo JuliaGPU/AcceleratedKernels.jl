@@ -15,7 +15,7 @@ end
 function _forindices_gpu(
     f,
     indices,
-    backend::GPU;
+    backend::Backend;
 
     block_size::Int=256,
 )
@@ -47,6 +47,7 @@ end
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,
@@ -60,7 +61,8 @@ MtlArray, oneArray - with one GPU thread per index.
 On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
 `min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
 launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs).
+amortise the cost of launching a thread (which is a few μs). `use_KA` will force the use of the
+KernelAbstractions implementation even on CPU arrays.
 
 # Examples
 Normally you would write a for loop like this:
@@ -125,11 +127,12 @@ function foreachindex(
     # CPU settings
     max_tasks=Threads.nthreads(),
     min_elems=1,
+    use_KA::Bool=false,
 
     # GPU settings
     block_size=256,
 )
-    if backend isa GPU
+    if use_KA_algo(itr, use_KA)
         _forindices_gpu(f, eachindex(itr), backend; block_size)
     else
         _forindices_threads(f, eachindex(itr); max_tasks, min_elems)
@@ -144,6 +147,7 @@ end
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,
@@ -157,7 +161,8 @@ MtlArray, oneArray - with one GPU thread per index.
 On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
 `min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
 launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs).
+amortise the cost of launching a thread (which is a few μs). `use_KA` will force the use of the
+KernelAbstractions implementation even on CPU arrays.
 
 # Examples
 Normally you would write a for loop like this:
@@ -218,6 +223,7 @@ function foraxes(
     # CPU settings
     max_tasks=Threads.nthreads(),
     min_elems=1,
+    use_KA::Bool=false,
 
     # GPU settings
     block_size=256,
@@ -226,11 +232,11 @@ function foraxes(
         return foreachindex(
             f, itr, backend;
             max_tasks, min_elems,
-            block_size,
+            use_KA, block_size,
         )
     end
 
-    if backend isa GPU
+    if use_KA_algo(itr, use_KA)
         _forindices_gpu(f, axes(itr, dims), backend; block_size)
     else
         _forindices_threads(f, axes(itr, dims); max_tasks, min_elems)
