@@ -14,6 +14,7 @@ module AcceleratedKernels
 using ArgCheck: @argcheck
 using GPUArraysCore: AbstractGPUArray, @allowscalar
 using KernelAbstractions
+import UnsafeAtomics
 
 
 # Exposed functions from upstream packages
