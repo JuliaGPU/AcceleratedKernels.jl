@@ -149,7 +149,7 @@ end
 
 
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous!(
-    op, v, flags, @Const(prefixes),
+    op, v, flags::AbstractArray{UInt8}, @Const(prefixes),
 )
 
     len = length(v)
@@ -169,9 +169,9 @@ end
     running_prefix = prefixes[iblock - 0x1 + 0x1]
     inspected_block = signed(typeof(iblock))(iblock) - 0x2
     while inspected_block >= 0x0
-
         # Opportunistic: a previous block finished everything
-        if flags[inspected_block + 0x1] == ACC_FLAG_A
+        if UnsafeAtomics.load(pointer(flags, inspected_block + 0x1), UnsafeAtomics.monotonic) == ACC_FLAG_A
+            UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from v)
             # Previous blocks (except last) always have filled values in v, so index is inbounds
             running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * 0x2])
             break
@@ -194,11 +194,17 @@ end
     end
 
     # Set flag for "aggregate of all prefixes up to this block finished"
-    @synchronize()      # This is needed so that the flag is not set before copying into v, but
-                        # there should be better memory fences to guarantee ordering without
-                        # thread synchronization...
+    # There are two synchronization concerns here:
+    # 1. Withing a group we want to ensure that all writed to `v` have occured before setting the flag.
+    # 2. Between groups we need to use a fence and atomic load/store to ensure that memory operations are not re-ordered
+    @synchronize() # within-block
+    # Note: This fence is needed to ensure that the flag is not set before copying into v.
+    #       See https://doc.rust-lang.org/std/sync/atomic/fn.fence.html
+    #       for more details.
+    #       We use the happens-before relation between stores to `v` and the store to `flags`.
+    UnsafeAtomics.fence(UnsafeAtomics.release)
     if ithread == 0x0
-        flags[iblock + 0x1] = ACC_FLAG_A
+        UnsafeAtomics.store!(pointer(flags, iblock + 0x1), ACC_FLAG_A, UnsafeAtomics.monotonic)
     end
 end
 
@@ -285,9 +291,9 @@ function accumulate_1d!(
     end
 
     if isnothing(temp_flags)
-        flags = similar(v, Int8, num_blocks)
+        flags = similar(v, UInt8, num_blocks)
     else
-        @argcheck eltype(temp_flags) <: Integer
+        @argcheck eltype(temp_flags) == UInt8
         @argcheck length(temp_flags) >= num_blocks
         flags = temp_flags
     end
