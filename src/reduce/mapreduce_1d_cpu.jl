@@ -1,5 +1,5 @@
-function mapreduce_1d(
-    f, op, src::AbstractArray, backend::CPU;
+function mapreduce_1d_cpu(
+    f, op, src::AbstractArray, backend::Backend;
     init,
     neutral,
 

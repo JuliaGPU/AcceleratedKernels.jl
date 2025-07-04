@@ -2,6 +2,10 @@ function ispow2(x)
     count_ones(x) == 1
 end
 
+# Helper function to check whether the package cpu implementation of an algorithm should be used
+@inline function use_KA_algo(output_array, use_KA)
+    return use_KA || output_array isa AnyGPUArray
+end
 
 """
     struct TypeWrap{T} end

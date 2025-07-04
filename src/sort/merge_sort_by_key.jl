@@ -241,8 +241,8 @@ end
 
 """
     merge_sort_by_key(
-        keys::AbstractGPUArray,
-        values::AbstractGPUArray,
+        keys::AbstractArray,
+        values::AbstractArray,
         backend::Backend=get_backend(keys);
 
         lt=isless,
@@ -251,13 +251,13 @@ end
         order::Base.Order.Ordering=Base.Order.Forward,
 
         block_size::Int=256,
-        temp_keys::Union{Nothing, AbstractGPUArray}=nothing,
-        temp_values::Union{Nothing, AbstractGPUArray}=nothing,
+        temp_keys::Union{Nothing, AbstractArray}=nothing,
+        temp_values::Union{Nothing, AbstractArray}=nothing,
     )
 """
 function merge_sort_by_key(
-    keys::AbstractGPUArray,
-    values::AbstractGPUArray,
+    keys::AbstractArray,
+    values::AbstractArray,
     backend::Backend=get_backend(keys);
     kwargs...
 )

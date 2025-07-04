@@ -5,6 +5,7 @@
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,
@@ -33,19 +34,12 @@ end
 """
 function map!(
     f, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-
-    # GPU settings
-    block_size=256,
+    kwargs...
 )
     @argcheck length(dst) == length(src)
     foreachindex(
         src, backend;
-        max_tasks, min_elems,
-        block_size,
+        kwargs...
     ) do idx
         dst[idx] = f(src[idx])
     end
@@ -60,6 +54,7 @@ end
         # CPU settings
         max_tasks=Threads.nthreads(),
         min_elems=1,
+        use_KA::Bool=false,
 
         # GPU settings
         block_size=256,

@@ -39,9 +39,15 @@ elseif !@isdefined(BACKEND)
     # Otherwise do CPU tests
     using InteractiveUtils
     InteractiveUtils.versioninfo()
-    const BACKEND = CPU()
+    const BACKEND = get_backend([])
 end
 
+# Only works with KA >0.10
+use_KAs = if "--cpuKA" in ARGS
+    (true, false)
+else
+    (false,)
+end
 
 array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
 function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
@@ -55,11 +61,14 @@ end
     Aqua.test_all(AK)
 end
 
-include("partition.jl")
-include("looping.jl")
-include("map.jl")
-include("sort.jl")
-include("reduce.jl")
-include("accumulate.jl")
-include("predicates.jl")
-include("binarysearch.jl")
+for item in use_KAs
+    global use_KA = item
+    include("partition.jl")
+    include("looping.jl")
+    include("map.jl")
+    include("sort.jl")
+    include("reduce.jl")
+    include("accumulate.jl")
+    include("predicates.jl")
+    include("binarysearch.jl")
+end
