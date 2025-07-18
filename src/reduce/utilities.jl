@@ -3,9 +3,10 @@ neutral_element(op, T) =
     error("""AcceleratedKernels.jl needs to know the neutral element for your operator `$op`.
              Please pass it as an explicit keyword argument `neutral`.""")
 neutral_element(::typeof(Base.:(|)), T) = zero(T)
+neutral_element(::typeof(Base.:(⊻)), T) = zero(T)
+neutral_element(::typeof(Base.:(&)), T) = ~zero(T)
 neutral_element(::typeof(Base.:(+)), T) = zero(T)
 neutral_element(::typeof(Base.add_sum), T) = zero(T)
-neutral_element(::typeof(Base.:(&)), T) = one(T)
 neutral_element(::typeof(Base.:(*)), T) = one(T)
 neutral_element(::typeof(Base.mul_prod), T) = one(T)
 neutral_element(::typeof(Base.min), T) = typemax(T)
