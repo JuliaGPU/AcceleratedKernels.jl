@@ -130,7 +130,7 @@ function foreachindex(
     # GPU settings
     block_size=256,
 )
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         _forindices_gpu(f, eachindex(itr), backend; block_size)
     else
         _forindices_threads(f, eachindex(itr); max_tasks, min_elems)
@@ -232,7 +232,7 @@ function foraxes(
         )
     end
 
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         _forindices_gpu(f, axes(itr, dims), backend; block_size)
     else
         _forindices_threads(f, axes(itr, dims); max_tasks, min_elems)

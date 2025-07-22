@@ -119,7 +119,7 @@ function _any_impl(
     # GPU settings
     block_size::Int=256,
 )
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         @argcheck block_size > 0
 
         # Some platforms crash when multiple threads write to the same memory location in a global
@@ -253,7 +253,7 @@ function _all_impl(
     # GPU settings
     block_size::Int=256,
 )
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         @argcheck block_size > 0
 
         # Some platforms crash when multiple threads write to the same memory location in a global

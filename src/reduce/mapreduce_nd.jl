@@ -114,7 +114,7 @@ function mapreduce_nd(
     end
     dst_size = length(dst)
 
-    if !use_gpu_algo(backend, prefer_threads)
+    if !use_gpu_algorithm(backend, prefer_threads)
         _mapreduce_nd_cpu_sections!(
             f, op, dst, src;
             init,

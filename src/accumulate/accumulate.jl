@@ -175,7 +175,7 @@ function _accumulate_impl!(
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
     if isnothing(dims)
-        return if use_gpu_algo(backend, prefer_threads)
+        return if use_gpu_algorithm(backend, prefer_threads)
             accumulate_1d_gpu!(
                 op, v, backend, alg;
                 init, neutral, inclusive,

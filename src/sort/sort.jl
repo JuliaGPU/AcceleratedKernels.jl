@@ -96,7 +96,7 @@ function _sort_impl!(
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         merge_sort!(
             v, backend;
             lt, by, rev, order,
@@ -207,7 +207,7 @@ function _sortperm_impl!(
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    if use_gpu_algo(backend, prefer_threads)
+    if use_gpu_algorithm(backend, prefer_threads)
         merge_sortperm_lowmem!(
             ix, v, backend;
             lt, by, rev, order,

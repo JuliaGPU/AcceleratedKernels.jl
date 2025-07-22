@@ -183,7 +183,7 @@ function _mapreduce_impl(
     switch_below::Int=0,
 )
     if isnothing(dims)
-        if use_gpu_algo(backend, prefer_threads)
+        if use_gpu_algorithm(backend, prefer_threads)
             mapreduce_1d_gpu(
                 f, op, src, backend;
                 init, neutral,

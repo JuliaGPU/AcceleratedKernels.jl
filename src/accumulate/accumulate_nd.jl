@@ -35,7 +35,7 @@ function accumulate_nd!(
 
     # Degenerate cases end
 
-    if !use_gpu_algo(backend, prefer_threads)
+    if !use_gpu_algorithm(backend, prefer_threads)
         _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
     else
         # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
