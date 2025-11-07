@@ -6,26 +6,27 @@ Base.@kwdef struct MapReduce{T <: Union{Nothing, AbstractArray}} <: PredicatesAl
 end
 
 
-@kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v))
-    temp = @localmem Int8 (1,)
-    i = @index(Global, Linear)
+function _any_global!(out, pred, v)
+    temp = KI.localmemory(Int8, 1)
+    i = KI.get_global_id().x
 
     # Technically this is a race, but it doesn't matter as all threads would write the same value.
     # For example, CUDA F4.2 says "If a non-atomic instruction executed by a warp writes to the
     # same location in global memory for more than one of the threads of the warp, only one thread
     # performs a write and which thread does it is undefined."
     temp[0x1] = 0x0
-    @synchronize()
+    KI.barrier()
 
     # The ndrange check already protects us from out of bounds access
-    if pred(v[i])
+    if i <= length(v) && pred(v[i])
         temp[0x1] = 0x1
     end
 
-    @synchronize()
+    KI.barrier()
     if temp[0x1] != 0x0
         out[0x1] = 0x1
     end
+    nothing
 end
 
 
@@ -127,7 +128,9 @@ function _any_impl(
         # CUDA). If not cooperative, we need to do a mapreduce
         if alg === ConcurrentWrite()
             out = KernelAbstractions.zeros(backend, Int8, 1)
-            _any_global!(backend, block_size)(out, pred, v, ndrange=length(v))
+            workgroupsize = min(length(v), block_size)
+            numworkgroups = cld(length(v), workgroupsize)
+            KI.@kernel backend numworkgroups workgroupsize _any_global!(out, pred, v)
             outh = @allowscalar(out[1])
             return outh == 0 ? false : true
         else
@@ -261,7 +264,9 @@ function _all_impl(
         # CUDA). If not cooperative, we need to do a mapreduce
         if alg === ConcurrentWrite()
             out = KernelAbstractions.zeros(backend, Int8, 1)
-            _any_global!(backend, block_size)(out, (!pred), v, ndrange=length(v))
+            workgroupsize = min(length(v), block_size)
+            numworkgroups = cld(length(v), workgroupsize)
+            KI.@kernel backend numworkgroups workgroupsize _any_global!(out, (!pred), v)
             outh = @allowscalar(out[1])
             return outh == 0 ? true : false
         else

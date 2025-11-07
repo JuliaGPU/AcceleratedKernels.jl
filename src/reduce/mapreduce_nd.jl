@@ -131,18 +131,14 @@ function mapreduce_nd(
         #     while the other dimensions are processed in parallel, independently
         if dst_size >= src_sizes[dims]
             blocks = (dst_size + block_size - 1) ÷ block_size
-            kernel1! = _mapreduce_nd_by_thread!(backend, block_size)
-            kernel1!(
-                src, dst, f, op, init, dims,
-                ndrange=(block_size * blocks,),
+            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_nd_by_thread!(
+                src, dst, f, op, init, dims, Val(block_size)
             )
         else
             # One block per output element
             blocks = dst_size
-            kernel2! = _mapreduce_nd_by_block!(backend, block_size)
-            kernel2!(
-                src, dst, f, op, init, neutral, dims,
-                ndrange=(block_size * blocks,),
+            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_nd_by_block!(
+                src, dst, f, op, init, neutral, dims, Val(block_size)
             )
         end
     end
@@ -193,11 +189,12 @@ function _mapreduce_nd_cpu_sections!(
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
-    @Const(src), dst,
+function _mapreduce_nd_by_thread!(
+    src, dst,
     f, op,
     init, dims,
-)
+    ::Val{N}
+) where N
     # One thread per output element, when there are more outer elements than in the reduced dim
     # e.g. reduce(+, rand(3, 1000), dims=1) => only 3 elements in the reduced dim
     src_sizes = size(src)
@@ -210,16 +207,14 @@ end
 
     ndims = length(src_sizes)
 
-    N = @groupsize()[1]
-
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
     # indexing). Internal calculations will be done using zero indexing except when actually
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     # Each thread handles one output element
     tid = ithread + iblock * N
@@ -259,15 +254,16 @@ end
         end
         dst[tid + 0x1] = res
     end
+    nothing
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
-    @Const(src), dst,
+function _mapreduce_nd_by_block!(
+    src, dst,
     f, op,
     init, neutral,
-    dims,
-)
+    dims, ::Val{N}
+) where N
     # One block per output element, when there are more elements in the reduced dim than in outer
     # e.g. reduce(+, rand(3, 1000), dims=2) => only 3 elements in outer dimensions
     src_sizes = size(src)
@@ -280,8 +276,7 @@ end
 
     ndims = length(src_sizes)
 
-    @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+    sdata = KI.localmemory(eltype(dst), N)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -289,8 +284,8 @@ end
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     # Each block handles one output element - thus, iblock ∈ [0, output_size)
 
@@ -330,11 +325,12 @@ end
 
     # Store partial result in shared memory; now we are down to a single block to reduce within
     sdata[ithread + 0x1] = partial
-    @synchronize()
+    KI.barrier()
 
-    @inline reduce_group!(@context, op, sdata, N, ithread)
+    @inline reduce_group!(op, sdata, N, ithread)
 
     if ithread == 0x0
         dst[iblock + 0x1] = op(init, sdata[0x1])
     end
+    nothing
 end

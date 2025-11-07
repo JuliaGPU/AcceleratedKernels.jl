@@ -1,7 +1,6 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_block!(vec, comp)
+function _merge_sort_block!(vec, comp, ::Val{N}) where N
 
-    @uniform N = @groupsize()[1]
-    s_buf = @localmem eltype(vec) (N * 0x2,)
+    s_buf = KI.localmemory(eltype(vec), N * 0x2)
 
     T = eltype(vec)
     I = typeof(N)
@@ -13,8 +12,8 @@
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     i = ithread + iblock * N * 0x2
     i < len && (s_buf[ithread + 0x1] = vec[i + 0x1])
@@ -22,7 +21,7 @@
     i = ithread + N + iblock * N * 0x2
     i < len && (s_buf[ithread + N + 0x1] = vec[i + 0x1])
 
-    @synchronize()
+    KI.barrier()
 
     half_size_group = typeof(ithread)(1)
     size_group = typeof(ithread)(2)
@@ -56,12 +55,12 @@
             pos2 = ithread % half_size_group + _upper_bound_s0(s_buf, v2, lo, hi, comp) - lo
         end
 
-        @synchronize()
+        KI.barrier()
 
         pos1 != typemax(I) && (s_buf[gid * size_group + pos1 + 0x1] = v1)
         pos2 != typemax(I) && (s_buf[gid * size_group + pos2 + 0x1] = v2)
 
-        @synchronize()
+        KI.barrier()
 
         half_size_group = half_size_group << 0x1
         size_group = size_group << 0x1
@@ -72,14 +71,13 @@
 
     i = ithread + N + iblock * N * 0x2
     i < len && (vec[i + 0x1] = s_buf[ithread + N + 0x1])
+    nothing
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_global!(
-    @Const(vec_in), vec_out, comp, half_size_group,
-)
+function _merge_sort_global!(vec_in, vec_out, comp, half_size_group, ::Val{N}) where N
+    @inbounds begin
     len = length(vec_in)
-    N = @groupsize()[1]
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -87,8 +85,8 @@ end
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     idx = ithread + iblock * N
     size_group = half_size_group * 0x2
@@ -120,6 +118,8 @@ end
             vec_out[pos_out + 0x1] = vec_in[pos_in + 0x1]
         end
     end
+    end
+    nothing
 end
 
 
@@ -160,7 +160,7 @@ function merge_sort!(
 
     # Block level
     blocks = (length(v) + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(v, comp, ndrange=(block_size * blocks,))
+    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _merge_sort_block!(v, comp, Val(block_size))
 
     # Global level
     half_size_group = Int32(block_size * 2)
@@ -170,12 +170,12 @@ function merge_sort!(
         p1 = v
         p2 = isnothing(temp) ? similar(v) : temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = KI.@kernel backend launch = false _merge_sort_global!(p1, p2, comp, half_size_group, Val(block_size))
 
         niter = 0
         while len > half_size_group
             blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
-            kernel!(p1, p2, comp, half_size_group, ndrange=(block_size * blocks,))
+            kernel!(p1, p2, comp, half_size_group, Val(block_size); workgroupsize=block_size, numworkgroups = blocks)
 
             half_size_group = half_size_group << 1;
             size_group = size_group << 1;

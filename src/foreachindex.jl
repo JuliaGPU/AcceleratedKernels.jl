@@ -1,14 +1,16 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _forindices_global!(f, indices)
+function _forindices_global!(f, indices, ::Val{N}) where N
 
     # Calculate global index
-    N = @groupsize()[1]
-    iblock = @index(Group, Linear)
-    ithread = @index(Local, Linear)
+    iblock = KI.get_group_id().x
+    ithread = KI.get_local_id().x
     i = ithread + (iblock - 0x1) * N
+    # i = get_global_id().x
+
 
     if i <= length(indices)
         f(indices[i])
     end
+    nothing
 end
 
 
@@ -21,9 +23,8 @@ function _forindices_gpu(
 )
     # GPU implementation
     @argcheck block_size > 0
-    blocks = (length(indices) + block_size - 1) ÷ block_size
-    _forindices_global!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
-    nothing
+    blocks = max((length(indices) + block_size - 1) ÷ block_size, 1)
+    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _forindices_global!(f, indices, Val(block_size))
 end
 
 

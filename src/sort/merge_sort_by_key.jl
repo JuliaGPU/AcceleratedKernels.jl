@@ -1,8 +1,7 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_block!(keys, values, comp)
+function _merge_sort_by_key_block!(keys, values, comp, ::Val{N}) where N
 
-    @uniform N = @groupsize()[1]
-    s_keys = @localmem eltype(keys) (N * 0x2,)
-    s_values = @localmem eltype(values) (N * 0x2,)
+    s_keys = KI.localmemory(eltype(keys), N * 0x2)
+    s_values = KI.localmemory(eltype(values), N * 0x2)
 
     I = typeof(N)
     len = length(keys)
@@ -13,8 +12,8 @@
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     i = ithread + iblock * N * 0x2
     if i < len
@@ -28,7 +27,7 @@
         s_values[ithread + N + 0x1] = values[i + 0x1]
     end
 
-    @synchronize()
+    KI.barrier()
 
     half_size_group = typeof(ithread)(1)
     size_group = typeof(ithread)(2)
@@ -66,7 +65,7 @@
             pos2 = ithread % half_size_group + _upper_bound_s0(s_keys, k2, lo, hi, comp) - lo
         end
 
-        @synchronize()
+        KI.barrier()
 
         if pos1 != typemax(I)
             s_keys[gid * size_group + pos1 + 0x1] = k1
@@ -77,7 +76,7 @@
             s_values[gid * size_group + pos2 + 0x1] = v2
         end
 
-        @synchronize()
+        KI.barrier()
 
         half_size_group = half_size_group << 0x1
         size_group = size_group << 0x1
@@ -94,17 +93,18 @@
         keys[i + 0x1] = s_keys[ithread + N + 0x1]
         values[i + 0x1] = s_values[ithread + N + 0x1]
     end
+    nothing
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_global!(
-    @Const(keys_in), keys_out,
-    @Const(values_in), values_out,
+function _merge_sort_by_key_global!(
+    keys_in, keys_out,
+    values_in, values_out,
     comp, half_size_group,
-)
+    ::Val{N}
+) where N
 
     len = length(keys_in)
-    N = @groupsize()[1]
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -112,8 +112,8 @@ end
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     idx = ithread + iblock * N
     size_group = half_size_group * 0x2
@@ -150,6 +150,7 @@ end
             values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
         end
     end
+    nothing
 end
 
 
@@ -201,7 +202,7 @@ function merge_sort_by_key!(
 
     # Block level
     blocks = (length(keys) + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_by_key_block!(backend, block_size)(keys, values, comp, ndrange=(block_size * blocks,))
+    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _merge_sort_by_key_block!(keys, values, comp, Val(block_size))
 
     # Global level
     half_size_group = Int32(block_size * 2)
@@ -214,12 +215,12 @@ function merge_sort_by_key!(
         pv1 = values
         pv2 = isnothing(temp_values) ? similar(values) : temp_values
 
-        kernel! = _merge_sort_by_key_global!(backend, block_size)
+        kernel! = KI.@kernel backend launch = false _merge_sort_by_key_global!(pk1, pk2, pv1, pv2, comp, half_size_group, Val(block_size))
 
         niter = 0
         while len > half_size_group
             blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
-            kernel!(pk1, pk2, pv1, pv2, comp, half_size_group, ndrange=(block_size * blocks,))
+            kernel!(pk1, pk2, pv1, pv2, comp, half_size_group, Val(block_size); workgroupsize=block_size, numworkgroups=blocks)
 
             half_size_group = half_size_group << 1;
             size_group = size_group << 1;

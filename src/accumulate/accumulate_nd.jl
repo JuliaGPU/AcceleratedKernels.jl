@@ -51,18 +51,14 @@ function accumulate_nd!(
         if length_outer >= length_dims
             # One thread per outer dimension
             blocks = (length_outer + block_size - 1) ÷ block_size
-            kernel1! = _accumulate_nd_by_thread!(backend, block_size)
-            kernel1!(
-                v, op, init, dims, inclusive,
-                ndrange=(block_size * blocks,),
+            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _accumulate_nd_by_thread!(
+                v, op, init, dims, inclusive, Val(block_size)
             )
         else
             # One block per outer dimension
             blocks = length_outer
-            kernel2! = _accumulate_nd_by_block!(backend, block_size)
-            kernel2!(
-                v, op, init, neutral, dims, inclusive,
-                ndrange=(block_size, blocks),
+            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _accumulate_nd_by_block!(
+                v, op, init, neutral, dims, inclusive, Val(block_size)
             )
         end
     end
@@ -121,9 +117,11 @@ function _accumulate_nd_cpu_sections!(
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _accumulate_nd_by_thread!(
+function _accumulate_nd_by_thread!(
     v, op, init, dims, inclusive,
-)
+    ::Val{block_size}
+) where block_size
+    @inbounds begin
     # One thread per outer dimension element, when there are more outer elements than in the
     # reduced dim e.g. accumulate(+, rand(3, 1000), dims=1) => only 3 elements in the accumulated
     # dim
@@ -135,16 +133,14 @@ end
     length_dims = vsizes[dims]
     length_outer = length(v) ÷ length_dims
 
-    block_size = @groupsize()[1]
-
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
     # indexing). Internal calculations will be done using zero indexing except when actually
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     # Each thread handles one outer element
     tid = ithread + iblock * block_size
@@ -178,12 +174,16 @@ end
             end
         end
     end
+    end
+    nothing
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _accumulate_nd_by_block!(
+function _accumulate_nd_by_block!(
     v, op, init, neutral, dims, inclusive,
-)
+    ::Val{block_size}
+) where block_size
+    @inbounds begin
     # NOTE: shmem_size MUST be greater than 2 * block_size
     # NOTE: block_size MUST be a power of 2
 
@@ -198,10 +198,8 @@ end
     length_dims = vsizes[dims]
     length_outer = length(v) ÷ length_dims
 
-    @uniform block_size = @groupsize()[1]
-
-    temp = @localmem eltype(v) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
-    running_prefix = @localmem eltype(v) (1,)
+    temp = KI.localmemory(eltype(v), 0x2 * block_size + conflict_free_offset(0x2 * block_size))
+    running_prefix = KI.localmemory(eltype(v), 1)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -209,8 +207,8 @@ end
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     # Each block handles one outer element; guaranteed to have exact number of blocks, so no need
     # for `if iblock < length_outer`
@@ -234,7 +232,7 @@ end
     if ithread == 0x0
         running_prefix[0x1] = neutral
     end
-    @synchronize()
+    KI.barrier()
 
     while ichunk < num_chunks
         block_offset = ichunk * block_size * 0x2            # Processing two elements per thread
@@ -271,7 +269,7 @@ end
         next_pow2 = block_size * 0x2
         d = next_pow2 >> 0x1
         while d > 0x0             # TODO: unroll this like in reduce.jl ?
-            @synchronize()
+            KI.barrier()
 
             if ithread < d
                 _ai = offset * (0x2 * ithread + 0x1) - 0x1
@@ -296,7 +294,7 @@ end
         d = typeof(ithread)(1)
         while d < next_pow2
             offset = offset >> 0x1
-            @synchronize()
+            KI.barrier()
 
             if ithread < d
                 _ai = offset * (0x2 * ithread + 0x1) - 0x1
@@ -315,10 +313,10 @@ end
         # Later blocks should always be inclusively-scanned
         if inclusive || ichunk != 0x0
             # To compute an inclusive scan, shift elements left...
-            @synchronize()
+            KI.barrier()
             t1 = temp[ai + bank_offset_a + 0x1]
             t2 = temp[bi + bank_offset_b + 0x1]
-            @synchronize()
+            KI.barrier()
 
             if ai > 0x0
                 temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
@@ -344,7 +342,7 @@ end
         end
 
         _running_prefix = running_prefix[0x1]
-        @synchronize()
+        KI.barrier()
 
         if block_offset + ai < length_dims
             total = op(_running_prefix, temp[ai + bank_offset_a + 0x1])
@@ -367,8 +365,10 @@ end
         if bi == 0x2 * block_size - 0x1
             running_prefix[0x1] = total
         end
-        @synchronize()
+        KI.barrier()
 
         ichunk += 0x1
     end
+    end
+    nothing
 end

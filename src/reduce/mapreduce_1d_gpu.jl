@@ -1,7 +1,6 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(@Const(src), dst, f, op, neutral)
-
-    @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+function _mapreduce_block!(src, dst, f, op, neutral, ::Val{N}) where N
+    @inbounds begin
+    sdata = KI.localmemory(eltype(dst), N)
 
     len = length(src)
 
@@ -11,8 +10,8 @@
     # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 
     # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
+    iblock = KI.get_group_id().x - 0x1
+    ithread = KI.get_local_id().x - 0x1
 
     i = ithread + iblock * (N * 0x2)
     if i >= len
@@ -23,9 +22,9 @@
         sdata[ithread + 0x1] = op(f(src[i + 0x1]), f(src[i + N + 0x1]))
     end
 
-    @synchronize()
+    KI.barrier()
 
-    @inline reduce_group!(@context, op, sdata, N, ithread)
+    @inline reduce_group!(op, sdata, N, ithread)
 
     # Code below would work on NVidia GPUs with warp size of 32, but create race conditions and
     # return incorrect results on Intel Graphics. It would be useful to have a way to statically
@@ -43,6 +42,8 @@
     if ithread == 0x0
         dst[iblock + 0x1] = sdata[0x1]
     end
+    end
+    nothing
 end
 
 
@@ -91,8 +92,7 @@ function mapreduce_1d_gpu(
     src_view = @view src[1:end]
     dst_view = @view dst[1:blocks]
 
-    kernel! = _mapreduce_block!(backend, block_size)
-    kernel!(src_view, dst_view, f, op, neutral, ndrange=(block_size * blocks,))
+    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_block!(src_view, dst_view, f, op, neutral, Val(block_size))
 
     # As long as we still have blocks to process, swap between the src and dst pointers at
     # the beginning of the first and second halves of dst
@@ -110,7 +110,7 @@ function mapreduce_1d_gpu(
         blocks = (len + num_per_block - 1) ÷ num_per_block
 
         # Each block produces one reduced value
-        kernel!(p1, p2, identity, op, neutral, ndrange=(block_size * blocks,))
+        KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_block!(p1, p2, identity, op, neutral, Val(block_size))
         len = blocks
 
         if len < switch_below

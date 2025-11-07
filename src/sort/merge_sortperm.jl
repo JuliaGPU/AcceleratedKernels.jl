@@ -133,7 +133,7 @@ function merge_sortperm_lowmem!(
 
     # Block level
     blocks = (length(ix) + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(ix, comp, ndrange=(block_size * blocks,))
+    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _merge_sort_block!(ix, comp, Val(block_size))
 
     # Global level
     half_size_group = Int32(block_size * 2)
@@ -143,12 +143,12 @@ function merge_sortperm_lowmem!(
         p1 = ix
         p2 = isnothing(temp) ? similar(ix) : temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = KI.@kernel backend launch = false _merge_sort_global!(p1, p2, comp, half_size_group, Val(block_size))
 
         niter = 0
         while len > half_size_group
             blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
-            kernel!(p1, p2, comp, half_size_group, ndrange=(block_size * blocks,))
+            kernel!(p1, p2, comp, half_size_group; workgroupsize=block_size, numworkgroups=blocks)
 
             half_size_group = half_size_group << 1;
             size_group = size_group << 1;
