@@ -27,18 +27,13 @@ md"""
 """
 end
 
-# ╔═╡ 8601e5de-180c-45b5-b0c6-1f8d807df6d0
-
-
-# ╔═╡ e27f7b92-79f2-4351-bbc5-46d6e5a9fd67
-
-
 # ╔═╡ 0f77fb5f-e894-43e4-94f5-4ed93af7ba9b
 begin
-	function plot_benches(df, cat, t; ylabel="Time (ns)")
+	function plot_benches(df, cat, t; ylabel="Time (ns)", kwargs...)
 		df = filter(x -> isequal(cat, x.Category), df)
 		df = filter(x -> isequal(t, x.T), df)
-		groupedbar(df.Time; group=df.alg, ylabel, title="$cat/$t", xticks=(1:length(unique(df.test)),unique(df.test)), xtickfontsize=6, xrotation = 30)
+		yerror = "Std" in names(df) ? df.Std : nothing
+		groupedbar(df.Time; group=df.alg, ylabel, yerror, title="$cat/$t", xticks=(1:length(unique(df.test)),unique(df.test)), xtickfontsize=6, xrotation = 30, kwargs...)
 	end
 	function getbenches(res)
 		_res = res[2][1]
@@ -60,34 +55,42 @@ begin
 		end
 	end
 	make_res_df(file) = make_res_df(x -> startswith(x, "base") ? Symbol("1Base") : Symbol("2AccK"), file)
-	function make_res_df(alg_f, file)
+	function _make_res_df(alg_f, file)
 		benchresults = JSON.parsefile(file)
 		benchres_df = getbenches(benchresults)
 		benchres_df.alg  .= [alg_f(x) for x in benchres_df.Bench]
 		benchres_df.test .= [x[6:end] for x in benchres_df.Bench]
-		
-		sort!(benchres_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
 		return benchres_df
+	end
+	function make_res_df(alg_f, file, filestd=true)
+		benchres_df = _make_res_df(alg_f, file)
+
+		final_df = if filestd
+			sbenchres_df = _make_res_df(alg_f, "$(first(splitext(file)))std.json")
+			rename!(sbenchres_df, :Time => :Std)
+			
+			innerjoin(benchres_df, sbenchres_df; on=[:Category, :T, :Bench, :alg, :test])
+		else
+			benchres_df
+		end
+		final_df = sort!(final_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
+		
+		remove_trail(x) = first(split(x, "_"))
+		final_df.Category .= remove_trail.(final_df.Category)
+		
+		sort!(final_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
+		return final_df
 	end
 end
 
-# ╔═╡ 002b7672-9431-4510-ba89-84be098a2f9f
-# begin
-# 	benchresultspre = JSON.parsefile("benchmarkresultsstd.json")
-# 	benchrespre_df = getbenches(benchresultspre)
-# 	benchrespre_df.alg  .= [startswith(x, "base") ? Symbol("1Base") : Symbol("2AccK") for x in benchrespre_df.Bench]
-# 	benchrespre_df.test .= [x[6:end] for x in benchrespre_df.Bench]
-
-# 	benchrespre_df.alg  .= [x == Symbol("1Base") ? Symbol("2Base") : Symbol("4AccK") for x in benchrespre_df.alg]
-	
-# 	sort!(benchrespre_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
-# end
-
 # ╔═╡ b6c92a3f-2b4d-4ebf-82fc-09b1f21531d2
 begin
-	benchrespre_df = make_res_df(x->startswith(x, "base") ? Symbol("1BasePre") : Symbol("4AccKPre"), "benchmarkresultspre.json")
-	benchres_df = make_res_df(x->startswith(x, "base") ? Symbol("2Base") : Symbol("5AccK"), "benchmarkresultsnew.json")
-	benchresi32_df = make_res_df(x->startswith(x, "base") ? Symbol("3BaseI32") : Symbol("6AccKI32"), "benchmarkresults.json")
+	benchreska09_df = make_res_df(x->startswith(x, "base") ? Symbol("1Baseka0.9") : Symbol("5AccKka0.9"), "benchmarkresultska0.9.json")
+	benchreska10_df = make_res_df(x->startswith(x, "base") ? Symbol("2Baseka0.10") : Symbol("6AccKka0.10"), "benchmarkresultska0.10.json")
+	benchreski10_df = make_res_df(x->startswith(x, "base") ? Symbol("3Baseki0.10") : Symbol("7AccKki0.10"), "benchmarkresultski0.10.json")
+	benchreski10heur_df = make_res_df(x->startswith(x, "base") ? Symbol("4Baseki0.10heur") : Symbol("8AccKkiheur0.10"), "benchmarkresultski0.10heur.json")
+	benchres_df = [benchreska09_df;benchreska10_df;benchreski10_df;benchreski10heur_df]
+	benchres_df = benchres_df[.!occursin.(Ref("sin"), benchres_df.Bench), :]
 end
 
 # ╔═╡ d4accca6-f650-453c-bb75-a8e4cac568c1
@@ -100,40 +103,8 @@ md"
 Type: $(@bind typ Select(unique(benchres_df.T);))
 "
 
-# ╔═╡ 3cd5fd0a-6f16-4cb3-87ba-43b86224b81c
-plot_benches(benchres_df, cat, typ)
-
 # ╔═╡ cde9391a-44dd-49ee-8730-4b9ad58c3d90
-plot_benches([benchres_df;benchrespre_df;benchresi32_df], cat, typ)
-
-# ╔═╡ 4681accf-eaed-47e0-9d26-ab968df83c8a
-# begin
-# make_res_df(file) = make_res_df(x -> startswith(x, "base") ? Symbol("1Base") : Symbol("2AccK"), file)
-# function make_res_df(alg_f, file)
-# 	benchresults = JSON.parsefile("benchmarkresultsstd.json")
-# 	benchres_df = getbenches(benchresults)
-# 	benchres_df.alg  .= [alg_f(x) for x in benchres_df.Bench]
-# 	benchres_df.test .= [x[6:end] for x in benchres_df.Bench]
-	
-# 	sort!(benchres_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
-# 	return benchres_df
-# end
-# end
-
-# ╔═╡ 7a3a4783-8424-488d-8122-1d65680703ac
-# begin
-# 	benchresultspre = JSON.parsefile("benchmarkresultsstd.json")
-# 	benchrespre_df = getbenches(benchresultspre)
-# 	benchrespre_df.alg  .= [startswith(x, "base") ? Symbol("1Base") : Symbol("2AccK") for x in benchrespre_df.Bench]
-# 	benchrespre_df.test .= [x[6:end] for x in benchrespre_df.Bench]
-
-# 	benchrespre_df.alg  .= [x == Symbol("1Base") ? Symbol("2Base") : Symbol("4AccK") for x in benchrespre_df.alg]
-	
-# 	sort!(benchrespre_df, [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
-# end
-
-# ╔═╡ f3ac43c7-f6d0-4aa6-9d43-c66907de4fa0
-benchresboth_df = sort!([benchres_df;benchrespre_df], [:Category, :T, order(:Bench, by=length), :test, order(:alg, rev=true)])
+plot_benches(benchres_df, cat, typ)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1666,15 +1637,8 @@ version = "1.9.2+0"
 # ╟─7259dbee-52ac-11f0-3192-dd97323b274a
 # ╟─d4accca6-f650-453c-bb75-a8e4cac568c1
 # ╟─51dbf656-5846-440e-aff6-ea7d57e62e5c
-# ╠═3cd5fd0a-6f16-4cb3-87ba-43b86224b81c
-# ╠═cde9391a-44dd-49ee-8730-4b9ad58c3d90
-# ╠═8601e5de-180c-45b5-b0c6-1f8d807df6d0
-# ╠═e27f7b92-79f2-4351-bbc5-46d6e5a9fd67
-# ╠═0f77fb5f-e894-43e4-94f5-4ed93af7ba9b
-# ╠═002b7672-9431-4510-ba89-84be098a2f9f
-# ╠═b6c92a3f-2b4d-4ebf-82fc-09b1f21531d2
-# ╠═4681accf-eaed-47e0-9d26-ab968df83c8a
-# ╠═7a3a4783-8424-488d-8122-1d65680703ac
-# ╠═f3ac43c7-f6d0-4aa6-9d43-c66907de4fa0
+# ╟─cde9391a-44dd-49ee-8730-4b9ad58c3d90
+# ╟─0f77fb5f-e894-43e4-94f5-4ed93af7ba9b
+# ╟─b6c92a3f-2b4d-4ebf-82fc-09b1f21531d2
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
