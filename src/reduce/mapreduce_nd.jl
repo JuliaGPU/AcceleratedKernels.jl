@@ -123,13 +123,15 @@ function mapreduce_nd(
             min_elems=min_elems,
         )
     else
-        # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
-        #   - If the dimension we are reducing has more elements, (e.g. reduce(+, rand(3, 1000), dims=2)),
-        #     we use a block of threads per dst element - thus, a block of threads reduces the dims axis
-        #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
-        #     use a single thread per dst element - thus, a thread reduces the dims axis sequentially,
-        #     while the other dimensions are processed in parallel, independently
-        if dst_size >= src_sizes[dims]
+        # On GPUs we have two parallelisation approaches, based on destination dimension and current hardware:
+        #   - If the other dimensions have more elements than the product of the device's compute units and
+        #     maximum number of threads , we use a single thread per dst element - thus, a thread reduces
+        #     the dims axis sequentially, while the other dimensions are processed in parallel, independently
+        #   - If the dimension we are reducing has more elements, we use a block of threads per dst
+        #     element - thus, a block of threads reduces the dims axis
+        by_thread_threshold = KI.max_work_group_size(backend) * KI.multiprocessor_count(backend)
+
+        if dst_size >= by_thread_threshold
             blocks = (dst_size + block_size - 1) ÷ block_size
             KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_nd_by_thread!(
                 src, dst, f, op, init, dims, Val(block_size)

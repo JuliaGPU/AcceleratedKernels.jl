@@ -38,17 +38,18 @@ function accumulate_nd!(
     if !use_gpu_algorithm(backend, prefer_threads)
         _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
     else
-        # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
-        #   - If the dimension we are accumulating along has more elements than the "outer" dimensions,
-        #     (e.g. accumulate(+, rand(3, 1000), dims=2)), we use a block of threads per outer
-        #     dimension - thus, a block of threads reduces the dims axis
-        #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
-        #     use a single thread per outer dimension - thus, a thread reduces the dims axis
-        #     sequentially, while the other dimensions are processed in parallel, independently
+        # On GPUs we have two parallelisation approaches, based on destination dimension and current hardware:
+        #   - If the other dimensions have more elements than the product of the device's compute units and
+        #     maximum number of threads , we use a single thread per outer dimension - thus, a thread reduces
+        #     the dims axis sequentially, while the other dimensions are processed in parallel, independently
+        #   - If the dimension we are accumulating along has more elements, we use a block of threads per outer
+        #     element - thus, a block of threads reduces the dims axis
         length_dims = vsizes[dims]
         length_outer = length(v) ÷ length_dims
 
-        if length_outer >= length_dims
+        serial_threshold = KI.max_work_group_size(backend) * KI.multiprocessor_count(backend)
+
+        if length_outer >= serial_threshold
             # One thread per outer dimension
             blocks = (length_outer + block_size - 1) ÷ block_size
             KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _accumulate_nd_by_thread!(
