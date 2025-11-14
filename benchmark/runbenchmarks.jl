@@ -10,6 +10,7 @@ rng = StableRNG(123)
 # parse command line args
 BACKENDS = ["--CUDA", "--oneAPI", "--AMDGPU", "--Metal", "--OpenCL", "--CPU"]
 b_opt_idx = in.(ARGS, Ref(BACKENDS))
+out_opt_idx = findall(x -> endswith(x, ".json",), ARGS)
 
 if !@isdefined(backend_arg)
     backend_arg = if sum(b_opt_idx) == 0
@@ -22,7 +23,9 @@ if !@isdefined(backend_arg)
 end
 backend_arg in BACKENDS || throw(ArgumentError("\"$backend_arg\" is not a valid backend."))
 
-other_args = ARGS[.!b_opt_idx]
+other_args_idx = copy(b_opt_idx)
+other_args_idx[out_opt_idx] .= true
+other_args = ARGS[.!other_args_idx]
 # other_args = ["accumulate_1"]
 
 bench_to_include = isempty(other_args) ? nothing : other_args
@@ -134,8 +137,15 @@ reclaim_mem()
 @info "Running benchmarks"
 results = run(SUITE, verbose=true)
 
-BenchmarkTools.save("benchmarkresults.json", median(results))
-BenchmarkTools.save("benchmarkresultsstd.json", std(results))
+
+result_file = if isempty((out_opt_idx))
+    "benchmarkresults"
+else
+    first(splitext(ARGS[first(out_opt_idx)]))
+end
+
+BenchmarkTools.save("$(result_file).json", median(results))
+BenchmarkTools.save("$(result_file)std.json", std(results))
 
 # save plots for each file/datatype
 # for l1 in keys(results)
