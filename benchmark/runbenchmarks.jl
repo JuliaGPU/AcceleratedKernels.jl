@@ -119,7 +119,15 @@ end
 
 @info "Preparing benchmarks"
 warmup(SUITE; verbose=false)
-tune!(SUITE)
+
+if isfile("params.json")
+    @info "Loading params"
+    loadparams!(SUITE, BenchmarkTools.load("params.json")[1], :evals, :samples);
+else
+    @info "Tuning suite"
+    tune!(SUITE)
+    BenchmarkTools.save("params.json", params(SUITE));
+end
 
 reclaim_mem()
 
@@ -127,6 +135,7 @@ reclaim_mem()
 results = run(SUITE, verbose=true)
 
 BenchmarkTools.save("benchmarkresults.json", median(results))
+BenchmarkTools.save("benchmarkresultsstd.json", std(results))
 
 # save plots for each file/datatype
 # for l1 in keys(results)
