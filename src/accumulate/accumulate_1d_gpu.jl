@@ -271,7 +271,7 @@ function accumulate_1d_gpu!(
     min_elems::Int,
 
     # GPU settings
-    block_size::Int,
+    block_size::Union{Nothing, Int}=256,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )
@@ -326,7 +326,7 @@ function accumulate_1d_gpu!(
     min_elems::Int,
 
     # GPU settings
-    block_size::Int,
+    block_size::Union{Nothing, Int}=256,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )

@@ -10,10 +10,12 @@ function mapreduce_nd(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size::Int,
+    block_size::Union{Nothing, Int},
     temp::Union{Nothing, AbstractArray},
 )
-    @argcheck 1 <= block_size <= 1024
+
+    max_block_size = min(1024, get_max_block_size(backend, block_size))
+    @argcheck 1 <= max_block_size <= 1024
 
     # Degenerate cases begin; order of priority matters
 
@@ -132,15 +134,25 @@ function mapreduce_nd(
         by_thread_threshold = KI.max_work_group_size(backend) * KI.multiprocessor_count(backend)
 
         if dst_size >= by_thread_threshold
-            blocks = (dst_size + block_size - 1) ÷ block_size
-            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_nd_by_thread!(
-                src, dst, f, op, init, dims, Val(block_size)
+            kernel = KI.@kernel backend launch = false _mapreduce_nd_by_thread!(
+                src, dst, f, op, init, dims
+            )
+            workgroupsize = isnothing(block_size) ? KI.kernel_max_work_group_size(kernel) : block_size
+            numworkgroups = (dst_size + workgroupsize - 1) ÷ workgroupsize
+            kernel(
+                src, dst, f, op, init, dims; workgroupsize, numworkgroups
             )
         else
+            kernel = KI.@kernel backend launch = false _mapreduce_nd_by_block!(
+                src, dst, f, op, init, neutral, dims, Val(max_block_size)
+            )
+
+            workgroupsize = isnothing(block_size) ? KI.kernel_max_work_group_size(kernel) : block_size
+
             # One block per output element
-            blocks = dst_size
-            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_nd_by_block!(
-                src, dst, f, op, init, neutral, dims, Val(block_size)
+            numworkgroups = dst_size
+            kernel(
+                src, dst, f, op, init, neutral, dims, Val(max_block_size); workgroupsize, numworkgroups
             )
         end
     end
@@ -194,9 +206,8 @@ end
 function _mapreduce_nd_by_thread!(
     src, dst,
     f, op,
-    init, dims,
-    ::Val{N}
-) where N
+    init, dims
+)
     # One thread per output element, when there are more outer elements than in the reduced dim
     # e.g. reduce(+, rand(3, 1000), dims=1) => only 3 elements in the reduced dim
     src_sizes = size(src)
@@ -217,6 +228,7 @@ function _mapreduce_nd_by_thread!(
     # Group (block) and local (thread) indices
     iblock = KI.get_group_id().x - 0x1
     ithread = KI.get_local_id().x - 0x1
+    N = KI.get_local_size().x
 
     # Each thread handles one output element
     tid = ithread + iblock * N

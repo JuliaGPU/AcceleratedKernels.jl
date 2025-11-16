@@ -17,7 +17,7 @@ include("mapreduce_nd.jl")
         min_elems::Int=1,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         switch_below::Int=0,
     )
@@ -100,7 +100,7 @@ end
         min_elems::Int=1,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         switch_below::Int=0,
     )
@@ -178,7 +178,7 @@ function _mapreduce_impl(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size::Int=256,
+    block_size::Union{Nothing, Int}=nothing,
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
 )

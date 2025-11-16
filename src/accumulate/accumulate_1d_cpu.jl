@@ -9,7 +9,7 @@ function accumulate_1d_cpu!(
     min_elems::Int,
 
     # GPU settings - not used
-    block_size::Int,
+    block_size::Union{Nothing, Int},
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )

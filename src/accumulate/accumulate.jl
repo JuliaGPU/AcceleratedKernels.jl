@@ -43,7 +43,7 @@ include("accumulate_nd.jl")
         alg::AccumulateAlgorithm=ScanPrefixes(),
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
@@ -63,7 +63,7 @@ include("accumulate_nd.jl")
         alg::AccumulateAlgorithm=ScanPrefixes(),
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
@@ -162,7 +162,7 @@ function _accumulate_impl!(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size::Int=256,
+    block_size::Union{Nothing, Int}=nothing,
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
@@ -209,7 +209,7 @@ end
         alg::AccumulateAlgorithm=ScanPrefixes(),
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )

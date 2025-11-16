@@ -1,6 +1,7 @@
 function _mapreduce_block!(src, dst, f, op, neutral, ::Val{N}) where N
     @inbounds begin
     sdata = KI.localmemory(eltype(dst), N)
+    N_actual = KI.get_local_size().x
 
     len = length(src)
 
@@ -13,18 +14,18 @@ function _mapreduce_block!(src, dst, f, op, neutral, ::Val{N}) where N
     iblock = KI.get_group_id().x - 0x1
     ithread = KI.get_local_id().x - 0x1
 
-    i = ithread + iblock * (N * 0x2)
+    i = ithread + iblock * (N_actual * 0x2)
     if i >= len
         sdata[ithread + 0x1] = neutral
-    elseif i + N >= len
+    elseif i + N_actual >= len
         sdata[ithread + 0x1] = f(src[i + 0x1])
     else
-        sdata[ithread + 0x1] = op(f(src[i + 0x1]), f(src[i + N + 0x1]))
+        sdata[ithread + 0x1] = op(f(src[i + 0x1]), f(src[i + N_actual + 0x1]))
     end
 
     KI.barrier()
 
-    @inline reduce_group!(op, sdata, N, ithread)
+    @inline reduce_group!(op, sdata, N_actual, ithread)
 
     # Code below would work on NVidia GPUs with warp size of 32, but create race conditions and
     # return incorrect results on Intel Graphics. It would be useful to have a way to statically
@@ -57,11 +58,13 @@ function mapreduce_1d_gpu(
     min_elems::Int,
 
     # GPU settings
-    block_size::Int,
+    block_size::Union{Nothing, Int},
     temp::Union{Nothing, AbstractArray},
     switch_below::Int,
 )
-    @argcheck 1 <= block_size <= 1024
+    min_block_size = 16
+    max_block_size = min(1024, get_max_block_size(backend, block_size))
+    @argcheck 1 <= max_block_size <= 1024
     @argcheck switch_below >= 0
 
     # Degenerate cases
@@ -74,29 +77,37 @@ function mapreduce_1d_gpu(
     end
 
     # Each thread will handle two elements
-    num_per_block = 2 * block_size
-    blocks = (len + num_per_block - 1) ÷ num_per_block
+    # max_num_per_block = 2 * max_block_size
+    min_num_per_block = 2 * min_block_size
+    max_blocks = (len + min_num_per_block - 1) ÷ min_num_per_block
 
     if !isnothing(temp)
         @argcheck get_backend(temp) === backend
         @argcheck eltype(temp) === typeof(init)
-        @argcheck length(temp) >= blocks * 2
+        @argcheck length(temp) >= max_blocks * 2
         dst = temp
     else
         # Figure out type for destination
         dst_type = typeof(init)
-        dst = KernelAbstractions.allocate(backend, dst_type, blocks * 2)
+        dst = KernelAbstractions.allocate(backend, dst_type, max_blocks * 2)
     end
 
     # Later the kernel will be compiled for views anyways, so use same types
     src_view = @view src[1:end]
-    dst_view = @view dst[1:blocks]
+    dst_view = @view dst[1:max_blocks]
 
-    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_block!(src_view, dst_view, f, op, neutral, Val(block_size))
+    kernel = KI.@kernel backend launch = false _mapreduce_block!(src_view, dst_view, f, op, neutral, Val(max_block_size))
+
+    workgroupsize = block_size_pow_2(kernel, block_size)
+    numworkgroups = (len + workgroupsize - 1) ÷ workgroupsize
+
+    dst_view = @view dst[1:numworkgroups]
+
+    kernel(src_view, dst_view, f, op, neutral, Val(max_block_size); numworkgroups, workgroupsize)
 
     # As long as we still have blocks to process, swap between the src and dst pointers at
     # the beginning of the first and second halves of dst
-    len = blocks
+    len = numworkgroups
     if len < switch_below
         h_src = Vector(@view(dst[1:len]))
         return Base.reduce(op, h_src; init)
@@ -104,14 +115,18 @@ function mapreduce_1d_gpu(
 
     # Now all src elements have been passed through f; just do final reduction, no map needed
     p1 = @view dst[1:len]
-    p2 = @view dst[blocks + 1:end]
+    p2 = @view dst[numworkgroups + 1:end]
 
     while len > 1
-        blocks = (len + num_per_block - 1) ÷ num_per_block
+        kernel = KI.@kernel backend launch = false _mapreduce_block!(p1, p2, identity, op, neutral, Val(max_block_size))
+
+        workgroupsize = block_size_pow_2(kernel, block_size)
+        numworkgroups = (len + workgroupsize - 1) ÷ workgroupsize
+
+        kernel(p1, p2, identity, op, neutral, Val(max_block_size); numworkgroups, workgroupsize)
 
         # Each block produces one reduced value
-        KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _mapreduce_block!(p1, p2, identity, op, neutral, Val(block_size))
-        len = blocks
+        len = numworkgroups
 
         if len < switch_below
             h_src = Vector(@view(p2[1:len]))

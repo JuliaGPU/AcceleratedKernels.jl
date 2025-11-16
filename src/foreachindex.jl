@@ -1,11 +1,5 @@
-function _forindices_global!(f, indices, ::Val{N}) where N
-
-    # Calculate global index
-    iblock = KI.get_group_id().x
-    ithread = KI.get_local_id().x
-    i = ithread + (iblock - 0x1) * N
-    # i = get_global_id().x
-
+function _forindices_global!(f, indices)
+    i = KI.get_global_id().x
 
     if i <= length(indices)
         f(indices[i])
@@ -19,12 +13,17 @@ function _forindices_gpu(
     indices,
     backend::Backend;
 
-    block_size::Int=256,
+    block_size::Union{Nothing, Int}=nothing,
 )
     # GPU implementation
-    @argcheck block_size > 0
-    blocks = max((length(indices) + block_size - 1) ÷ block_size, 1)
-    KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _forindices_global!(f, indices, Val(block_size))
+    max_block_size = get_max_block_size(backend, block_size)
+    @argcheck max_block_size > 0
+    kernel = KI.@kernel backend launch = false _forindices_global!(f, indices)
+
+    workgroupsize = isnothing(block_size) ? KI.kernel_max_work_group_size(kernel) : block_size
+    numworkgroups = max((length(indices) + workgroupsize - 1) ÷ workgroupsize, 1)
+
+    kernel(f, indices; workgroupsize, numworkgroups)
 end
 
 
@@ -50,7 +49,7 @@ end
         min_elems=1,
 
         # GPU settings
-        block_size=256,
+        block_size::Union{Nothing, Int}=nothing,
     )
 
 Parallelised `for` loop over the indices of an iterable.
@@ -129,7 +128,7 @@ function foreachindex(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size=256,
+    block_size::Union{Nothing, Int}=nothing,
 )
     if use_gpu_algorithm(backend, prefer_threads)
         _forindices_gpu(f, eachindex(itr), backend; block_size)
@@ -148,7 +147,7 @@ end
         min_elems=1,
 
         # GPU settings
-        block_size=256,
+        block_size::Union{Nothing, Int}=nothing,
     )
 
 Parallelised `for` loop over the indices along axis `dims` of an iterable.
@@ -223,7 +222,7 @@ function foraxes(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size=256,
+    block_size::Union{Nothing, Int}=nothing,
 )
     if isnothing(dims)
         return foreachindex(

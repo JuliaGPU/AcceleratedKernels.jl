@@ -37,7 +37,7 @@ function _mapreduce_nd_apply_init!(
     init,
     max_tasks=Threads.nthreads(),
     min_elems=1,
-    block_size=256,
+    block_size=nothing,
 )
     foreachindex(dst, backend; max_tasks, min_elems, block_size) do i
         dst[i] = op(init, f(src[i]))

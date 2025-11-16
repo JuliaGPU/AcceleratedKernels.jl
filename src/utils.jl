@@ -8,6 +8,10 @@ const CPU_BACKEND = get_backend([])
     return backend != CPU_BACKEND || !prefer_threads
 end
 
+@inline get_max_block_size(backend, block_size) = isnothing(block_size) ? KI.max_work_group_size(backend) : block_size
+@inline block_size_pow_2(kernel, block_size) = isnothing(block_size) ? 2^floor(Int, log2(KI.kernel_max_work_group_size(kernel))) : block_size
+
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()

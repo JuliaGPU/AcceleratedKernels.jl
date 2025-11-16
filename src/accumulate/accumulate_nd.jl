@@ -11,7 +11,7 @@ function accumulate_nd!(
     prefer_threads::Bool=true,
 
     # GPU settings
-    block_size::Int,
+    block_size::Union{Nothing, Int},
 )
     # Degenerate cases begin; order of priority matters
 
@@ -35,9 +35,10 @@ function accumulate_nd!(
         _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
     else
         # Correctness checks
-        @argcheck block_size > 0
-        @argcheck ispow2(block_size)
-        
+        max_block_size = get_max_block_size(backend, block_size)
+        @argcheck max_block_size > 0
+        @argcheck ispow2(max_block_size)
+
         # On GPUs we have two parallelisation approaches, based on destination dimension and current hardware:
         #   - If the other dimensions have more elements than the product of the device's compute units and
         #     maximum number of threads , we use a single thread per outer dimension - thus, a thread reduces
@@ -50,16 +51,25 @@ function accumulate_nd!(
         serial_threshold = KI.max_work_group_size(backend) * KI.multiprocessor_count(backend)
 
         if length_outer >= serial_threshold
-            # One thread per outer dimension
-            blocks = (length_outer + block_size - 1) ÷ block_size
-            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _accumulate_nd_by_thread!(
-                v, op, init, dims, inclusive, Val(block_size)
+            kernel = KI.@kernel backend launch = false _accumulate_nd_by_thread!(
+                v, op, init, dims, inclusive
+            )
+            workgroupsize = block_size_pow_2(kernel, block_size)
+            numworkgroups = (length_outer + workgroupsize - 1) ÷ workgroupsize
+            kernel(
+                v, op, init, dims, inclusive; workgroupsize, numworkgroups
             )
         else
+            kernel = KI.@kernel backend launch = false _accumulate_nd_by_block!(
+                v, op, init, neutral, dims, inclusive, Val(max_block_size)
+            )
+
+            workgroupsize = block_size_pow_2(kernel, block_size)
+
             # One block per outer dimension
-            blocks = length_outer
-            KI.@kernel backend workgroupsize=block_size numworkgroups=blocks _accumulate_nd_by_block!(
-                v, op, init, neutral, dims, inclusive, Val(block_size)
+            numworkgroups = length_outer
+            kernel(
+                v, op, init, neutral, dims, inclusive, Val(max_block_size); workgroupsize, numworkgroups
             )
         end
     end
@@ -120,8 +130,7 @@ end
 
 function _accumulate_nd_by_thread!(
     v, op, init, dims, inclusive,
-    ::Val{block_size}
-) where block_size
+)
     @inbounds begin
     # One thread per outer dimension element, when there are more outer elements than in the
     # reduced dim e.g. accumulate(+, rand(3, 1000), dims=1) => only 3 elements in the accumulated
@@ -142,6 +151,7 @@ function _accumulate_nd_by_thread!(
     # Group (block) and local (thread) indices
     iblock = KI.get_group_id().x - 0x1
     ithread = KI.get_local_id().x - 0x1
+    block_size = KI.get_local_size().x
 
     # Each thread handles one outer element
     tid = ithread + iblock * block_size
