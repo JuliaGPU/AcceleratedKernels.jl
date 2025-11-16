@@ -13,10 +13,6 @@ function accumulate_nd!(
     # GPU settings
     block_size::Int,
 )
-    # Correctness checks
-    @argcheck block_size > 0
-    @argcheck ispow2(block_size)
-
     # Degenerate cases begin; order of priority matters
 
     # Invalid dims
@@ -38,6 +34,10 @@ function accumulate_nd!(
     if !use_gpu_algorithm(backend, prefer_threads)
         _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
     else
+        # Correctness checks
+        @argcheck block_size > 0
+        @argcheck ispow2(block_size)
+        
         # On GPUs we have two parallelisation approaches, based on destination dimension and current hardware:
         #   - If the other dimensions have more elements than the product of the device's compute units and
         #     maximum number of threads , we use a single thread per outer dimension - thus, a thread reduces
