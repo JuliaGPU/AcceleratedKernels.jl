@@ -99,7 +99,9 @@ function mapreduce_1d_gpu(
     kernel = KI.@kernel backend launch = false _mapreduce_block!(src_view, dst_view, f, op, neutral, Val(max_block_size))
 
     workgroupsize = block_size_pow_2(kernel, block_size)
-    numworkgroups = (len + workgroupsize - 1) ÷ workgroupsize
+
+    num_per_block = 2 * workgroupsize
+    numworkgroups = (len + num_per_block - 1) ÷ num_per_block
 
     dst_view = @view dst[1:numworkgroups]
 
@@ -121,7 +123,9 @@ function mapreduce_1d_gpu(
         kernel = KI.@kernel backend launch = false _mapreduce_block!(p1, p2, identity, op, neutral, Val(max_block_size))
 
         workgroupsize = block_size_pow_2(kernel, block_size)
-        numworkgroups = (len + workgroupsize - 1) ÷ workgroupsize
+
+        num_per_block = 2 * workgroupsize
+        numworkgroups = (len + num_per_block - 1) ÷ num_per_block
 
         kernel(p1, p2, identity, op, neutral, Val(max_block_size); numworkgroups, workgroupsize)
 

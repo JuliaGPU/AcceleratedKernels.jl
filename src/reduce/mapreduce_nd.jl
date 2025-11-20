@@ -137,7 +137,7 @@ function mapreduce_nd(
             kernel = KI.@kernel backend launch = false _mapreduce_nd_by_thread!(
                 src, dst, f, op, init, dims
             )
-            workgroupsize = isnothing(block_size) ? KI.kernel_max_work_group_size(kernel) : block_size
+            workgroupsize = block_size_pow_2(kernel, block_size)
             numworkgroups = (dst_size + workgroupsize - 1) ÷ workgroupsize
             kernel(
                 src, dst, f, op, init, dims; workgroupsize, numworkgroups
@@ -147,7 +147,7 @@ function mapreduce_nd(
                 src, dst, f, op, init, neutral, dims, Val(max_block_size)
             )
 
-            workgroupsize = isnothing(block_size) ? KI.kernel_max_work_group_size(kernel) : block_size
+            workgroupsize = block_size_pow_2(kernel, block_size)
 
             # One block per output element
             numworkgroups = dst_size
