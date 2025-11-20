@@ -175,7 +175,7 @@ end
             init = rand(-1000:1000)
             s = AK.accumulate(+, v; prefer_threads, init=Float32(init), dims)
             sh = Array(s)
-            @test all(sh .≈ accumulate(+, vh; init=Float32(init), dims))
+            @test sh ≈ accumulate(+, vh; init=Float32(init), dims)
         end
     end
 
