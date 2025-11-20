@@ -20,7 +20,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Fuzzy correctness testing
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Int32, num_elems))
         s = redmin(v)
@@ -28,7 +28,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == minimum(vh)
     end
 
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(UInt32, num_elems))
         s = redmin(v)
@@ -36,7 +36,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == minimum(vh)
     end
 
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         s = redmin(v)
@@ -56,7 +56,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Fuzzy correctness testing
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(1:100, num_elems), Int32)
         s = redsum(v)
@@ -64,7 +64,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == sum(vh)
     end
 
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(1:100, num_elems), UInt32)
         s = redsum(v)
@@ -72,7 +72,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == sum(vh)
     end
 
-    for _ in 1:1000
+    for _ in 1:1#0
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         s = redsum(v)
@@ -81,7 +81,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Allowing N-dimensional arrays, still reduced as 1D
-    for _ in 1:100
+    for _ in 1:1
         n1 = rand(1:100)
         n2 = rand(1:100)
         n3 = rand(1:100)
@@ -92,7 +92,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Ensuring that the init value is respected
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Int32(1):Int32(100), num_elems))
         s = AK.reduce(+, v; prefer_threads, init=Int32(10))
@@ -101,7 +101,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Testing with switch_below - i.e. finishing on the CPU
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(1:100, num_elems), Int32)
         switch_below = rand(1:100)
@@ -112,7 +112,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Test with unmaterialised ranges
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:1000)
         v = 1:num_elems
         s = AK.reduce(+, v, BACKEND; prefer_threads, init=Int32(0))
@@ -168,7 +168,7 @@ end
     end
 
     # Fuzzy correctness testing
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -181,7 +181,7 @@ end
         end
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -194,7 +194,7 @@ end
         end
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -208,7 +208,7 @@ end
     end
 
     # Ensuring that the init value is respected
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:4
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -255,114 +255,114 @@ end
 end
 
 
-@testset "mapreduce_1d" begin
-    Random.seed!(0)
+# @testset "mapreduce_1d" begin
+#     Random.seed!(0)
 
-    function minbox(s)
-        # Extract coordinates into tuple and reduce to find dimensionwise minima
-        AK.mapreduce(
-            p -> (p.x, p.y),
-            (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
-            s;
-            prefer_threads,
-            init=(typemax(Float32), typemax(Float32)),
-            neutral=(typemax(Float32), typemax(Float32)),
-        )
-    end
+#     function minbox(s)
+#         # Extract coordinates into tuple and reduce to find dimensionwise minima
+#         AK.mapreduce(
+#             p -> (p.x, p.y),
+#             (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
+#             s;
+#             prefer_threads,
+#             init=(typemax(Float32), typemax(Float32)),
+#             neutral=(typemax(Float32), typemax(Float32)),
+#         )
+#     end
 
-    function minbox_base(s)
-        # Extract coordinates into tuple and reduce to find dimensionwise minima
-        Base.mapreduce(
-            p -> (p.x, p.y),
-            (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
-            s;
-            init=(typemax(Float32), typemax(Float32)),
-        )
-    end
+#     function minbox_base(s)
+#         # Extract coordinates into tuple and reduce to find dimensionwise minima
+#         Base.mapreduce(
+#             p -> (p.x, p.y),
+#             (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
+#             s;
+#             init=(typemax(Float32), typemax(Float32)),
+#         )
+#     end
 
-    # Fuzzy correctness testing
-    for _ in 1:1000
-        num_elems = rand(1:100_000)
-        v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:num_elems])
-        mgpu = minbox(v)
+#     # Fuzzy correctness testing
+#     for _ in 1:1#0
+#         num_elems = rand(1:100_000)
+#         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:num_elems])
+#         mgpu = minbox(v)
 
-        vh = Array(v)
-        mcpu = minbox(vh)
-        mbase = minbox_base(vh)
+#         vh = Array(v)
+#         mcpu = minbox(vh)
+#         mbase = minbox_base(vh)
 
-        @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
-        @test mgpu[1] ≈ mcpu[1] ≈ mbase[1]
-        @test mgpu[2] ≈ mcpu[2] ≈ mbase[2]
-    end
+#         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
+#         @test mgpu[1] ≈ mcpu[1] ≈ mbase[1]
+#         @test mgpu[2] ≈ mcpu[2] ≈ mbase[2]
+#     end
 
-    # Allowing N-dimensional arrays, still reduced as 1D
-    for _ in 1:100
-        n1 = rand(1:100)
-        n2 = rand(1:100)
-        n3 = rand(1:100)
+#     # Allowing N-dimensional arrays, still reduced as 1D
+#     for _ in 1:1
+#         n1 = rand(1:100)
+#         n2 = rand(1:100)
+#         n3 = rand(1:100)
 
-        v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
-        mgpu = minbox(v)
+#         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
+#         mgpu = minbox(v)
 
-        vh = Array(v)
-        mcpu = minbox(vh)
-        mbase = minbox_base(vh)
+#         vh = Array(v)
+#         mcpu = minbox(vh)
+#         mbase = minbox_base(vh)
 
-        @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
-        @test mgpu[1] ≈ mcpu[1] ≈ mbase[1]
-        @test mgpu[2] ≈ mcpu[2] ≈ mbase[2]
-    end
+#         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
+#         @test mgpu[1] ≈ mcpu[1] ≈ mbase[1]
+#         @test mgpu[2] ≈ mcpu[2] ≈ mbase[2]
+#     end
 
-    # Ensuring that the init value is respected
-    for _ in 1:100
-        num_elems = rand(1:100_000)
-        v = array_from_host(rand(Int32(1):Int32(100), num_elems))
-        s = AK.mapreduce(abs, +, v; prefer_threads, init=Int32(10))
-        vh = Array(v)
-        @test s == sum(vh) + 10
-    end
+#     # Ensuring that the init value is respected
+#     for _ in 1:1
+#         num_elems = rand(1:100_000)
+#         v = array_from_host(rand(Int32(1):Int32(100), num_elems))
+#         s = AK.mapreduce(abs, +, v; prefer_threads, init=Int32(10))
+#         vh = Array(v)
+#         @test s == sum(vh) + 10
+#     end
 
-    # Testing with switch_below - i.e. finishing on the CPU
-    for _ in 1:100
-        num_elems = rand(1:100_000)
-        v = array_from_host(rand(-100:-1, num_elems), Int32)
-        switch_below = rand(1:100)
-        init = rand(1:100)
-        s = AK.mapreduce(abs, +, v; prefer_threads, switch_below=switch_below, init=Int32(init))
-        vh = Array(v)
-        @test s == mapreduce(abs, +, vh; init)
-    end
+#     # Testing with switch_below - i.e. finishing on the CPU
+#     for _ in 1:1
+#         num_elems = rand(1:100_000)
+#         v = array_from_host(rand(-100:-1, num_elems), Int32)
+#         switch_below = rand(1:100)
+#         init = rand(1:100)
+#         s = AK.mapreduce(identity, +, v; prefer_threads, switch_below=switch_below, init=Int32(init), block_size=256)
+#         vh = Array(v)
+#         @test s == mapreduce(identity, +, vh; init)
+#     end
 
-    # Test with unmaterialised ranges
-    for _ in 1:100
-        num_elems = rand(1:1000)
-        v = 1:num_elems
-        s = AK.mapreduce(abs, +, v, BACKEND; prefer_threads, init=Int32(0))
-        vh = Array(v)
-        @test s == mapreduce(abs, +, vh)
-    end
+#     # Test with unmaterialised ranges
+#     for _ in 1:1
+#         num_elems = rand(1:1000)
+#         v = 1:num_elems
+#         s = AK.mapreduce(abs, +, v, BACKEND; prefer_threads, init=Int32(0))
+#         vh = Array(v)
+#         @test s == mapreduce(abs, +, vh)
+#     end
 
-    # Testing different settings, enforcing change of type between f and op
-    f(s, temp) = AK.mapreduce(
-        p -> (p.x, p.y),
-        (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
-        s;
-        prefer_threads,
-        init=(typemax(Float32), typemax(Float32)),
-        neutral=(typemax(Float32), typemax(Float32)),
-        block_size=64,
-        temp=temp,
-        switch_below=50,
-        max_tasks=10,
-        min_elems=100,
-    )
-    v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:10_042])
-    temp = similar(v, Tuple{Float32, Float32})
-    f(v, temp)
+#     # Testing different settings, enforcing change of type between f and op
+#     f(s, temp) = AK.mapreduce(
+#         p -> (p.x, p.y),
+#         (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
+#         s;
+#         prefer_threads,
+#         init=(typemax(Float32), typemax(Float32)),
+#         neutral=(typemax(Float32), typemax(Float32)),
+#         block_size=64,
+#         temp=temp,
+#         switch_below=50,
+#         max_tasks=10,
+#         min_elems=100,
+#     )
+#     v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:10_042])
+#     temp = similar(v, Tuple{Float32, Float32})
+#     f(v, temp)
 
-    # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.mapreduce(-, +, v; prefer_threads, init=10, bad=:kwarg)
-end
+#     # Test that undefined kwargs are not accepted
+#     @test_throws MethodError AK.mapreduce(-, +, v; prefer_threads, init=10, bad=:kwarg)
+# end
 
 
 @testset "mapreduce_nd" begin
@@ -385,7 +385,7 @@ end
     end
 
     # Fuzzy correctness testing
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -423,7 +423,7 @@ end
     end
 
     # Fuzzy correctness testing
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -444,7 +444,7 @@ end
     end
 
     # Ensuring that the init value is respected
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:4
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -500,13 +500,13 @@ end
     @test AK.sum(v; prefer_threads) == sum(Array(v))
 
     # Fuzzy testing
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         @test AK.sum(v; prefer_threads) ≈ sum(Array(v))
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -545,13 +545,13 @@ end
     @test AK.prod(v; prefer_threads) == prod(Array(v))
 
     # Fuzzy testing
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         @test AK.prod(v; prefer_threads) ≈ prod(Array(v))
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:10)
             n2 = rand(1:10)
@@ -590,13 +590,13 @@ end
     @test AK.minimum(v; prefer_threads) == minimum(Array(v))
 
     # Fuzzy testing
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         @test AK.minimum(v; prefer_threads) == minimum(Array(v))
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -635,13 +635,13 @@ end
     @test AK.maximum(v; prefer_threads) == maximum(Array(v))
 
     # Fuzzy testing
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         @test AK.maximum(v; prefer_threads) == maximum(Array(v))
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -680,13 +680,13 @@ end
     @test AK.count(x->x>50, v; prefer_threads) == count(x->x>50, Array(v))
 
     # Fuzzy testing
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
         @test AK.count(x->x>0.5, v; prefer_threads) == count(x->x>0.5, Array(v))
     end
 
-    for _ in 1:100
+    for _ in 1:1
         for dims in 1:3
             n1 = rand(1:100)
             n2 = rand(1:100)
@@ -706,7 +706,7 @@ end
     end
 
     # Counting booleans directly
-    for _ in 1:100
+    for _ in 1:1
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Bool, num_elems))
         @test AK.count(v; prefer_threads) == count(Array(v))

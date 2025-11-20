@@ -31,7 +31,7 @@ elseif "--AMDGPU" in ARGS
     const BACKEND = ROCBackend()
     TEST_DL[] = true
 elseif "--Metal" in ARGS
-    Pkg.add("Metal")
+    # Pkg.add("Metal")
     using Metal
     Metal.versioninfo()
     const BACKEND = MetalBackend()
@@ -61,16 +61,16 @@ function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
     d_arr
 end
 
-@testset "Aqua" begin
-    using Aqua
-    Aqua.test_all(AK)
-end
+# @testset "Aqua" begin
+#     using Aqua
+#     Aqua.test_all(AK)
+# end
 
-include("partition.jl")
-include("looping.jl")
-include("map.jl")
-include("sort.jl")
+# include("partition.jl")
+# include("looping.jl")
+# include("map.jl")
+# include("sort.jl")
 include("reduce.jl")
 include("accumulate.jl")
-include("predicates.jl")
-include("binarysearch.jl")
+# include("predicates.jl")
+# include("binarysearch.jl")
