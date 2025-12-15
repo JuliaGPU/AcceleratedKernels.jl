@@ -2,6 +2,7 @@ import AcceleratedKernels as AK
 using KernelAbstractions
 using GPUArrays
 
+using Statistics
 using BenchmarkTools
 using BenchmarkPlots, StatsPlots, FileIO
 using StableRNGs

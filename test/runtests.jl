@@ -1,5 +1,6 @@
 import AcceleratedKernels as AK
 using KernelAbstractions
+using Statistics
 using Test
 using Random
 import Pkg
@@ -66,6 +67,7 @@ end
     Aqua.test_all(AK)
 end
 
+include("statistics.jl")
 include("partition.jl")
 include("looping.jl")
 include("map.jl")
