@@ -47,8 +47,8 @@ function sum(
     kwargs...
 )
     reduce(
-        +, src, backend;
-        init,
+        +, src;
+        backend, init,
         kwargs...
     )
 end
@@ -103,8 +103,8 @@ function prod(
     kwargs...
 )
     reduce(
-        *, src, backend;
-        init,
+        *, src;
+        backend, init,
         kwargs...
     )
 end
@@ -159,8 +159,8 @@ function maximum(
     kwargs...
 )
     reduce(
-        max, src, backend;
-        init,
+        max, src;
+        backend, init,
         kwargs...
     )
 end
@@ -215,8 +215,8 @@ function minimum(
     kwargs...
 )
     reduce(
-        min, src, backend;
-        init,
+        min, src;
+        backend, init,
         kwargs...
     )
 end
@@ -277,8 +277,8 @@ function count(
     kwargs...
 )
     mapreduce(
-        x -> x ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init,
+        x -> x ? one(typeof(init)) : zero(typeof(init)), +, src;
+        backend, init,
         neutral=zero(typeof(init)),
         kwargs...
     )
@@ -291,8 +291,8 @@ function count(
     kwargs...
 )
     mapreduce(
-        x -> f(x) ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init,
+        x -> f(x) ? one(typeof(init)) : zero(typeof(init)), +, src;
+        backend, init,
         neutral=zero(typeof(init)),
         kwargs...
     )

@@ -1,5 +1,6 @@
 function mapreduce_1d_cpu(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::AbstractArray;
+    backend::Backend,
     init,
     neutral,
 

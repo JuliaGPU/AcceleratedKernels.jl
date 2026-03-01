@@ -1,5 +1,6 @@
 function mapreduce_nd(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::AbstractArray;
+    backend::Backend,
     init,
     neutral=neutral_element(op, eltype(src)),
     dims::Int,

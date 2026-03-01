@@ -47,7 +47,8 @@ end
 
 
 function mapreduce_1d_gpu(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::AbstractArray;
+    backend::Backend,
     init,
     neutral,
 

@@ -126,3 +126,13 @@ module DocHelpers
         return Markdown.parse(join(lines[captured_istart:captured_iend], '\n'))
     end
 end
+
+@inline indextuple(arrays::Tuple, idx)::Tuple = Base.map(a -> a[idx], arrays)
+
+@inline function lengthcheck(dst::AbstractArray, src::AbstractArray...)
+    n = length(dst)
+    for a ∈ src
+        length(a) == n || return false
+    end
+    return true
+end
