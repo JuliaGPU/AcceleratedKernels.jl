@@ -67,7 +67,7 @@ end
             _ai += conflict_free_offset(_ai)
             _bi += conflict_free_offset(_bi)
 
-            temp[_bi + 0x1] = op(temp[_bi + 0x1], temp[_ai + 0x1])
+            temp[_bi + 0x1] = op(temp[_ai + 0x1], temp[_bi + 0x1])
         end
 
         offset = offset << 0x1
@@ -173,10 +173,10 @@ end
         if UnsafeAtomics.load(pointer(flags, inspected_block + 0x1), UnsafeAtomics.monotonic) == ACC_FLAG_A
             UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from v)
             # Previous blocks (except last) always have filled values in v, so index is inbounds
-            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * 0x2])
+            running_prefix = op(v[(inspected_block + 0x1) * block_size * 0x2], running_prefix)
             break
         else
-            running_prefix = op(running_prefix, prefixes[inspected_block + 0x1])
+            running_prefix = op(prefixes[inspected_block + 0x1], running_prefix)
         end
 
         inspected_block -= 0x1
@@ -236,8 +236,13 @@ end
     #     along the chunks. We need to accumulate the prefixes of the previous chunks into
     #     running_prefix.
     num_preblocks = (iblock - 0x1) ÷ (block_size * 0x2)
-    for i in 0x1:num_preblocks
-        running_prefix = op(running_prefix, prefixes[i * block_size * 0x2])
+    if num_preblocks >= 0x1
+        # Accumulate earlier chunk prefixes left-to-right, then prepend to running_prefix
+        chunk_prefix = prefixes[0x1 * block_size * 0x2]
+        for i in 0x2:num_preblocks
+            chunk_prefix = op(chunk_prefix, prefixes[i * block_size * 0x2])
+        end
+        running_prefix = op(chunk_prefix, running_prefix)
     end
 
     # Now we have aggregate prefix of all previous blocks, add it to all our elements

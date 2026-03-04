@@ -229,6 +229,64 @@ end
         temp=array_from_host(zeros(Int32, 3, 4, 1)),
     )
 end
+# 2x2 matrix stored as a flat struct — matrix multiply is associative but not commutative
+struct Mat2x2
+    a::Int32; b::Int32
+    c::Int32; d::Int32
+end
+
+Base.zero(::Type{Mat2x2}) = Mat2x2(1, 0, 0, 1)  # identity matrix
+
+@inline mat2_mul(x::Mat2x2, y::Mat2x2) = Mat2x2(
+    x.a*y.a + x.b*y.c, x.a*y.b + x.b*y.d,
+    x.c*y.a + x.d*y.c, x.c*y.b + x.d*y.d,
+)
+
+const mat2_id = Mat2x2(Int32(1), Int32(0), Int32(0), Int32(1))
+
+@testset "accumulate_1d_noncommutative $(alg isa AK.DecoupledLookback ? "DL" : "SP")" for alg in ALGS
+    # 2x2 matrix multiplication is associative but NOT commutative.
+    # This test verifies that the scan computes op(left, right), not op(right, left).
+
+    # Sanity checks
+    A = Mat2x2(1, 2, 3, 4)
+    B = Mat2x2(5, 6, 7, 8)
+    @test mat2_mul(A, B) != mat2_mul(B, A)
+    C = Mat2x2(1, 0, 1, 1)
+    @test mat2_mul(mat2_mul(A, B), C) == mat2_mul(A, mat2_mul(B, C))
+
+    # Small case
+    data_h = [Mat2x2(1, 2, 3, 4), Mat2x2(0, 1, 1, 0)]
+    data = array_from_host(data_h)
+    result = AK.accumulate(mat2_mul, data; init=mat2_id, neutral=mat2_id, alg)
+    expected = accumulate(mat2_mul, data_h)
+    @test Array(result) == expected
+
+    # Larger random test
+    Random.seed!(42)
+    for _ in 1:100
+        n = rand(2:10_000)
+        h = [Mat2x2(rand(Int32(-3):Int32(3)), rand(Int32(-3):Int32(3)),
+                     rand(Int32(-3):Int32(3)), rand(Int32(-3):Int32(3))) for _ in 1:n]
+        d = array_from_host(h)
+        expected = accumulate(mat2_mul, h)
+        result = Array(AK.accumulate(mat2_mul, d; init=mat2_id, neutral=mat2_id, alg))
+        @test result == expected
+    end
+
+    # Small block size to exercise multi-block path
+    for _ in 1:100
+        n = rand(2:10_000)
+        h = [Mat2x2(rand(Int32(-3):Int32(3)), rand(Int32(-3):Int32(3)),
+                     rand(Int32(-3):Int32(3)), rand(Int32(-3):Int32(3))) for _ in 1:n]
+        d = array_from_host(h)
+        expected = accumulate(mat2_mul, h)
+        result = Array(AK.accumulate(mat2_mul, d; init=mat2_id, neutral=mat2_id, block_size=16, alg))
+        @test result == expected
+    end
+end
+
+
 @testset "cumsum" begin
 
     Random.seed!(0)

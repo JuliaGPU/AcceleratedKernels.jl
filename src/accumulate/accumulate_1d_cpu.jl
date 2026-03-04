@@ -59,7 +59,7 @@ function accumulate_1d_cpu!(
         @inbounds begin
             if itask != 1
                 for i in irange
-                    v[i] = op(v[i], shared[itask - 1])
+                    v[i] = op(shared[itask - 1], v[i])
                 end
             end
         end
