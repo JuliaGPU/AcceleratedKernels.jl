@@ -82,7 +82,7 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
-          test_args: '--OpenCL'
+          test_args: '--opencl'
   # cpuKA:
   #   name: KA CPU Backend
   #   runs-on: ubuntu-latest
@@ -102,7 +102,7 @@ jobs:
   #     - uses: julia-actions/julia-buildpkg@v1
   #     - uses: julia-actions/julia-runtest@v1
   #       with:
-  #         test_args: '--cpuKA'
+  #         test_args: '--cpu-ka'
   docs:
     name: Documentation
     runs-on: ubuntu-latest
