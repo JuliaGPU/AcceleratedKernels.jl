@@ -38,12 +38,12 @@ end
 
 
 function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())
-    @argcheck seed >= 0 "Seed must be a positive integer"
+    @argcheck seed >= 0 "Seed must be a non-negative integer"
     CounterRNG(UInt64(seed), alg)
 end
 
 
-function CounterRNG(; alg::CounterRNGAlgorithm=SplitMix64())
+function CounterRNG(; alg::CounterRNGAlgorithm=Philox())
     CounterRNG(Base.rand(UInt64); alg)
 end
 
@@ -115,20 +115,6 @@ function rand!(
     end
     return x
 end
-
-
-"""
-    rand!(
-        x::AbstractArray{T},
-        args...;
-        kwargs...,
-    )
-
-Convenience overload that creates a fresh `CounterRNG()` and fills `x`.
-
-Each call to `rand!(x, ...)` auto-seeds a new RNG once using `rand(UInt64)`, so repeated calls
-produce different outputs unless an explicit `CounterRNG` is provided.
-"""
 function rand!(
     x::AbstractArray,
     args...;

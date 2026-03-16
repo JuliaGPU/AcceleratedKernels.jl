@@ -7,7 +7,6 @@ const PHILOX_W0 = UInt32(0x9E3779B9)
 const PHILOX_ROUNDS = 10
 
 
-# Each round destroys x0 with multiplication, addition, and XORs
 @inline function _philox2x32_round(x0::UInt32, x1::UInt32, k0::UInt32)
     lo = PHILOX_M0 * x0
     hi = _mulhi_u32(PHILOX_M0, x0)
@@ -17,9 +16,7 @@ const PHILOX_ROUNDS = 10
 end
 
 
-"""
-    _philox2x32_block(rng::CounterRNG{<:Philox}, counter::UInt64)
-"""
+# Evaluate one Philox block at `counter`, returning two 32-bit lanes `(x0, x1)`
 @inline function _philox2x32_block(
     rng::CounterRNG{<:Philox},
     counter::UInt64,
@@ -40,9 +37,7 @@ end
 end
 
 
-"""
-    rand_uint(rng::CounterRNG{<:Philox}, counter::UInt64, UInt32) -> UInt32
-"""
+# Return lane 0 from the single Philox block at `counter`
 @inline function rand_uint(
     rng::CounterRNG{<:Philox},
     counter::UInt64,
@@ -53,14 +48,12 @@ end
 end
 
 
-"""
-    rand_uint(rng::CounterRNG{<:Philox}, counter::UInt64, UInt64) -> UInt64
-"""
+# Build UInt64 from the two lanes `(x0, x1)` of the same Philox block at `counter`
 @inline function rand_uint(
     rng::CounterRNG{<:Philox},
     counter::UInt64,
     ::Type{UInt64},
 )::UInt64
     x0, x1 = _philox2x32_block(rng, counter)
-    return _u64_from_u32(x0, x1)
+    return _u64_from_u32s(x0, x1)
 end

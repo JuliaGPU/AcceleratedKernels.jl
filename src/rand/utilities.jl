@@ -1,25 +1,19 @@
 # lo: rightmost 32 bits, hi: leftmost 32 bits
 @inline _u32_lo(x::UInt64)::UInt32 = UInt32(x & UInt64(0xffffffff))
 @inline _u32_hi(x::UInt64)::UInt32 = UInt32(x >> 32)
-@inline _u64_from_u32(lo::UInt32, hi::UInt32)::UInt64 = (UInt64(hi) << 32) | UInt64(lo)
+@inline _u64_from_u32s(lo::UInt32, hi::UInt32)::UInt64 = (UInt64(hi) << 32) | UInt64(lo)
 
 # leftmost 32 bits of a*b cast to UInt64s
 @inline _mulhi_u32(a::UInt32, b::UInt32)::UInt32 = UInt32((UInt64(a) * UInt64(b)) >> 32)
 
-
-@inline function _rotl32(x::UInt32, r::UInt32)::UInt32
-    return (x << r) | (x >> (UInt32(32) - r))
-end
+# 32-bit rotate left by r positions
+@inline _rotl32(x::UInt32, r::UInt32)::UInt32 = (x << r) | (x >> (UInt32(32) - r))
 
 
 @inline _counter_from_index(i)::UInt64 = UInt64(i - one(i))
 
 
-"""
-    ALLOWED_RAND_SCALARS
-
-Internal scalar eltypes currently supported by [`rand!`](@ref).
-"""
+# Internal scalar eltypes currently supported by rand!.
 const ALLOWED_RAND_SCALARS = Union{
     UInt32, UInt64,
     Int32, Int64,
@@ -43,6 +37,10 @@ const ALLOWED_RAND_SCALARS = Union{
 @inline from_uint(::Type{Float64}, u::UInt64)::Float64 = uint64_to_unit_float64(u)
 
 
+#=
+Every RNG algorithm implements rand_uint(rng, counter, UInt32/UInt64).
+This fallback provides a clear failure for unsupported RNG types.
+=#
 @inline function rand_uint(
     rng::AbstractCounterRNG,
     ::UInt64,
@@ -52,6 +50,12 @@ const ALLOWED_RAND_SCALARS = Union{
 end
 
 
+#=
+Shared scalar generation:
+1) map requested scalar type to corresponding raw UInt width
+2) fill the UInt with random bits
+3) convert bits into requested scalar representation
+=#
 @inline function rand_scalar(
     rng::AbstractCounterRNG,
     counter::UInt64,
@@ -74,11 +78,7 @@ end
 
 
 
-"""
-    uint32_to_unit_float32(u::UInt32) -> Float32
-
-Convert a random `UInt32` to `Float32` in `[0, 1)` by mantissa construction.
-"""
+# Convert random UInt32 bits to Float32 in [0, 1) by mantissa construction.
 @inline function uint32_to_unit_float32(u::UInt32)::Float32
     # Keep 23 random bits for the mantissa (drop 9 rightmost bits from the UInt32)
     # and combine with the bit pattern of 1.0f0 (sign=0, exponent=127).
@@ -89,11 +89,7 @@ Convert a random `UInt32` to `Float32` in `[0, 1)` by mantissa construction.
 end
 
 
-"""
-    uint64_to_unit_float64(u::UInt64) -> Float64
-
-Convert a random `UInt64` to `Float64` in `[0, 1)` by mantissa construction.
-"""
+# Convert random UInt64 bits to Float64 in [0, 1) by mantissa construction.
 @inline function uint64_to_unit_float64(u::UInt64)::Float64
     # Keep 52 random bits for the mantissa (drop 12 rightmost bits from the UInt64)
     # and combine with the bit pattern of 1.0 (sign=0, exponent=1023).

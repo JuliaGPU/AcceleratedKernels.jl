@@ -16,9 +16,7 @@ const SPLITMIX64_MIX_B = UInt64(0x94d049bb133111eb)
 end
 
 
-"""
-    rand_uint(rng::CounterRNG{<:SplitMix64}, counter::UInt64, UInt64) -> UInt64
-"""
+# Natural SplitMix64 output path: compute 64 random bits directly from one counter
 @inline function rand_uint(
     rng::CounterRNG{<:SplitMix64},
     counter::UInt64,
@@ -29,9 +27,7 @@ end
 end
 
 
-"""
-    rand_uint(rng::CounterRNG{<:SplitMix64}, counter::UInt64, UInt32) -> UInt32
-"""
+# UInt32 path is derived from the high 32 bits of the UInt64 SplitMix output
 @inline function rand_uint(
     rng::CounterRNG{<:SplitMix64},
     counter::UInt64,
