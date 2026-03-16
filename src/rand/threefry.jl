@@ -17,9 +17,12 @@ end
 
 
 """
-    rand_uint32(rng::CounterRNG{<:Unsigned, Threefry}, counter::UInt64) -> UInt32
+    _threefry2x32_block(rng::CounterRNG{<:Threefry}, counter::UInt64)
 """
-@inline function rand_uint32(rng::CounterRNG{<:Unsigned, Threefry}, counter::UInt64)::UInt32
+@inline function _threefry2x32_block(
+    rng::CounterRNG{<:Threefry},
+    counter::UInt64,
+)::Tuple{UInt32, UInt32}
     x0 = _u32_lo(counter)
     x1 = _u32_hi(counter)
 
@@ -45,5 +48,31 @@ end
         end
     end
 
+    return x0, x1
+end
+
+
+"""
+    rand_uint(rng::CounterRNG{<:Threefry}, counter::UInt64, UInt32) -> UInt32
+"""
+@inline function rand_uint(
+    rng::CounterRNG{<:Threefry},
+    counter::UInt64,
+    ::Type{UInt32},
+)::UInt32
+    x0, _ = _threefry2x32_block(rng, counter)
     return x0
+end
+
+
+"""
+    rand_uint(rng::CounterRNG{<:Threefry}, counter::UInt64, UInt64) -> UInt64
+"""
+@inline function rand_uint(
+    rng::CounterRNG{<:Threefry},
+    counter::UInt64,
+    ::Type{UInt64},
+)::UInt64
+    x0, x1 = _threefry2x32_block(rng, counter)
+    return _u64_from_u32(x0, x1)
 end

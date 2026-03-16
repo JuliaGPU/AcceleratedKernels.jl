@@ -18,9 +18,12 @@ end
 
 
 """
-    rand_uint32(rng::CounterRNG{<:Unsigned, Philox}, counter::UInt64) -> UInt32
+    _philox2x32_block(rng::CounterRNG{<:Philox}, counter::UInt64)
 """
-@inline function rand_uint32(rng::CounterRNG{<:Unsigned, Philox}, counter::UInt64)::UInt32
+@inline function _philox2x32_block(
+    rng::CounterRNG{<:Philox},
+    counter::UInt64,
+)::Tuple{UInt32, UInt32}
     x0 = _u32_lo(counter)
     x1 = _u32_hi(counter)
 
@@ -33,5 +36,31 @@ end
         k0 += PHILOX_W0
     end
 
+    return x0, x1
+end
+
+
+"""
+    rand_uint(rng::CounterRNG{<:Philox}, counter::UInt64, UInt32) -> UInt32
+"""
+@inline function rand_uint(
+    rng::CounterRNG{<:Philox},
+    counter::UInt64,
+    ::Type{UInt32},
+)::UInt32
+    x0, _ = _philox2x32_block(rng, counter)
     return x0
+end
+
+
+"""
+    rand_uint(rng::CounterRNG{<:Philox}, counter::UInt64, UInt64) -> UInt64
+"""
+@inline function rand_uint(
+    rng::CounterRNG{<:Philox},
+    counter::UInt64,
+    ::Type{UInt64},
+)::UInt64
+    x0, x1 = _philox2x32_block(rng, counter)
+    return _u64_from_u32(x0, x1)
 end

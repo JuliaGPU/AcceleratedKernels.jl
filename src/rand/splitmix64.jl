@@ -17,10 +17,25 @@ end
 
 
 """
-    rand_uint32(rng::CounterRNG{<:Unsigned, SplitMix64}, counter::UInt64) -> UInt32
+    rand_uint(rng::CounterRNG{<:SplitMix64}, counter::UInt64, UInt64) -> UInt64
 """
-@inline function rand_uint32(rng::CounterRNG{<:Unsigned, SplitMix64}, counter::UInt64)::UInt32
+@inline function rand_uint(
+    rng::CounterRNG{<:SplitMix64},
+    counter::UInt64,
+    ::Type{UInt64},
+)::UInt64
     seed = UInt64(rng.seed)
-    mixed = _splitmix64_mix(counter + seed + SPLITMIX64_INCREMENT)
-    return UInt32(mixed >> 32)
+    return _splitmix64_mix(counter + seed + SPLITMIX64_INCREMENT)
+end
+
+
+"""
+    rand_uint(rng::CounterRNG{<:SplitMix64}, counter::UInt64, UInt32) -> UInt32
+"""
+@inline function rand_uint(
+    rng::CounterRNG{<:SplitMix64},
+    counter::UInt64,
+    ::Type{UInt32},
+)::UInt32
+    return _u32_hi(rand_uint(rng, counter, UInt64))
 end
