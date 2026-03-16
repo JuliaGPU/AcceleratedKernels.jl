@@ -27,11 +27,6 @@ const ALLOWED_RAND_SCALARS = Union{
 }
 
 
-@inline function rand_uint(::AbstractCounterRNG, ::UInt64, ::Type{U})::U where {U <: Union{UInt32, UInt64}}
-    throw(ArgumentError("No rand_uint implementation for this RNG type"))
-end
-
-
 @inline raw_uint_type(::Type{UInt32}) = UInt32
 @inline raw_uint_type(::Type{Int32}) = UInt32
 @inline raw_uint_type(::Type{Float32}) = UInt32
@@ -48,9 +43,24 @@ end
 @inline from_uint(::Type{Float64}, u::UInt64)::Float64 = uint64_to_unit_float64(u)
 
 
-@inline function rand_scalar(rng::AbstractCounterRNG, counter::UInt64, ::Type{T})::T where {T <: ALLOWED_RAND_SCALARS}
-    U = raw_uint_type(T)
-    u = rand_uint(rng, counter, U)
+@inline function rand_uint(
+    rng::AbstractCounterRNG,
+    ::UInt64,
+    ::Type{UIntType}
+)::UIntType where {UIntType <: Union{UInt32, UInt64}}
+    throw(ArgumentError("No rand_uint implementation for RNG: $rng"))
+end
+
+
+@inline function rand_scalar(
+    rng::AbstractCounterRNG,
+    counter::UInt64,
+    ::Type{T}
+)::T where {T <: ALLOWED_RAND_SCALARS}
+
+    UIntType = raw_uint_type(T)
+    u = rand_uint(rng, counter, UIntType)
+
     return from_uint(T, u)
 end
 
@@ -60,6 +70,7 @@ end
         "Unsupported random scalar type $(T). Supported: UInt32, UInt64, Int32, Int64, Float32, Float64."
     ))
 end
+
 
 
 

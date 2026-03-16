@@ -23,6 +23,13 @@ value is a pure function of:
 The default algorithm is `Philox()`.
 
 `seed` may be any non-negative `Integer`. It is normalised to `UInt64` internally.
+
+Constructors:
+- `CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())`
+  Uses an explicit non-negative seed.
+- `CounterRNG(; alg::CounterRNGAlgorithm=SplitMix64())`
+  Auto-seeds once using `rand(UInt64)`. Reusing the same `CounterRNG` instance is deterministic
+  for fixed seed, algorithm, array shape, and eltype.
 """
 struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG
     seed::UInt64
@@ -30,26 +37,12 @@ struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG
 end
 
 
-function CounterRNG(seed::Unsigned; alg::CounterRNGAlgorithm=Philox())
-    CounterRNG(UInt64(seed), alg)
-end
-
-
 function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())
-    @argcheck seed >= 0
+    @argcheck seed >= 0 "Seed must be a positive integer"
     CounterRNG(UInt64(seed), alg)
 end
 
 
-
-"""
-    CounterRNG(; alg::CounterRNGAlgorithm=SplitMix64())
-
-Create a stateless counter-based RNG with an automatically generated seed.
-
-The seed is sampled exactly once at construction using `rand(UInt64)`. Reusing this same
-`CounterRNG` instance is deterministic for fixed seed, algorithm, array shape, and eltype.
-"""
 function CounterRNG(; alg::CounterRNGAlgorithm=SplitMix64())
     CounterRNG(Base.rand(UInt64); alg)
 end
@@ -64,55 +57,6 @@ include("utilities.jl")
 include("splitmix64.jl")
 include("philox.jl")
 include("threefry.jl")
-
-
-
-
-
-function _rand_fill_threads!(
-    rng::AbstractCounterRNG,
-    x::AbstractArray{T};
-    max_tasks::Int,
-    min_elems::Int,
-) where {T <: ALLOWED_RAND_SCALARS}
-    task_partition(length(x), max_tasks, min_elems) do irange
-        @inbounds for i in irange
-            counter = _counter_from_index(i)
-            x[i] = rand_scalar(rng, counter, T)
-        end
-    end
-    return x
-end
-
-
-@kernel inbounds=true cpu=false unsafe_indices=true function _rand_fill_kernel!(
-    rng,
-    x,
-)
-    i = @index(Global, Linear)
-    if i <= length(x)
-        counter = _counter_from_index(i)
-        x[i] = rand_scalar(rng, counter, eltype(x))
-    end
-end
-
-
-function _rand_fill_gpu!(
-    rng::AbstractCounterRNG,
-    x::AbstractArray{T},
-    backend::Backend;
-    block_size::Int,
-) where {T <: ALLOWED_RAND_SCALARS}
-    @argcheck block_size > 0
-    len = length(x)
-    len == 0 && return x
-
-    blocks = div(len, block_size, RoundUp)
-    kernel! = _rand_fill_kernel!(backend, block_size)
-    kernel!(rng, x, ndrange=(blocks * block_size,))
-    return x
-end
-
 
 """
     rand!(
@@ -160,12 +104,16 @@ function rand!(
 ) where T
 
     @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
-
-    if use_gpu_algorithm(backend, prefer_threads)
-        return _rand_fill_gpu!(rng, x, backend; block_size)
-    else
-        return _rand_fill_threads!(rng, x; max_tasks, min_elems)
+    foreachindex(
+        1:length(x), backend;
+        max_tasks,
+        min_elems,
+        prefer_threads,
+        block_size,
+    ) do i
+        @inbounds x[i] = rand_scalar(rng, _counter_from_index(i), T)
     end
+    return x
 end
 
 
