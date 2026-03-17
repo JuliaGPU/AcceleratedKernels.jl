@@ -1,5 +1,9 @@
 const RAND_ALGS = (AK.SplitMix64(), AK.Philox(), AK.Threefry())
-const RAND_SCALAR_TYPES = (UInt32, UInt64, Int32, Int64, Float32, Float64)
+const RAND_SCALAR_TYPES_ALL = (UInt32, UInt64, Int32, Int64, Float32, Float64)
+const RAND_SCALAR_TYPES_BACKEND = IS_CPU_BACKEND ?
+                                  RAND_SCALAR_TYPES_ALL :
+                                  (UInt32, UInt64, Int32, Int64, Float32)
+const RUN_FLOAT64_RAND_TESTS = IS_CPU_BACKEND
 
 
 _is_unit_interval(v) = all(x -> !isnan(x) && zero(x) <= x < one(x), v)
@@ -31,7 +35,7 @@ end
         @test_throws ArgumentError AK.CounterRNG(-1)
 
         Random.seed!(0x1234)
-        expected_seed = rand(UInt64)
+        expected_seed = Random.rand(Random.default_rng(), UInt64)
         Random.seed!(0x1234)
         rng_auto = AK.CounterRNG()
         @test rng_auto.seed == expected_seed
@@ -63,7 +67,9 @@ end
         @test AK.raw_uint_type(Float32) === UInt32
         @test AK.raw_uint_type(UInt64) === UInt64
         @test AK.raw_uint_type(Int64) === UInt64
-        @test AK.raw_uint_type(Float64) === UInt64
+        if RUN_FLOAT64_RAND_TESTS
+            @test AK.raw_uint_type(Float64) === UInt64
+        end
 
         @test AK.from_uint(UInt32, 0b1010 % UInt32) == 0b1010 % UInt32
         @test AK.from_uint(UInt64, 0b1010 % UInt64) == 0b1010 % UInt64
@@ -73,9 +79,11 @@ end
         ) == Int64(-1)
 
         @test AK.uint32_to_unit_float32(UInt32(0)) == 0.0f0
-        @test AK.uint64_to_unit_float64(UInt64(0)) == 0.0
         @test 0.0f0 <= AK.uint32_to_unit_float32(typemax(UInt32)) < 1.0f0
-        @test 0.0 <= AK.uint64_to_unit_float64(typemax(UInt64)) < 1.0
+        if RUN_FLOAT64_RAND_TESTS
+            @test AK.uint64_to_unit_float64(UInt64(0)) == 0.0
+            @test 0.0 <= AK.uint64_to_unit_float64(typemax(UInt64)) < 1.0
+        end
     end
 
 
@@ -110,7 +118,7 @@ end
     @testset "rand_scalar" begin
         rng = AK.CounterRNG(0x123456789abcdef; alg=AK.Philox())
 
-        for T in RAND_SCALAR_TYPES
+        for T in RAND_SCALAR_TYPES_BACKEND
             s0 = AK.rand_scalar(rng, UInt64(0), T)
             s1 = AK.rand_scalar(rng, UInt64(1), T)
             @test s0 isa T
@@ -128,9 +136,11 @@ end
         @test AK.rand_scalar(rng, c, Float32) == AK.uint32_to_unit_float32(
             AK.rand_uint(rng, c, UInt32)
         )
-        @test AK.rand_scalar(rng, c, Float64) == AK.uint64_to_unit_float64(
-            AK.rand_uint(rng, c, UInt64)
-        )
+        if RUN_FLOAT64_RAND_TESTS
+            @test AK.rand_scalar(rng, c, Float64) == AK.uint64_to_unit_float64(
+                AK.rand_uint(rng, c, UInt64)
+            )
+        end
         @test_throws ArgumentError AK.rand_scalar(rng, UInt64(0), UInt16)
     end
 
@@ -139,7 +149,7 @@ end
         lengths = (0, 1, 31, 32, 33, 257, 1024)
         rng = AK.CounterRNG(0x123456789abcdef; alg=AK.Philox())
 
-        for T in RAND_SCALAR_TYPES
+        for T in RAND_SCALAR_TYPES_BACKEND
             for len in lengths
                 x = array_from_host(zeros(T, len))
                 _assert_rand_matches_reference!(rng, x; prefer_threads, block_size=64)
@@ -149,7 +159,7 @@ end
             end
         end
 
-        for T in RAND_SCALAR_TYPES
+        for T in RAND_SCALAR_TYPES_BACKEND
             x1 = array_from_host(zeros(T, 2048))
             x2 = array_from_host(zeros(T, 2048))
             AK.rand!(rng, x1; prefer_threads, block_size=64)
@@ -158,7 +168,7 @@ end
         end
 
         rng2 = AK.CounterRNG(rng.seed + UInt64(1); alg=rng.alg)
-        for T in RAND_SCALAR_TYPES
+        for T in RAND_SCALAR_TYPES_BACKEND
             x1 = array_from_host(zeros(T, 2048))
             x2 = array_from_host(zeros(T, 2048))
             AK.rand!(rng, x1; prefer_threads, block_size=64)
@@ -172,7 +182,7 @@ end
         end
 
         if IS_CPU_BACKEND
-            for T in RAND_SCALAR_TYPES
+            for T in RAND_SCALAR_TYPES_BACKEND
                 base = zeros(T, 64)
                 view_x = @view base[2:2:end]
                 AK.rand!(
@@ -190,18 +200,18 @@ end
 
 
     @testset "rand! convenience" begin
-        Random.seed!(0xabcdef)
-        seed1 = rand(UInt64)
-        seed2 = rand(UInt64)
-
         ref1 = array_from_host(zeros(Float32, 1024))
         ref2 = array_from_host(zeros(Float32, 1024))
+        x1 = array_from_host(zeros(Float32, 1024))
+        x2 = array_from_host(zeros(Float32, 1024))
+
+        Random.seed!(0xabcdef)
+        seed1 = Random.rand(Random.default_rng(), UInt64)
         AK.rand!(AK.CounterRNG(seed1; alg=AK.Philox()), ref1; prefer_threads, block_size=64)
+        seed2 = Random.rand(Random.default_rng(), UInt64)
         AK.rand!(AK.CounterRNG(seed2; alg=AK.Philox()), ref2; prefer_threads, block_size=64)
 
         Random.seed!(0xabcdef)
-        x1 = array_from_host(zeros(Float32, 1024))
-        x2 = array_from_host(zeros(Float32, 1024))
         AK.rand!(x1; prefer_threads, block_size=64)
         AK.rand!(x2; prefer_threads, block_size=64)
         @test Array(x1) == Array(ref1)

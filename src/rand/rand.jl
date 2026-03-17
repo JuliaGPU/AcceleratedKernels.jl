@@ -27,8 +27,8 @@ The default algorithm is `Philox()`.
 Constructors:
 - `CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())`
   Uses an explicit non-negative seed.
-- `CounterRNG(; alg::CounterRNGAlgorithm=SplitMix64())`
-  Auto-seeds once using `rand(UInt64)`. Reusing the same `CounterRNG` instance is deterministic
+- `CounterRNG(; alg::CounterRNGAlgorithm=Philox())`
+  Auto-seeds once using `Random.rand(Random.default_rng(), UInt64)`. Reusing the same `CounterRNG` instance is deterministic
   for fixed seed, algorithm, array shape, and eltype.
 """
 struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG
@@ -44,7 +44,7 @@ end
 
 
 function CounterRNG(; alg::CounterRNGAlgorithm=Philox())
-    CounterRNG(Base.rand(UInt64); alg)
+    CounterRNG(Random.rand(Random.default_rng(), UInt64); alg)
 end
 
 
@@ -57,6 +57,9 @@ include("utilities.jl")
 include("splitmix64.jl")
 include("philox.jl")
 include("threefry.jl")
+
+
+
 
 """
     rand!(
@@ -83,11 +86,6 @@ Supported scalar element types are:
 - `Int32`, `Int64`
 - `Float32`, `Float64`
 
-Semantics:
-- Unsigned integers: raw random bit patterns of requested width.
-- Signed integers: corresponding unsigned patterns reinterpreted as signed.
-- Floats: mantissa-based conversion from `UInt32`/`UInt64` into `[0, 1)`, uniform over the
-  produced mantissa grid (not over all representable floats).
 """
 function rand!(
     rng::AbstractCounterRNG,
@@ -115,6 +113,8 @@ function rand!(
     end
     return x
 end
+
+
 function rand!(
     x::AbstractArray,
     args...;

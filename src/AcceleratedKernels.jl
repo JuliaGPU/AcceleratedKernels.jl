@@ -15,6 +15,7 @@ using ArgCheck: @argcheck
 using GPUArraysCore: AnyGPUArray, @allowscalar
 using KernelAbstractions
 using KernelAbstractions: @context
+using Random
 import UnsafeAtomics
 
 
