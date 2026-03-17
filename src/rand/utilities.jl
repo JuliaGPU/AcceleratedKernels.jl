@@ -18,6 +18,7 @@ const ALLOWED_RAND_SCALARS = Union{
     UInt32, UInt64,
     Int32, Int64,
     Float32, Float64,
+    Bool
 }
 
 
@@ -27,6 +28,7 @@ const ALLOWED_RAND_SCALARS = Union{
 @inline raw_uint_type(::Type{UInt64}) = UInt64
 @inline raw_uint_type(::Type{Int64}) = UInt64
 @inline raw_uint_type(::Type{Float64}) = UInt64
+@inline raw_uint_type(::Type{Bool}) = UInt32
 
 
 @inline from_uint(::Type{UInt32}, u::UInt32)::UInt32 = u
@@ -35,6 +37,7 @@ const ALLOWED_RAND_SCALARS = Union{
 @inline from_uint(::Type{Int64}, u::UInt64)::Int64 = reinterpret(Int64, u)
 @inline from_uint(::Type{Float32}, u::UInt32)::Float32 = uint32_to_unit_float32(u)
 @inline from_uint(::Type{Float64}, u::UInt64)::Float64 = uint64_to_unit_float64(u)
+@inline from_uint(::Type{Bool}, u::UInt32)::Bool = isodd(u)
 
 
 #=
@@ -71,7 +74,7 @@ end
 
 @inline function rand_scalar(::AbstractCounterRNG, ::UInt64, ::Type{T}) where {T}
     throw(ArgumentError(
-        "Unsupported random scalar type $(T). Supported: UInt32, UInt64, Int32, Int64, Float32, Float64."
+        "Unsupported random scalar type $(T). Supported: $(ALLOWED_RAND_SCALARS)"
     ))
 end
 

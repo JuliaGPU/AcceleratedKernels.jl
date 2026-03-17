@@ -85,6 +85,14 @@ Supported scalar element types are:
 - `UInt32`, `UInt64`
 - `Int32`, `Int64`
 - `Float32`, `Float64`
+- `Bool`
+
+Semantics:
+- Unsigned integers: raw random bit patterns of requested width.
+- Signed integers: corresponding unsigned patterns reinterpreted as signed.
+- Floats: mantissa-based conversion from `UInt32`/`UInt64` into `[0, 1)`, uniform over the
+  produced mantissa grid (not over all representable floats).
+- Bool: `true` if the raw `UInt` draw is odd (`isodd(u)`), otherwise `false`.
 
 """
 function rand!(

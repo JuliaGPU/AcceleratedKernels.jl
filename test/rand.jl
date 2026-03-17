@@ -1,8 +1,8 @@
 const RAND_ALGS = (AK.SplitMix64(), AK.Philox(), AK.Threefry())
-const RAND_SCALAR_TYPES_ALL = (UInt32, UInt64, Int32, Int64, Float32, Float64)
+const RAND_SCALAR_TYPES_ALL = (UInt32, UInt64, Int32, Int64, Float32, Float64, Bool)
 const RAND_SCALAR_TYPES_BACKEND = IS_CPU_BACKEND ?
                                   RAND_SCALAR_TYPES_ALL :
-                                  (UInt32, UInt64, Int32, Int64, Float32)
+                                  (UInt32, UInt64, Int32, Int64, Float32, Bool)
 const RUN_FLOAT64_RAND_TESTS = IS_CPU_BACKEND
 
 
@@ -67,6 +67,7 @@ end
         @test AK.raw_uint_type(Float32) === UInt32
         @test AK.raw_uint_type(UInt64) === UInt64
         @test AK.raw_uint_type(Int64) === UInt64
+        @test AK.raw_uint_type(Bool) === UInt32
         if RUN_FLOAT64_RAND_TESTS
             @test AK.raw_uint_type(Float64) === UInt64
         end
@@ -77,6 +78,8 @@ end
         @test AK.from_uint(
             Int64, 0b1111111111111111111111111111111111111111111111111111111111111111 % UInt64
         ) == Int64(-1)
+        @test AK.from_uint(Bool, UInt32(0)) == false
+        @test AK.from_uint(Bool, UInt32(1)) == true
 
         @test AK.uint32_to_unit_float32(UInt32(0)) == 0.0f0
         @test 0.0f0 <= AK.uint32_to_unit_float32(typemax(UInt32)) < 1.0f0
@@ -123,7 +126,9 @@ end
             s1 = AK.rand_scalar(rng, UInt64(1), T)
             @test s0 isa T
             @test s1 isa T
-            @test s0 != s1
+            if T !== Bool
+                @test s0 != s1
+            end
             if T <: AbstractFloat
                 @test zero(T) <= s0 < one(T)
                 @test zero(T) <= s1 < one(T)
@@ -136,11 +141,15 @@ end
         @test AK.rand_scalar(rng, c, Float32) == AK.uint32_to_unit_float32(
             AK.rand_uint(rng, c, UInt32)
         )
+        @test AK.rand_scalar(rng, c, Bool) == isodd(AK.rand_uint(rng, c, UInt32))
         if RUN_FLOAT64_RAND_TESTS
             @test AK.rand_scalar(rng, c, Float64) == AK.uint64_to_unit_float64(
                 AK.rand_uint(rng, c, UInt64)
             )
         end
+        bools = [AK.rand_scalar(rng, UInt64(i), Bool) for i in 0:511]
+        @test any(identity, bools)
+        @test any(!, bools)
         @test_throws ArgumentError AK.rand_scalar(rng, UInt64(0), UInt16)
     end
 
@@ -176,7 +185,7 @@ end
             @test Array(x1) != Array(x2)
         end
 
-        for T in (Float32, UInt64)
+        for T in (Float32, UInt64, Bool)
             xnd = array_from_host(zeros(T, 7, 11, 5))
             _assert_rand_matches_reference!(rng, xnd; prefer_threads, block_size=128)
         end
