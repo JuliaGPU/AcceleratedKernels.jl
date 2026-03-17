@@ -82,9 +82,9 @@ Fill `x` in-place with pseudo-random values using a stateless counter-based RNG.
 counter is exactly `UInt64(i - 1)` in linear indexing order.
 
 Supported scalar element types are:
-- `UInt32`, `UInt64`
-- `Int32`, `Int64`
-- `Float32`, `Float64`
+- `UInt8`, `UInt16`, `UInt32`, `UInt64`
+- `Int8`, `Int16`, `Int32`, `Int64`
+- `Float16`, `Float32`, `Float64`
 - `Bool`
 
 Semantics:

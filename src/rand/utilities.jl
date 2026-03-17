@@ -15,15 +15,20 @@
 
 # Internal scalar eltypes currently supported by rand!.
 const ALLOWED_RAND_SCALARS = Union{
-    UInt32, UInt64,
-    Int32, Int64,
-    Float32, Float64,
+    UInt8, UInt16, UInt32, UInt64,
+    Int8, Int16, Int32, Int64,
+    Float16, Float32, Float64,
     Bool
 }
 
 
+@inline raw_uint_type(::Type{UInt8}) = UInt32
+@inline raw_uint_type(::Type{UInt16}) = UInt32
 @inline raw_uint_type(::Type{UInt32}) = UInt32
+@inline raw_uint_type(::Type{Int8}) = UInt32
+@inline raw_uint_type(::Type{Int16}) = UInt32
 @inline raw_uint_type(::Type{Int32}) = UInt32
+@inline raw_uint_type(::Type{Float16}) = UInt32
 @inline raw_uint_type(::Type{Float32}) = UInt32
 @inline raw_uint_type(::Type{UInt64}) = UInt64
 @inline raw_uint_type(::Type{Int64}) = UInt64
@@ -31,10 +36,15 @@ const ALLOWED_RAND_SCALARS = Union{
 @inline raw_uint_type(::Type{Bool}) = UInt32
 
 
+@inline from_uint(::Type{UInt8}, u::UInt32)::UInt8 = trunc(UInt8, u >> 24)
+@inline from_uint(::Type{UInt16}, u::UInt32)::UInt16 = trunc(UInt16, u >> 16)
 @inline from_uint(::Type{UInt32}, u::UInt32)::UInt32 = u
 @inline from_uint(::Type{UInt64}, u::UInt64)::UInt64 = u
+@inline from_uint(::Type{Int8}, u::UInt32)::Int8 = reinterpret(Int8, trunc(UInt8, u >> 24))
+@inline from_uint(::Type{Int16}, u::UInt32)::Int16 = reinterpret(Int16, trunc(UInt16, u >> 16))
 @inline from_uint(::Type{Int32}, u::UInt32)::Int32 = reinterpret(Int32, u)
 @inline from_uint(::Type{Int64}, u::UInt64)::Int64 = reinterpret(Int64, u)
+@inline from_uint(::Type{Float16}, u::UInt32)::Float16 = uint32_to_unit_float16(u)
 @inline from_uint(::Type{Float32}, u::UInt32)::Float32 = uint32_to_unit_float32(u)
 @inline from_uint(::Type{Float64}, u::UInt64)::Float64 = uint64_to_unit_float64(u)
 @inline from_uint(::Type{Bool}, u::UInt32)::Bool = isodd(u)
@@ -79,6 +89,17 @@ end
 end
 
 
+
+
+# Convert random UInt32 bits to Float16 in [0, 1) by mantissa construction.
+@inline function uint32_to_unit_float16(u::UInt32)::Float16
+    # Keep 10 random bits for the mantissa (drop 22 rightmost bits from the UInt32)
+    # and combine with the bit pattern of Float16(1.0) (sign=0, exponent=15).
+    bits = UInt16(0x3c00) | UInt16(u >> 22)
+
+    # Interpret as 1.mantissa, then subtract 1 for [0, 1)
+    return reinterpret(Float16, bits) - Float16(1)
+end
 
 
 # Convert random UInt32 bits to Float32 in [0, 1) by mantissa construction.

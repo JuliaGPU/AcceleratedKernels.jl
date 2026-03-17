@@ -5,18 +5,18 @@ Counter-based random generation for CPU and GPU backends with deterministic beha
 
 Use an explicit `CounterRNG(seed; alg=...)` when reproducibility matters. For convenience,
 `AK.rand!(x)` creates a fresh `CounterRNG()` on each call using one auto-seeded
-`Base.rand(Random.default_rng(), UInt64)` draw, so repeated calls produce different outputs unless Random.seed!() is used.
+`Random.rand(Random.default_rng(), UInt64)` draw, so repeated calls produce different outputs unless Random.seed!() is used.
 
-Supported output element types:
-- `UInt32`, `UInt64`
-- `Int32`, `Int64`
-- `Float32`, `Float64`
+Supported element types:
+- `UInt8`, `UInt16`, `UInt32`, `UInt64`
+- `Int8`, `Int16`, `Int32`, `Int64`
+- `Float16`, `Float32`, `Float64`
 - `Bool`
 
-The core of the random number generation produces a `UInt` of the requested scalar width.
+The core of the random number generation produces either a `UInt32` or `UInt64` depending on the width of the requested element type.
 That `UInt` is then either:
-- Unsigned integers: returned as-is
-- Signed integers: reinterpreted as a signed integer bit pattern.
+- Unsigned integers: returned as-is or truncated if necessary.
+- Signed integers: reinterpreted as a signed integer bit pattern and truncated if necessary.
 - Floats: mantissa construction into a uniform grid in `[0, 1)` ([read more](https://lomont.org/posts/2017/unit-random/)).
 - Bool: `true` if the `UInt` draw is odd (`isodd(u)`), otherwise `false`.
 

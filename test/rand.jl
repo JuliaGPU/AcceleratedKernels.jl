@@ -1,8 +1,13 @@
 const RAND_ALGS = (AK.SplitMix64(), AK.Philox(), AK.Threefry())
-const RAND_SCALAR_TYPES_ALL = (UInt32, UInt64, Int32, Int64, Float32, Float64, Bool)
+const RAND_SCALAR_TYPES_ALL = (
+    UInt8, UInt16, UInt32, UInt64,
+    Int8, Int16, Int32, Int64,
+    Float16, Float32, Float64,
+    Bool,
+)
 const RAND_SCALAR_TYPES_BACKEND = IS_CPU_BACKEND ?
                                   RAND_SCALAR_TYPES_ALL :
-                                  (UInt32, UInt64, Int32, Int64, Float32, Bool)
+                                  (UInt8, UInt16, UInt32, UInt64, Int8, Int16, Int32, Int64, Float16, Float32, Bool)
 const RUN_FLOAT64_RAND_TESTS = IS_CPU_BACKEND
 
 
@@ -62,8 +67,13 @@ end
         @test AK._counter_from_index(1) == UInt64(0)
         @test AK._counter_from_index(17) == UInt64(16)
 
+        @test AK.raw_uint_type(UInt8) === UInt32
+        @test AK.raw_uint_type(UInt16) === UInt32
         @test AK.raw_uint_type(UInt32) === UInt32
+        @test AK.raw_uint_type(Int8) === UInt32
+        @test AK.raw_uint_type(Int16) === UInt32
         @test AK.raw_uint_type(Int32) === UInt32
+        @test AK.raw_uint_type(Float16) === UInt32
         @test AK.raw_uint_type(Float32) === UInt32
         @test AK.raw_uint_type(UInt64) === UInt64
         @test AK.raw_uint_type(Int64) === UInt64
@@ -72,15 +82,22 @@ end
             @test AK.raw_uint_type(Float64) === UInt64
         end
 
+        @test AK.from_uint(UInt8, UInt32(0xabcdef01)) == UInt8(0xab)
+        @test AK.from_uint(UInt16, UInt32(0xabcdef01)) == UInt16(0xabcd)
         @test AK.from_uint(UInt32, 0b1010 % UInt32) == 0b1010 % UInt32
         @test AK.from_uint(UInt64, 0b1010 % UInt64) == 0b1010 % UInt64
+        @test AK.from_uint(Int8, UInt32(0xff000000)) == Int8(-1)
+        @test AK.from_uint(Int16, UInt32(0xffff0000)) == Int16(-1)
         @test AK.from_uint(Int32, 0b11111111111111111111111111111111 % UInt32) == Int32(-1)
         @test AK.from_uint(
             Int64, 0b1111111111111111111111111111111111111111111111111111111111111111 % UInt64
         ) == Int64(-1)
+        @test AK.from_uint(Float16, UInt32(0)) == Float16(0)
         @test AK.from_uint(Bool, UInt32(0)) == false
         @test AK.from_uint(Bool, UInt32(1)) == true
 
+        @test AK.uint32_to_unit_float16(UInt32(0)) == Float16(0)
+        @test Float16(0) <= AK.uint32_to_unit_float16(typemax(UInt32)) < Float16(1)
         @test AK.uint32_to_unit_float32(UInt32(0)) == 0.0f0
         @test 0.0f0 <= AK.uint32_to_unit_float32(typemax(UInt32)) < 1.0f0
         if RUN_FLOAT64_RAND_TESTS
@@ -126,7 +143,7 @@ end
             s1 = AK.rand_scalar(rng, UInt64(1), T)
             @test s0 isa T
             @test s1 isa T
-            if T !== Bool
+            if !(T in (Bool, Float16, UInt8, UInt16, Int8, Int16))
                 @test s0 != s1
             end
             if T <: AbstractFloat
@@ -136,8 +153,19 @@ end
         end
 
         c = UInt64(42)
+        @test AK.rand_scalar(rng, c, UInt8) == trunc(UInt8, AK.rand_uint(rng, c, UInt32) >> 24)
+        @test AK.rand_scalar(rng, c, UInt16) == trunc(UInt16, AK.rand_uint(rng, c, UInt32) >> 16)
+        @test AK.rand_scalar(
+            rng, c, Int8
+        ) == reinterpret(Int8, trunc(UInt8, AK.rand_uint(rng, c, UInt32) >> 24))
+        @test AK.rand_scalar(
+            rng, c, Int16
+        ) == reinterpret(Int16, trunc(UInt16, AK.rand_uint(rng, c, UInt32) >> 16))
         @test AK.rand_scalar(rng, c, Int32) == reinterpret(Int32, AK.rand_uint(rng, c, UInt32))
         @test AK.rand_scalar(rng, c, Int64) == reinterpret(Int64, AK.rand_uint(rng, c, UInt64))
+        @test AK.rand_scalar(rng, c, Float16) == AK.uint32_to_unit_float16(
+            AK.rand_uint(rng, c, UInt32)
+        )
         @test AK.rand_scalar(rng, c, Float32) == AK.uint32_to_unit_float32(
             AK.rand_uint(rng, c, UInt32)
         )
@@ -150,7 +178,7 @@ end
         bools = [AK.rand_scalar(rng, UInt64(i), Bool) for i in 0:511]
         @test any(identity, bools)
         @test any(!, bools)
-        @test_throws ArgumentError AK.rand_scalar(rng, UInt64(0), UInt16)
+        @test_throws ArgumentError AK.rand_scalar(rng, UInt64(0), UInt128)
     end
 
 
@@ -185,7 +213,7 @@ end
             @test Array(x1) != Array(x2)
         end
 
-        for T in (Float32, UInt64, Bool)
+        for T in (Float16, Float32, UInt64, Bool)
             xnd = array_from_host(zeros(T, 7, 11, 5))
             _assert_rand_matches_reference!(rng, xnd; prefer_threads, block_size=128)
         end
@@ -226,7 +254,7 @@ end
         @test Array(x1) == Array(ref1)
         @test Array(x2) == Array(ref2)
 
-        x_bad = array_from_host(zeros(UInt16, 16))
+        x_bad = zeros(UInt128, 16)
         @test_throws ArgumentError AK.rand!(x_bad; prefer_threads)
         @test_throws ArgumentError AK.rand!(AK.CounterRNG(0x1), x_bad; prefer_threads)
     end
