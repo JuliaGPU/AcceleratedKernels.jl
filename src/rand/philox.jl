@@ -24,9 +24,7 @@ end
     x0 = _u32_lo(counter)
     x1 = _u32_hi(counter)
 
-    seed = UInt64(rng.seed)
-    k0 = _u32_lo(seed)
-    x1 = xor(x1, _u32_hi(seed))
+    k0 = splitmix32_from_u64(UInt64(rng.seed))
 
     @inbounds for _ in 1:PHILOX_ROUNDS
         x0, x1 = _philox2x32_round(x0, x1, k0)

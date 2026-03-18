@@ -54,7 +54,7 @@ end
 include("utilities.jl")
 
 # Algorithm-specific integer generators
-include("splitmix64.jl")
+include("splitmix.jl")
 include("philox.jl")
 include("threefry.jl")
 

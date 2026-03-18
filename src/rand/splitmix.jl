@@ -16,6 +16,12 @@ const SPLITMIX64_MIX_B = UInt64(0x94d049bb133111eb)
 end
 
 
+# Derive a 32-bit seed word from a 64-bit seed using SplitMix64 mixing.
+@inline function splitmix32_from_u64(seed::UInt64)::UInt32
+    return _u32_hi(_splitmix64_mix(seed + SPLITMIX64_INCREMENT))
+end
+
+
 # Natural SplitMix64 output path: compute 64 random bits directly from one counter
 @inline function rand_uint(
     rng::CounterRNG{<:SplitMix64},

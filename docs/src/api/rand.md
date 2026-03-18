@@ -25,8 +25,24 @@ Algorithms currently available:
 - `Philox` ([read more](https://www.thesalmons.org/john/random123/papers/random123sc11.pdf))
 - `Threefry` ([read more](https://www.thesalmons.org/john/random123/papers/random123sc11.pdf))
 
-`Philox` is the default algorithm for `CounterRNG()`, as it is more thoroughly
-statistically tested and measured on par with `CUDA.rand!` and `SplitMix64` at ~390 GB/s on an RTX
+Statistical-testing note:
+- Published/reference versions of `SplitMix64`, `Philox`, and `Threefry` are reported to pass
+  TestU01 BigCrush.
+- These results refer to specific constructions and test setups; wrapper choices (such as
+  seed/key mapping conventions) can change bitwise output streams.
+- These generators are not intended to be cryptographically secure.
+
+Philox keying note:
+- AK uses `Philox2x32` internally (one 32-bit Philox key word).
+- Users can pass any non-negative `Integer` seed; AK normalises to `UInt64` then derives the
+  32-bit Philox key via a SplitMix-based mapping.
+- This is a deliberate wrapper choice for ease of use (simple `seed` API with deterministic
+  streams), not a change to the Philox round function itself.
+- Therefore, AK Philox streams are deterministic and high-quality, but not guaranteed to be
+  bit-for-bit identical to a raw Random123 Philox stream unless the same seed-to-key mapping and
+  counter convention are used.
+
+`Philox` is the default algorithm for `CounterRNG()`, as it is very thorough and very fast; it has been measured on par with `CUDA.rand!` and `SplitMix64` at ~390 GB/s on an Nvidia GeForce RTX
 5060 (advertised 448 GB/s), i.e. effectively memory-bound throughput.
 
 Examples:
