@@ -24,20 +24,21 @@ end
 
 # Natural SplitMix64 output path: compute 64 random bits directly from one counter
 @inline function rand_uint(
-    rng::CounterRNG{<:SplitMix64},
+    seed::UInt64,
+    alg::SplitMix64,
     counter::UInt64,
     ::Type{UInt64},
 )::UInt64
-    seed = UInt64(rng.seed)
     return _splitmix64_mix(counter + seed + SPLITMIX64_INCREMENT)
 end
 
 
 # UInt32 path is derived from the high 32 bits of the UInt64 SplitMix output
 @inline function rand_uint(
-    rng::CounterRNG{<:SplitMix64},
+    seed::UInt64,
+    alg::SplitMix64,
     counter::UInt64,
     ::Type{UInt32},
 )::UInt32
-    return _u32_hi(rand_uint(rng, counter, UInt64))
+    return _u32_hi(rand_uint(seed, alg, counter, UInt64))
 end

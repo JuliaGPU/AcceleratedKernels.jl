@@ -1,50 +1,73 @@
 """
-    abstract type AbstractCounterRNG end
     abstract type CounterRNGAlgorithm end
+    abstract type AbstractCounterRNG{A <: CounterRNGAlgorithm} end
 
 RNG interface for counter-based random generation with AcceleratedKernels.
 """
 
-abstract type AbstractCounterRNG end
 abstract type CounterRNGAlgorithm end
+abstract type AbstractCounterRNG{A <: CounterRNGAlgorithm} end
 
 
 """
     CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())
 
-Stateless counter-based RNG configuration for [`rand!`](@ref).
+Counter-based RNG for [`rand!`](@ref).
 
-`CounterRNG` is immutable and does not hold mutable thread-local or global state. Each generated
-value is a pure function of:
+`CounterRNG` stores:
 - `seed`
-- logical linear element index
 - algorithm (`alg`)
+- stream `offset`
 
 The default algorithm is `Philox()`.
 
 `seed` may be any non-negative `Integer`. It is normalised to `UInt64` internally.
+`offset` is initialised to `0` by default and advances by `length(v)` after each [`rand!`](@ref)
+call.
 
 Constructors:
-- `CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())`
-  Uses an explicit non-negative seed.
-- `CounterRNG(; alg::CounterRNGAlgorithm=Philox())`
-  Auto-seeds once using `Random.rand(Random.default_rng(), UInt64)`. Reusing the same `CounterRNG` instance is deterministic
-  for fixed seed, algorithm, array shape, and eltype.
+- `CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)`
+  Uses an explicit non-negative seed and offset.
+- `CounterRNG(; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)`
+  Auto-seeds once using `Base.rand(UInt64)`, with default `offset == 0`.
 """
-struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG
+mutable struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG{A}
     seed::UInt64
     alg::A
+    offset::UInt64
 end
 
 
-function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox())
+function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)
     @argcheck seed >= 0 "Seed must be a non-negative integer"
-    CounterRNG(UInt64(seed), alg)
+    @argcheck offset >= 0 "Offset must be a non-negative integer"
+    CounterRNG(UInt64(seed), alg, UInt64(offset))
 end
 
 
-function CounterRNG(; alg::CounterRNGAlgorithm=Philox())
-    CounterRNG(Random.rand(Random.default_rng(), UInt64); alg)
+function CounterRNG(; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)
+    CounterRNG(Base.rand(UInt64); alg, offset)
+end
+
+
+CounterRNG(seed::Integer, alg::CounterRNGAlgorithm) = CounterRNG(seed; alg)
+
+
+"""
+    reset!(rng::AbstractCounterRNG)
+
+Reset `rng.offset` to `0x0` for RNGs that support mutable stream offsets.
+
+This requires `rng` to:
+- have an `offset` field
+- be mutable
+"""
+@inline function reset!(rng::AbstractCounterRNG)
+    @argcheck hasfield(typeof(rng), :offset) "reset! requires an `offset` field"
+    @argcheck ismutabletype(typeof(rng)) "reset! requires a mutable RNG type"
+
+    rng.offset = UInt64(0)
+    return rng
 end
 
 
@@ -64,8 +87,8 @@ include("threefry.jl")
 """
     rand!(
         rng::AbstractCounterRNG,
-        x::AbstractArray{T},
-        backend::Backend=get_backend(x);
+        v::AbstractArray{T},
+        backend::Backend=get_backend(v);
 
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
@@ -78,8 +101,13 @@ include("threefry.jl")
         block_size::Int=256,
     )
 
-Fill `x` in-place with pseudo-random values using a stateless counter-based RNG. For `x[i]`, the
-counter is exactly `UInt64(i - 1)` in linear indexing order.
+Fill `v` in-place with pseudo-random values using a counter-based RNG stream. For `v[i]`, the
+counter is `start_offset + UInt64(i - 1)` in linear indexing order, where `start_offset` is:
+- `rng.offset` if `rng` has an `offset` field
+- `0` otherwise
+
+After filling `v`, `rng.offset` advances by `length(v)` only when `rng` has a mutable `offset`
+field.
 
 Supported scalar element types are:
 - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -97,8 +125,8 @@ Semantics:
 """
 function rand!(
     rng::AbstractCounterRNG,
-    x::AbstractArray{T},
-    backend::Backend=get_backend(x);
+    v::AbstractArray{T},
+    backend::Backend=get_backend(v);
 
     # CPU settings
     max_tasks::Int=Threads.nthreads(),
@@ -110,23 +138,36 @@ function rand!(
 ) where T
 
     @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
+
+    initial_offset = hasfield(typeof(rng), :offset) ? UInt64(getproperty(rng, :offset)) : UInt64(0)
+
+    # local isbits captures from potentially mutable rng object
+    seed, alg = rng.seed, rng.alg
+    
     foreachindex(
-        1:length(x), backend;
+        v, backend;
         max_tasks,
         min_elems,
         prefer_threads,
         block_size,
     ) do i
-        @inbounds x[i] = rand_scalar(rng, _counter_from_index(i), T)
+        @inbounds v[i] = rand_scalar(seed, alg, initial_offset + _counter_from_index(i), T)
     end
-    return x
+
+    if hasfield(typeof(rng), :offset) && ismutabletype(typeof(rng))
+        # XXX: maybe should be atomic add? would only be needed if AK.rand! were called
+        #      concurrently on the same rng... ??
+        rng.offset = initial_offset + UInt64(length(v))
+    end
+    
+    v
 end
 
 
 function rand!(
-    x::AbstractArray,
+    v::AbstractArray,
     args...;
     kwargs...,
 )
-    return rand!(CounterRNG(), x, args...; kwargs...)
+    return rand!(CounterRNG(), v, args...; kwargs...)
 end

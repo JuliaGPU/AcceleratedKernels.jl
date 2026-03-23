@@ -51,15 +51,16 @@ const ALLOWED_RAND_SCALARS = Union{
 
 
 #=
-Every RNG algorithm implements rand_uint(rng, counter, UInt32/UInt64).
-This fallback provides a clear failure for unsupported RNG types.
+Every RNG algorithm implements rand_uint(seed, alg, counter, UInt32/UInt64).
+This is the fallback for unsupported RNG algorithms.
 =#
 @inline function rand_uint(
-    rng::AbstractCounterRNG,
+    ::UInt64,
+    alg::CounterRNGAlgorithm,
     ::UInt64,
     ::Type{UIntType}
 )::UIntType where {UIntType <: Union{UInt32, UInt64}}
-    throw(ArgumentError("No rand_uint implementation for RNG: $rng"))
+    throw(ArgumentError("No rand_uint implementation for RNG algorithm: $(typeof(alg))"))
 end
 
 
@@ -70,25 +71,24 @@ Shared scalar generation:
 3) convert bits into requested scalar representation
 =#
 @inline function rand_scalar(
-    rng::AbstractCounterRNG,
+    seed::UInt64,
+    alg::CounterRNGAlgorithm,
     counter::UInt64,
     ::Type{T}
 )::T where {T <: ALLOWED_RAND_SCALARS}
 
     UIntType = raw_uint_type(T)
-    u = rand_uint(rng, counter, UIntType)
+    u = rand_uint(seed, alg, counter, UIntType)
 
     return from_uint(T, u)
 end
 
 
-@inline function rand_scalar(::AbstractCounterRNG, ::UInt64, ::Type{T}) where {T}
+@inline function rand_scalar(::UInt64, ::CounterRNGAlgorithm, ::UInt64, ::Type{T}) where {T}
     throw(ArgumentError(
         "Unsupported random scalar type $(T). Supported: $(ALLOWED_RAND_SCALARS)"
     ))
 end
-
-
 
 
 # Convert random UInt32 bits to Float16 in [0, 1) by mantissa construction.
@@ -98,7 +98,7 @@ end
     bits = UInt16(0x3c00) | UInt16(u >> 22)
 
     # Interpret as 1.mantissa, then subtract 1 for [0, 1)
-    return reinterpret(Float16, bits) - Float16(1)
+    reinterpret(Float16, bits) - Float16(1)
 end
 
 
@@ -109,7 +109,7 @@ end
     bits = UInt32(0x3f800000) | (u >> 9)
 
     # Interpret as 1.mantissa, then subtract 1 for [0, 1)
-    return reinterpret(Float32, bits) - 1.0f0
+    reinterpret(Float32, bits) - 1.0f0
 end
 
 
@@ -120,5 +120,5 @@ end
     bits = UInt64(0x3ff0000000000000) | (u >> 12)
 
     # Interpret as 1.mantissa, then subtract 1 for [0, 1)
-    return reinterpret(Float64, bits) - 1.0
+    reinterpret(Float64, bits) - 1.0
 end

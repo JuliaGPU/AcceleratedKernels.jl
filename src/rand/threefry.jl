@@ -18,13 +18,12 @@ end
 
 # Evaluate one Threefry block at `counter`, returning two 32-bit lanes `(x0, x1)`
 @inline function _threefry2x32_block(
-    rng::CounterRNG{<:Threefry},
+    seed::UInt64,
     counter::UInt64,
 )::Tuple{UInt32, UInt32}
     x0 = _u32_lo(counter)
     x1 = _u32_hi(counter)
 
-    seed = UInt64(rng.seed)
     k0 = _u32_lo(seed)
     k1 = _u32_hi(seed)
     k2 = xor(THREEFRY_PARITY, xor(k0, k1))
@@ -52,21 +51,23 @@ end
 
 # Return lane 0 from the single Threefry block at `counter`
 @inline function rand_uint(
-    rng::CounterRNG{<:Threefry},
+    seed::UInt64,
+    alg::Threefry,
     counter::UInt64,
     ::Type{UInt32},
 )::UInt32
-    x0, _ = _threefry2x32_block(rng, counter)
+    x0, _ = _threefry2x32_block(seed, counter)
     return x0
 end
 
 
 # Build UInt64 from the two lanes `(x0, x1)` of the same Threefry block at `counter`
 @inline function rand_uint(
-    rng::CounterRNG{<:Threefry},
+    seed::UInt64,
+    alg::Threefry,
     counter::UInt64,
     ::Type{UInt64},
 )::UInt64
-    x0, x1 = _threefry2x32_block(rng, counter)
+    x0, x1 = _threefry2x32_block(seed, counter)
     return _u64_from_u32s(x0, x1)
 end
