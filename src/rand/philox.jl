@@ -4,7 +4,7 @@ struct Philox <: CounterRNGAlgorithm end
 # Philox magic numbers
 const PHILOX_M0 = UInt32(0xD256D193)
 const PHILOX_W0 = UInt32(0x9E3779B9)
-const PHILOX_ROUNDS = 10
+const PHILOX_ROUNDS = 7
 
 
 @inline function _philox2x32_round(x0::UInt32, x1::UInt32, k0::UInt32)

@@ -17,7 +17,13 @@ if "--CUDA" in ARGS
     const BACKEND = CUDABackend()
     TEST_DL[] = true
 elseif "--oneAPI" in ARGS
-    Pkg.add("oneAPI")
+    if Sys.iswindows()
+        # oneAPI v2.6.x can throw `UndefVarError: NEO_jll not defined` on native Windows.
+        # Pin to the latest known-good minor series until upstream fixes are available.
+        Pkg.add(name="oneAPI", version="2.5")
+    else
+        Pkg.add("oneAPI")
+    end
     using oneAPI
     oneAPI.versioninfo()
     const BACKEND = oneAPIBackend()

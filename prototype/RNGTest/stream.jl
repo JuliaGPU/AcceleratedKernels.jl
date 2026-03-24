@@ -13,7 +13,7 @@ function make_rng(seed::Integer, alg::Symbol; offset::Integer=0)
 end
 
 
-mutable struct AKUInt64Stream{R <: AK.AbstractCounterRNG}
+mutable struct AKUInt64Stream{R}
     rng::R
     chunk::Int
     idx::Int

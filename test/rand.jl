@@ -70,18 +70,18 @@ end
 
 
     @testset "abstract rng offset behavior" begin
-        mutable struct MutableNoOffsetRNG <: AK.AbstractCounterRNG{AK.Philox}
+        mutable struct MutableNoOffsetRNG
             seed::UInt64
             alg::AK.Philox
         end
 
-        mutable struct MutableWithOffsetRNG <: AK.AbstractCounterRNG{AK.Philox}
+        mutable struct MutableWithOffsetRNG
             seed::UInt64
             alg::AK.Philox
             offset::UInt64
         end
 
-        struct ImmutableWithOffsetRNG <: AK.AbstractCounterRNG{AK.Philox}
+        struct ImmutableWithOffsetRNG
             seed::UInt64
             alg::AK.Philox
             offset::UInt64

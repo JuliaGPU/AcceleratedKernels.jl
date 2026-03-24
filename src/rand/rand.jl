@@ -1,12 +1,4 @@
-"""
-    abstract type CounterRNGAlgorithm end
-    abstract type AbstractCounterRNG{A <: CounterRNGAlgorithm} end
-
-RNG interface for counter-based random generation with AcceleratedKernels.
-"""
-
 abstract type CounterRNGAlgorithm end
-abstract type AbstractCounterRNG{A <: CounterRNGAlgorithm} end
 
 
 """
@@ -31,11 +23,12 @@ Constructors:
 - `CounterRNG(; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)`
   Auto-seeds once using `Base.rand(UInt64)`, with default `offset == 0`.
 """
-mutable struct CounterRNG{A <: CounterRNGAlgorithm} <: AbstractCounterRNG{A}
-    seed::UInt64
-    alg::A
+mutable struct CounterRNG{A <: CounterRNGAlgorithm}
+    const seed::UInt64
+    const alg::A
     offset::UInt64
 end
+#TODO: need to figure out a nice way to allow custom counter RNGs
 
 
 function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)
@@ -54,7 +47,7 @@ CounterRNG(seed::Integer, alg::CounterRNGAlgorithm) = CounterRNG(seed; alg)
 
 
 """
-    reset!(rng::AbstractCounterRNG)
+    reset!(rng::CounterRNG)
 
 Reset `rng.offset` to `0x0` for RNGs that support mutable stream offsets.
 
@@ -62,7 +55,7 @@ This requires `rng` to:
 - have an `offset` field
 - be mutable
 """
-@inline function reset!(rng::AbstractCounterRNG)
+@inline function reset!(rng::CounterRNG)
     @argcheck hasfield(typeof(rng), :offset) "reset! requires an `offset` field"
     @argcheck ismutabletype(typeof(rng)) "reset! requires a mutable RNG type"
 
@@ -86,7 +79,7 @@ include("threefry.jl")
 
 """
     rand!(
-        rng::AbstractCounterRNG,
+        rng::CounterRNG,
         v::AbstractArray{T},
         backend::Backend=get_backend(v);
 
@@ -124,7 +117,7 @@ Semantics:
 
 """
 function rand!(
-    rng::AbstractCounterRNG,
+    rng::CounterRNG,
     v::AbstractArray{T},
     backend::Backend=get_backend(v);
 
@@ -139,26 +132,17 @@ function rand!(
 
     @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
 
-    initial_offset = hasfield(typeof(rng), :offset) ? UInt64(getproperty(rng, :offset)) : UInt64(0)
-
-    # local isbits captures from potentially mutable rng object
+    # Local isbits captures from potentially mutable rng object
     seed, alg = rng.seed, rng.alg
     
     foreachindex(
         v, backend;
-        max_tasks,
-        min_elems,
-        prefer_threads,
-        block_size,
+        max_tasks, min_elems, prefer_threads, block_size,
     ) do i
         @inbounds v[i] = rand_scalar(seed, alg, initial_offset + _counter_from_index(i), T)
     end
 
-    if hasfield(typeof(rng), :offset) && ismutabletype(typeof(rng))
-        # XXX: maybe should be atomic add? would only be needed if AK.rand! were called
-        #      concurrently on the same rng... ??
-        rng.offset = initial_offset + UInt64(length(v))
-    end
+    rng.offset += UInt64(length(v))
     
     v
 end

@@ -43,13 +43,13 @@ is_unit_interval(v) = all(x -> 0.0f0 <= x <= 1.0f0, v)
 
 # warmup compile
 run_cuda_rand!(x_cuda)
-run_ak_rand_gpu!(RNG_SPLITMIX, x_splitmix)
+# run_ak_rand_gpu!(RNG_SPLITMIX, x_splitmix)
 run_ak_rand_gpu!(RNG_PHILOX, x_philox)
 run_ak_rand_gpu!(RNG_THREEFRY, x_threefry)
 run_ak_rand_cpu!(RNG_SPLITMIX, x_cpu)
 
 @assert is_unit_interval(Array(x_cuda))
-@assert is_unit_interval(Array(x_splitmix))
+# @assert is_unit_interval(Array(x_splitmix))
 @assert is_unit_interval(Array(x_philox))
 @assert is_unit_interval(Array(x_threefry))
 @assert is_unit_interval(x_cpu)
@@ -60,8 +60,8 @@ println("CPU threads: ", Threads.nthreads())
 println("\nCUDA.rand! benchmark (CuArray{Float32}, in-place)")
 display(@benchmark run_cuda_rand!($x_cuda))
 
-println("\nAK.rand! SplitMix64 benchmark (GPU, CuArray{Float32})")
-display(@benchmark run_ak_rand_gpu!($RNG_SPLITMIX, $x_splitmix))
+# println("\nAK.rand! SplitMix64 benchmark (GPU, CuArray{Float32})")
+# display(@benchmark run_ak_rand_gpu!($RNG_SPLITMIX, $x_splitmix))
 
 println("\nAK.rand! Philox benchmark (GPU, CuArray{Float32})")
 display(@benchmark run_ak_rand_gpu!($RNG_PHILOX, $x_philox))

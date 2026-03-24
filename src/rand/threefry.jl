@@ -21,6 +21,7 @@ end
     seed::UInt64,
     counter::UInt64,
 )::Tuple{UInt32, UInt32}
+
     x0 = _u32_lo(counter)
     x1 = _u32_hi(counter)
 
