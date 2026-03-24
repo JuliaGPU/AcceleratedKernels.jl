@@ -7,27 +7,24 @@ fixed `seed`, algorithm, and call sequence.
 `AK.rand!(rng, v)` call. This means chunked fills are stream-consistent:
 - filling `100` then `100` elements yields the same `200` values as one `200`-element fill.
 - calls that share the same `CounterRNG` instance concurrently are not thread-safe.
-- call `AK.reset!(rng)` to rewind a mutable offset-bearing RNG back to offset `0x0`.
+- call `AK.reset!(rng)` to rewind a `CounterRNG` offset back to `0x0`.
 
-`AK.rand!` also accepts custom `CounterRNG` implementations:
-- if they have a mutable `offset` field, streaming advancement is applied
-- if they have no `offset` field, each call behaves statelessly from counter `0`
-- if they have an immutable `offset` field, that offset is used as a fixed start and is not advanced
+`AK.rand!(rng, v)` accepts `rng::AK.CounterRNG`.
+Passing other RNG container types is not supported and will throw a `MethodError`.
 
 Use an explicit `CounterRNG` when reproducibility is required. For
 convenience,
 `AK.rand!(v)` creates a fresh `CounterRNG()` on each call using one auto-seeded
 `Base.rand(UInt64)` draw, so repeated calls produce different outputs unless Random.seed!() is used.
 
-`AK.reset!(rng)` rewinds offset to `0x0` for mutable RNGs that have an `offset` field.
+`AK.reset!(rng::AK.CounterRNG)` rewinds `rng.offset` to `0x0`.
 
-Custom RNGs:
+Custom algorithms:
 - Define an algorithm type `MyAlg <: AK.CounterRNGAlgorithm`.
-- Define a `CounterRNG` with fields `seed` and `alg`.
-- Add a mutable `offset::UInt64` field if you want stream advancement across calls; omit it for stateless calls from counter `0`.
 - Implement typed `rand_uint` methods:
   - `AK.rand_uint(seed::UInt64, alg::MyAlg, counter::UInt64, ::Type{UInt32})::UInt32`
   - `AK.rand_uint(seed::UInt64, alg::MyAlg, counter::UInt64, ::Type{UInt64})::UInt64`
+- Use your algorithm via `AK.CounterRNG(seed; alg=MyAlg(), offset=...)`.
 
 Both widths should be implemented so `AK.rand!` supports all integer/float output types without falling back or error.
 

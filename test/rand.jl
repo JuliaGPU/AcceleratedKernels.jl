@@ -69,52 +69,45 @@ end
     end
 
 
-    @testset "abstract rng offset behavior" begin
-        mutable struct MutableNoOffsetRNG
-            seed::UInt64
-            alg::AK.Philox
-        end
-
-        mutable struct MutableWithOffsetRNG
-            seed::UInt64
-            alg::AK.Philox
-            offset::UInt64
-        end
-
-        struct ImmutableWithOffsetRNG
-            seed::UInt64
-            alg::AK.Philox
-            offset::UInt64
-        end
-
-        rng_no_offset = MutableNoOffsetRNG(UInt64(0x1234), AK.Philox())
-        x1 = array_from_host(zeros(Float32, 256))
-        x2 = array_from_host(zeros(Float32, 256))
-        AK.rand!(rng_no_offset, x1; prefer_threads, block_size=64)
-        AK.rand!(rng_no_offset, x2; prefer_threads, block_size=64)
-        @test Array(x1) == Array(x2)
-
-        rng_stream = MutableWithOffsetRNG(UInt64(0x1234), AK.Philox(), UInt64(0))
+    @testset "counter rng offset behavior" begin
+        rng_stream = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox(), offset=UInt64(17))
         s1 = array_from_host(zeros(Float32, 100))
         s2 = array_from_host(zeros(Float32, 100))
         s12 = array_from_host(zeros(Float32, 200))
         AK.rand!(rng_stream, s1; prefer_threads, block_size=64)
+        @test rng_stream.offset == UInt64(117)
         AK.rand!(rng_stream, s2; prefer_threads, block_size=64)
-        AK.rand!(AK.CounterRNG(UInt64(0x1234); alg=AK.Philox()), s12; prefer_threads, block_size=64)
-        @test vcat(Array(s1), Array(s2)) == Array(s12)
-        @test rng_stream.offset == UInt64(200)
+        @test rng_stream.offset == UInt64(217)
 
-        rng_imm = ImmutableWithOffsetRNG(UInt64(0x1234), AK.Philox(), UInt64(17))
-        y1 = array_from_host(zeros(Float32, 64))
-        y2 = array_from_host(zeros(Float32, 64))
-        AK.rand!(rng_imm, y1; prefer_threads, block_size=64)
-        AK.rand!(rng_imm, y2; prefer_threads, block_size=64)
-        @test Array(y1) == Array(y2)
+        rng_once = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox(), offset=UInt64(17))
+        AK.rand!(rng_once, s12; prefer_threads, block_size=64)
+        @test vcat(Array(s1), Array(s2)) == Array(s12)
+        @test rng_once.offset == UInt64(217)
+
+        empty = array_from_host(zeros(Float32, 0))
+        stream_offset = rng_stream.offset
+        AK.rand!(rng_stream, empty; prefer_threads, block_size=64)
+        @test rng_stream.offset == stream_offset
 
         @test AK.reset!(rng_stream) === rng_stream
         @test rng_stream.offset == UInt64(0)
-        @test_throws ArgumentError AK.reset!(rng_no_offset)
-        @test_throws ArgumentError AK.reset!(rng_imm)
+
+        y1 = array_from_host(zeros(Float32, 64))
+        y2 = array_from_host(zeros(Float32, 64))
+        AK.rand!(rng_stream, y1; prefer_threads, block_size=64)
+        AK.rand!(AK.CounterRNG(UInt64(0x1234); alg=AK.Philox()), y2; prefer_threads, block_size=64)
+        @test Array(y1) == Array(y2)
+
+        mutable struct DummyRNG
+            seed::UInt64
+            alg::AK.Philox
+            offset::UInt64
+        end
+
+        rng_dummy = DummyRNG(UInt64(0x1234), AK.Philox(), UInt64(0))
+        x = array_from_host(zeros(Float32, 16))
+        @test_throws MethodError AK.rand!(rng_dummy, x; prefer_threads, block_size=64)
+        @test_throws MethodError AK.reset!(rng_dummy)
     end
 
 
@@ -146,38 +139,38 @@ end
         @test AK._counter_from_index(1) == UInt64(0)
         @test AK._counter_from_index(17) == UInt64(16)
 
-        @test AK.raw_uint_type(UInt8) === UInt32
-        @test AK.raw_uint_type(UInt16) === UInt32
-        @test AK.raw_uint_type(UInt32) === UInt32
-        @test AK.raw_uint_type(Int8) === UInt32
-        @test AK.raw_uint_type(Int16) === UInt32
-        @test AK.raw_uint_type(Int32) === UInt32
+        @test AK._rand_scalar_uint_type(UInt8) === UInt32
+        @test AK._rand_scalar_uint_type(UInt16) === UInt32
+        @test AK._rand_scalar_uint_type(UInt32) === UInt32
+        @test AK._rand_scalar_uint_type(Int8) === UInt32
+        @test AK._rand_scalar_uint_type(Int16) === UInt32
+        @test AK._rand_scalar_uint_type(Int32) === UInt32
         if RUN_FLOAT16_RAND_TESTS
-            @test AK.raw_uint_type(Float16) === UInt32
+            @test AK._rand_scalar_uint_type(Float16) === UInt32
         end
-        @test AK.raw_uint_type(Float32) === UInt32
-        @test AK.raw_uint_type(UInt64) === UInt64
-        @test AK.raw_uint_type(Int64) === UInt64
-        @test AK.raw_uint_type(Bool) === UInt32
+        @test AK._rand_scalar_uint_type(Float32) === UInt32
+        @test AK._rand_scalar_uint_type(UInt64) === UInt64
+        @test AK._rand_scalar_uint_type(Int64) === UInt64
+        @test AK._rand_scalar_uint_type(Bool) === UInt32
         if RUN_FLOAT64_RAND_TESTS
-            @test AK.raw_uint_type(Float64) === UInt64
+            @test AK._rand_scalar_uint_type(Float64) === UInt64
         end
 
-        @test AK.from_uint(UInt8, UInt32(0xabcdef01)) == UInt8(0xab)
-        @test AK.from_uint(UInt16, UInt32(0xabcdef01)) == UInt16(0xabcd)
-        @test AK.from_uint(UInt32, 0b1010 % UInt32) == 0b1010 % UInt32
-        @test AK.from_uint(UInt64, 0b1010 % UInt64) == 0b1010 % UInt64
-        @test AK.from_uint(Int8, UInt32(0xff000000)) == Int8(-1)
-        @test AK.from_uint(Int16, UInt32(0xffff0000)) == Int16(-1)
-        @test AK.from_uint(Int32, 0b11111111111111111111111111111111 % UInt32) == Int32(-1)
-        @test AK.from_uint(
+        @test AK._rand_scalar_from_uint(UInt8, UInt32(0xabcdef01)) == UInt8(0xab)
+        @test AK._rand_scalar_from_uint(UInt16, UInt32(0xabcdef01)) == UInt16(0xabcd)
+        @test AK._rand_scalar_from_uint(UInt32, 0b1010 % UInt32) == 0b1010 % UInt32
+        @test AK._rand_scalar_from_uint(UInt64, 0b1010 % UInt64) == 0b1010 % UInt64
+        @test AK._rand_scalar_from_uint(Int8, UInt32(0xff000000)) == Int8(-1)
+        @test AK._rand_scalar_from_uint(Int16, UInt32(0xffff0000)) == Int16(-1)
+        @test AK._rand_scalar_from_uint(Int32, 0b11111111111111111111111111111111 % UInt32) == Int32(-1)
+        @test AK._rand_scalar_from_uint(
             Int64, 0b1111111111111111111111111111111111111111111111111111111111111111 % UInt64
         ) == Int64(-1)
         if RUN_FLOAT16_RAND_TESTS
-            @test AK.from_uint(Float16, UInt32(0)) == Float16(0)
+            @test AK._rand_scalar_from_uint(Float16, UInt32(0)) == Float16(0)
         end
-        @test AK.from_uint(Bool, UInt32(0)) == false
-        @test AK.from_uint(Bool, UInt32(1)) == true
+        @test AK._rand_scalar_from_uint(Bool, UInt32(0)) == false
+        @test AK._rand_scalar_from_uint(Bool, UInt32(1)) == true
 
         if RUN_FLOAT16_RAND_TESTS
             @test AK.uint32_to_unit_float16(UInt32(0)) == Float16(0)

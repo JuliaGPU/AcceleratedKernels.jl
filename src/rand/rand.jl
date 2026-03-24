@@ -28,7 +28,6 @@ mutable struct CounterRNG{A <: CounterRNGAlgorithm}
     const alg::A
     offset::UInt64
 end
-#TODO: need to figure out a nice way to allow custom counter RNGs
 
 
 function CounterRNG(seed::Integer; alg::CounterRNGAlgorithm=Philox(), offset::Integer=0)
@@ -49,16 +48,9 @@ CounterRNG(seed::Integer, alg::CounterRNGAlgorithm) = CounterRNG(seed; alg)
 """
     reset!(rng::CounterRNG)
 
-Reset `rng.offset` to `0x0` for RNGs that support mutable stream offsets.
-
-This requires `rng` to:
-- have an `offset` field
-- be mutable
+Reset `rng.offset` to `0x0`.
 """
 @inline function reset!(rng::CounterRNG)
-    @argcheck hasfield(typeof(rng), :offset) "reset! requires an `offset` field"
-    @argcheck ismutabletype(typeof(rng)) "reset! requires a mutable RNG type"
-
     rng.offset = UInt64(0)
     return rng
 end
@@ -95,12 +87,9 @@ include("threefry.jl")
     )
 
 Fill `v` in-place with pseudo-random values using a counter-based RNG stream. For `v[i]`, the
-counter is `start_offset + UInt64(i - 1)` in linear indexing order, where `start_offset` is:
-- `rng.offset` if `rng` has an `offset` field
-- `0` otherwise
+counter is `rng.offset + UInt64(i - 1)` in linear indexing order.
 
-After filling `v`, `rng.offset` advances by `length(v)` only when `rng` has a mutable `offset`
-field.
+After filling `v`, `rng.offset` advances by `length(v)`.
 
 Supported scalar element types are:
 - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -133,7 +122,7 @@ function rand!(
     @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
 
     # Local isbits captures from potentially mutable rng object
-    seed, alg = rng.seed, rng.alg
+    seed, alg, initial_offset = rng.seed, rng.alg, rng.offset
     
     foreachindex(
         v, backend;
