@@ -34,6 +34,11 @@ Supported element types:
 - `Float16`, `Float32`, `Float64`
 - `Bool`
 
+`AK.randn!` fills arrays with standard normal samples and currently supports:
+- `Float16`, `Float32`, `Float64`
+
+`AK.randn!` uses Box-Muller with open-interval uniforms in `(0, 1)` from a branch-free midpoint mapping.
+
 The core of the random number generation produces either a `UInt32` or `UInt64` depending on the width of the requested element type.
 That `UInt` is then either:
 - Unsigned integers: returned as-is or truncated if necessary.
@@ -82,6 +87,10 @@ AK.rand!(rng, v2)
 # Convenience (fresh auto-seeded RNG on each call)
 y = oneArray{Float32}(undef, 1024)
 AK.rand!(y)
+
+# Standard normal samples
+z = oneArray{Float32}(undef, 1024)
+AK.randn!(rng, z)
 ```
 
 ```@docs
@@ -89,4 +98,5 @@ AcceleratedKernels.CounterRNG
 AcceleratedKernels.CounterRNGAlgorithm
 AcceleratedKernels.reset!
 AcceleratedKernels.rand!
+AcceleratedKernels.randn!
 ```

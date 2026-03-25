@@ -66,6 +66,9 @@ include("splitmix.jl")
 include("philox.jl")
 include("threefry.jl")
 
+# Normally distributed scalar generators and randn!
+include("randn.jl")
+
 
 
 
@@ -121,7 +124,7 @@ function rand!(
 
     @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
 
-    # Local isbits captures from potentially mutable rng object
+    # Local isbits captures from mutable rng object
     seed, alg, initial_offset = rng.seed, rng.alg, rng.offset
     
     foreachindex(
