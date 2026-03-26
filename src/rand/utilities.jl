@@ -9,7 +9,7 @@
 @inline _mulhi_u32(a::UInt32, b::UInt32)::UInt32 = UInt32((UInt64(a) * UInt64(b)) >> 32)
 
 # 32-bit rotate left by r positions
-@inline _rotl32(x::UInt32, r::UInt32)::UInt32 = (x << r) | (x >> (UInt32(32) - r))
+@inline _rotl32(x::UInt32, r::UInt32)::UInt32 = bitrotate(x, Int32(r))
 
 # Get counter used for CounterRNG from element index
 @inline _counter_from_index(i)::UInt64 = UInt64(i - one(i))

@@ -9,9 +9,9 @@ const THREEFRY_ROTATIONS = (
 const THREEFRY_ROUNDS = 20
 
 
-@inline function _threefry_key_word(k0::UInt32, k1::UInt32, k2::UInt32, idx::Int)::UInt32
-    idx == 0 && return k0
-    idx == 1 && return k1
+@inline function _threefry_key_word(k0::UInt32, k1::UInt32, k2::UInt32, idx::UInt32)::UInt32
+    idx == UInt32(0) && return k0
+    idx == UInt32(1) && return k1
     return k2
 end
 
@@ -33,16 +33,17 @@ end
     x1 += k1
 
     @inbounds for round in 0:(THREEFRY_ROUNDS - 1)
-        rot = THREEFRY_ROTATIONS[(round & 0x7) + 1]
+        round_u32 = UInt32(round)
+        rot = THREEFRY_ROTATIONS[Int((round_u32 & UInt32(0x7)) + UInt32(1))]
         x0 += x1
         x1 = xor(_rotl32(x1, rot), x0)
 
-        if (round & 0x3) == 3
-            s = (round >>> 2) + 1
-            i0 = s % 3
-            i1 = (s + 1) % 3
+        if (round_u32 & UInt32(0x3)) == UInt32(0x3)
+            s = (round_u32 >>> 2) + UInt32(1)
+            i0 = s % UInt32(3)
+            i1 = (s + UInt32(1)) % UInt32(3)
             x0 += _threefry_key_word(k0, k1, k2, i0)
-            x1 += _threefry_key_word(k0, k1, k2, i1) + UInt32(s)
+            x1 += _threefry_key_word(k0, k1, k2, i1) + s
         end
     end
 

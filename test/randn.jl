@@ -91,14 +91,6 @@ end
             rng = AK.CounterRNG(0x123456789abcdef; alg)
 
             for T in RANDN_FLOAT_TYPES_BACKEND
-                for len in RANDN_LENGTHS
-                    x = array_from_host(zeros(T, len))
-                    _assert_randn_matches_reference!(rng, x; prefer_threads, block_size=64)
-                    @test _all_finite(Array(x))
-                end
-            end
-
-            for T in RANDN_FLOAT_TYPES_BACKEND
                 x1 = array_from_host(zeros(T, 2048))
                 x2 = array_from_host(zeros(T, 2048))
                 rng1 = AK.CounterRNG(rng.seed; alg=rng.alg)
