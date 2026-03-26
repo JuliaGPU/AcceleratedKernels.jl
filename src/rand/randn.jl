@@ -139,6 +139,59 @@ end
 end
 
 
+# `Val{ODD}` keeps parity in the type domain so each specialization (`ODD==0` / `ODD==1`)
+# can fold index bias at compile time.
+# - `Val{0}` => even-offset pair writes at indices `(2i-1, 2i)` so bias is `-1`
+# - `Val{1}` => odd-offset pair writes at indices `(2i, 2i+1)` after prefix handling so bias is `0`
+@inline _randn_i0_bias(::Val{0}) = -1
+@inline _randn_i0_bias(::Val{1}) = 0
+
+
+@inline function _randn_core!(
+    v::AbstractArray{T}, seed, alg, initial_offset,
+    backend, max_tasks, min_elems, prefer_threads, block_size,
+    ::Val{ODD},
+) where {T, ODD}
+
+    len = length(v)
+    prefix_len = ODD
+
+    # If offset is odd, need to individually handle the first element.
+    prefix_len == 1 && @allowscalar @inbounds v[1] = randn_scalar(seed, alg, initial_offset, T)
+
+    # Stream is now even-aligned, so can foreachindex through the pairs.
+    pair_start = (initial_offset + UInt64(prefix_len)) >> 1
+
+    # Capture `Val(ODD)` into the closure so bias stays a compile-time constant inside the loop.
+    odd_val = Val(ODD)
+    i0_bias = _randn_i0_bias(odd_val)
+    remaining_len = len - prefix_len
+    pair_count = remaining_len >> 1
+
+    if pair_count > 0
+        foreachindex(
+            Base.OneTo(pair_count), backend;
+            max_tasks, min_elems, prefer_threads, block_size,
+        ) do i
+            pair_counter = pair_start + _counter_from_index(i)
+            z0, z1 = randn_pair(seed, alg, pair_counter, T)
+            i0 = (i << 1) + _randn_i0_bias(odd_val)
+            @inbounds v[i0] = z0
+            @inbounds v[i0 + 1] = z1
+        end
+    end
+
+    # If an extra element remains after pair writing, fill it individually.
+    tail_index = (pair_count << 1) + i0_bias + 2
+    if tail_index <= len
+        tail_counter = initial_offset + UInt64(tail_index - 1)
+        @allowscalar @inbounds v[tail_index] = randn_scalar(seed, alg, tail_counter, T)
+    end
+
+    return v
+end
+
+
 """
     randn!(
         rng::CounterRNG,
@@ -183,67 +236,19 @@ function randn!(
 
     # Local isbits captures from mutable rng object.
     seed, alg, initial_offset = rng.seed, rng.alg, rng.offset
-    len = length(v)
-    pair_start = initial_offset >> 1
 
-    # Even stream offset is the common path and maps pair `i` to output indices `(2i-1, 2i)`.
-    if iszero(initial_offset & UInt64(0x1))
-        pair_count = cld(len, 2)
-        pair_indices = Base.OneTo(pair_count)
+    core_args = (
+        v, seed, alg, initial_offset, backend, max_tasks, min_elems, prefer_threads, block_size
+    )
 
-        # Fully branch-free hot path when both offset and length are even.
-        if iseven(len)
-            foreachindex(
-                pair_indices, backend;
-                max_tasks, min_elems, prefer_threads, block_size,
-            ) do i
-                pair_counter = pair_start + _counter_from_index(i)
-                z0, z1 = randn_pair(seed, alg, pair_counter, T)
-                i0 = (i << 1) - 1
-                @inbounds v[i0] = z0
-                @inbounds v[i0 + 1] = z1
-            end
-        else
-            foreachindex(
-                pair_indices, backend;
-                max_tasks, min_elems, prefer_threads, block_size,
-            ) do i
-                pair_counter = pair_start + _counter_from_index(i)
-                z0, z1 = randn_pair(seed, alg, pair_counter, T)
-                i0 = (i << 1) - 1
-                @inbounds v[i0] = z0
-                i1 = i0 + 1
-
-                if i1 <= len
-                    @inbounds v[i1] = z1
-                end
-            end
-        end
+    # Dispatch depending on required initial index bias
+    if iseven(initial_offset)
+        _randn_core!(core_args..., Val(0))
     else
-        # Odd stream offset shifts pair `i` to `(2i-2, 2i-1)`; only the first z0 is out of range.
-        pair_count = cld(len + 1, 2)
-        pair_indices = Base.OneTo(pair_count)
-
-        foreachindex(
-            pair_indices, backend;
-            max_tasks, min_elems, prefer_threads, block_size,
-        ) do i
-            pair_counter = pair_start + _counter_from_index(i)
-            z0, z1 = randn_pair(seed, alg, pair_counter, T)
-            i0 = (i << 1) - 2
-
-            if i0 >= 1
-                @inbounds v[i0] = z0
-            end
-
-            i1 = i0 + 1
-            if i1 <= len
-                @inbounds v[i1] = z1
-            end
-        end
+        _randn_core!(core_args..., Val(1))
     end
 
-    rng.offset += UInt64(len)
+    rng.offset += UInt64(length(v))
 
     v
 end
@@ -255,4 +260,52 @@ function randn!(
     kwargs...,
 )
     return randn!(CounterRNG(), v, args...; kwargs...)
+end
+
+
+"""
+    randn(
+        rng::CounterRNG,
+        backend::Backend,
+        ::Type{T},
+        dims::Integer...;
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
+        prefer_threads::Bool=true,
+        block_size::Int=256,
+    ) where T
+
+Allocate an array of element type `T` on `backend` with shape `dims`, fill it in-place via
+[`randn!`](@ref), and return it.
+"""
+function randn(
+    rng::CounterRNG,
+    backend::Backend,
+    ::Type{T},
+    dims::Integer...;
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+    prefer_threads::Bool=true,
+    block_size::Int=256,
+) where T
+    return _allocate_and_fill(
+        randn!, rng, backend, T, dims...;
+        max_tasks, min_elems, prefer_threads, block_size,
+    )
+end
+
+
+function randn(
+    backend::Backend,
+    ::Type{T},
+    dims::Integer...;
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+    prefer_threads::Bool=true,
+    block_size::Int=256,
+) where T
+    return randn(
+        CounterRNG(), backend, T, dims...;
+        max_tasks, min_elems, prefer_threads, block_size,
+    )
 end

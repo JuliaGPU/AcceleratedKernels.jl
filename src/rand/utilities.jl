@@ -15,6 +15,25 @@
 @inline _counter_from_index(i)::UInt64 = UInt64(i - one(i))
 
 
+# Shared allocation + fill helper for rand/randn convenience constructors.
+@inline function _allocate_and_fill(
+    fill!,
+    rng::CounterRNG,
+    backend::Backend,
+    ::Type{T},
+    dims::Integer...;
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+    prefer_threads::Bool=true,
+    block_size::Int=256,
+) where {T}
+    dims_int = Base.map(Int, dims)
+    v = KernelAbstractions.allocate(backend, T, dims_int)
+    fill!(rng, v, backend; max_tasks, min_elems, prefer_threads, block_size)
+    return v
+end
+
+
 # Internal scalar eltypes currently supported by rand!.
 const ALLOWED_RAND_SCALARS = Union{
     UInt8, UInt16, UInt32, UInt64,

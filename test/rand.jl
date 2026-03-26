@@ -362,4 +362,44 @@ end
         @test_throws ArgumentError AK.rand!(x_bad; prefer_threads)
         @test_throws ArgumentError AK.rand!(AK.CounterRNG(0x1), x_bad; prefer_threads)
     end
+
+
+    @testset "rand allocation convenience" begin
+        rng = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox())
+        y = AK.rand(rng, BACKEND, Float32, Int32(6), UInt16(7); prefer_threads, block_size=64)
+        @test size(y) == (6, 7)
+        @test eltype(y) === Float32
+        @test _is_unit_interval(Array(y))
+        @test rng.offset == UInt64(length(y))
+
+        rng_alloc = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
+        rng_fill = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
+        y_alloc = AK.rand(rng_alloc, BACKEND, Float32, 128; prefer_threads, block_size=64)
+        y_fill = array_from_host(zeros(Float32, 128))
+        AK.rand!(rng_fill, y_fill; prefer_threads, block_size=64)
+        @test Array(y_alloc) == Array(y_fill)
+        @test rng_alloc.offset == rng_fill.offset == UInt64(128)
+
+        # Warm-up first call path so one-time compilation/backend init does not perturb RNG checks.
+        AK.rand(BACKEND, Float32, 1; prefer_threads, block_size=64)
+
+        # Auto-seeded constructor should match explicit seed capture from default RNG.
+        Random.seed!(0x9abc)
+        seed = Random.rand(Random.default_rng(), UInt64)
+        ref = AK.rand(AK.CounterRNG(seed; alg=AK.Philox()), BACKEND, Float32, 64; prefer_threads, block_size=64)
+        Random.seed!(0x9abc)
+        x = AK.rand(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        @test Array(x) == Array(ref)
+
+        # Reseeding should reproduce the same auto-seeded draw.
+        Random.seed!(0x7777)
+        x1 = AK.rand(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        Random.seed!(0x7777)
+        x2 = AK.rand(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        @test Array(x1) == Array(x2)
+
+        @test_throws ArgumentError AK.rand(AK.CounterRNG(0x1), BACKEND, UInt128, 16; prefer_threads)
+        @test_throws MethodError AK.rand(AK.CounterRNG(0x1), BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
+        @test_throws MethodError AK.rand(BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
+    end
 end

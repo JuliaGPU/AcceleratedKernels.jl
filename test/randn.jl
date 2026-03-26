@@ -1,8 +1,12 @@
 const RANDN_ALGS = (AK.SplitMix64(), AK.Philox(), AK.Threefry())
 const RANDN_FLOAT_TYPES_BACKEND = IS_CPU_BACKEND ? (Float16, Float32, Float64) : (Float32,)
+const RANDN_LENGTHS = (0, 1, 2, 31, 32, 33, 257, 1024)
 
 
-_is_finite(v) = all(isfinite, v)
+_all_finite(v) = all(isfinite, v)
+_randn_reference_atol(::Type{Float16}) = 16 * eps(Float16)
+_randn_reference_atol(::Type{Float32}) = 64 * eps(Float32)
+_randn_reference_atol(::Type{Float64}) = 64 * eps(Float64)
 
 
 function _randn_fill_reference!(
@@ -22,28 +26,40 @@ function _assert_randn_matches_reference!(rng, x; kwargs...)
     AK.randn!(rng, x; kwargs...)
     ref = zeros(eltype(x), size(x))
     _randn_fill_reference!(rng, ref; counter_offset)
-    @test Array(x) == ref
+    xa = Array(x)
+
+    if IS_CPU_BACKEND
+        @test xa == ref
+    else
+        # randn uses Box-Muller (`log`, `sqrt`, `sincos`), and GPU libm implementations are not
+        # bit-identical to CPU scalar libm. Stream/counter mapping is still deterministic, but the
+        # final Float32 values can differ by a few ULP, so we use a tight absolute tolerance here.
+        atol = _randn_reference_atol(eltype(xa))
+        @test all(isapprox.(xa, ref; rtol=zero(atol), atol))
+    end
+
     return x
 end
 
 
 @testset "randn" begin
-    @testset "open interval helpers" begin
+    @testset "scalar helpers" begin
         @test 0.0f0 < AK.uint32_to_open_unit_float32_midpoint(UInt32(0)) < 1.0f0
         @test 0.0f0 < AK.uint32_to_open_unit_float32_midpoint(typemax(UInt32)) < 1.0f0
-        @test 0.0 < AK.uint64_to_open_unit_float64_midpoint(UInt64(0)) < 1.0
-        @test 0.0 < AK.uint64_to_open_unit_float64_midpoint(typemax(UInt64)) < 1.0
-    end
 
+        if IS_CPU_BACKEND
+            @test 0.0 < AK.uint64_to_open_unit_float64_midpoint(UInt64(0)) < 1.0
+            @test 0.0 < AK.uint64_to_open_unit_float64_midpoint(typemax(UInt64)) < 1.0
+        end
 
-    @testset "rand_open01 and randn_scalar" begin
         seed = UInt64(0x123456789abcdef)
         for alg in RANDN_ALGS
-            for c in (UInt64(0), UInt64(1), UInt64(17), UInt64(1023))
-                u32 = AK.rand_open01(seed, alg, c, Float32)
+            for counter in (UInt64(0), UInt64(1), UInt64(17), UInt64(1023))
+                u32 = AK.rand_open01(seed, alg, counter, Float32)
                 @test 0.0f0 < u32 < 1.0f0
+
                 if IS_CPU_BACKEND
-                    u64 = AK.rand_open01(seed, alg, c, Float64)
+                    u64 = AK.rand_open01(seed, alg, counter, Float64)
                     @test 0.0 < u64 < 1.0
                 end
             end
@@ -51,6 +67,7 @@ end
             for T in RANDN_FLOAT_TYPES_BACKEND
                 s0 = AK.randn_scalar(seed, alg, UInt64(42), T)
                 s1 = AK.randn_scalar(seed, alg, UInt64(43), T)
+
                 @test s0 isa T
                 @test s1 isa T
                 @test isfinite(s0)
@@ -59,26 +76,25 @@ end
                 @test s1 == AK.randn_scalar(seed, alg, UInt64(43), T)
 
                 p0, p1 = AK.randn_pair(seed, alg, UInt64(21), T)
-                @test AK.randn_scalar(seed, alg, UInt64(42), T) == p0
-                @test AK.randn_scalar(seed, alg, UInt64(43), T) == p1
+                @test p0 == AK.randn_scalar(seed, alg, UInt64(42), T)
+                @test p1 == AK.randn_scalar(seed, alg, UInt64(43), T)
             end
         end
 
+        @test_throws ArgumentError AK.rand_open01(seed, AK.Philox(), UInt64(0), UInt32)
         @test_throws ArgumentError AK.randn_scalar(seed, AK.Philox(), UInt64(0), UInt32)
     end
 
 
     @testset "randn! explicit rng" begin
-        lengths = (0, 1, 31, 32, 33, 257, 1024)
-
         for alg in RANDN_ALGS
             rng = AK.CounterRNG(0x123456789abcdef; alg)
 
             for T in RANDN_FLOAT_TYPES_BACKEND
-                for len in lengths
+                for len in RANDN_LENGTHS
                     x = array_from_host(zeros(T, len))
                     _assert_randn_matches_reference!(rng, x; prefer_threads, block_size=64)
-                    @test _is_finite(Array(x))
+                    @test _all_finite(Array(x))
                 end
             end
 
@@ -87,16 +103,18 @@ end
                 x2 = array_from_host(zeros(T, 2048))
                 rng1 = AK.CounterRNG(rng.seed; alg=rng.alg)
                 rng2 = AK.CounterRNG(rng.seed; alg=rng.alg)
+
                 AK.randn!(rng1, x1; prefer_threads, block_size=64)
                 AK.randn!(rng2, x2; prefer_threads, block_size=257)
                 @test Array(x1) == Array(x2)
             end
 
             for T in RANDN_FLOAT_TYPES_BACKEND
-                rng1 = AK.CounterRNG(rng.seed; alg=rng.alg)
-                rng2 = AK.CounterRNG(rng.seed + UInt64(1); alg=rng.alg)
                 x1 = array_from_host(zeros(T, 2048))
                 x2 = array_from_host(zeros(T, 2048))
+                rng1 = AK.CounterRNG(rng.seed; alg=rng.alg)
+                rng2 = AK.CounterRNG(rng.seed + UInt64(1); alg=rng.alg)
+
                 AK.randn!(rng1, x1; prefer_threads, block_size=64)
                 AK.randn!(rng2, x2; prefer_threads, block_size=64)
                 @test Array(x1) != Array(x2)
@@ -105,11 +123,12 @@ end
     end
 
 
-    @testset "counter rng offset behavior" begin
+    @testset "offset and reset semantics" begin
         rng_stream = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox(), offset=UInt64(17))
         s1 = array_from_host(zeros(Float32, 99))
         s2 = array_from_host(zeros(Float32, 101))
         s12 = array_from_host(zeros(Float32, 200))
+
         AK.randn!(rng_stream, s1; prefer_threads, block_size=64)
         @test rng_stream.offset == UInt64(116)
         AK.randn!(rng_stream, s2; prefer_threads, block_size=64)
@@ -136,22 +155,7 @@ end
     end
 
 
-    @testset "reset!" begin
-        rng = AK.CounterRNG(0x123456789abcdef; alg=AK.Philox())
-        x1 = array_from_host(zeros(Float32, 512))
-        x2 = array_from_host(zeros(Float32, 512))
-
-        AK.randn!(rng, x1; prefer_threads, block_size=64)
-        @test rng.offset == UInt64(512)
-        @test AK.reset!(rng) === rng
-        @test rng.offset == UInt64(0)
-        AK.randn!(rng, x2; prefer_threads, block_size=64)
-
-        @test Array(x1) == Array(x2)
-    end
-
-
-    @testset "randn! n-dimensional and views" begin
+    @testset "shapes and views" begin
         rng = AK.CounterRNG(0x123456789abcdef; alg=AK.Philox())
 
         for T in RANDN_FLOAT_TYPES_BACKEND
@@ -163,12 +167,14 @@ end
             for T in RANDN_FLOAT_TYPES_BACKEND
                 base = zeros(T, 64)
                 view_x = @view base[2:2:end]
+
                 AK.randn!(
                     rng, view_x;
                     max_tasks=Threads.nthreads(),
                     min_elems=1,
-                    prefer_threads=true
+                    prefer_threads=true,
                 )
+
                 ref_view = zeros(T, length(view_x))
                 _randn_fill_reference!(
                     rng, ref_view;
@@ -201,6 +207,46 @@ end
         x_bad = zeros(UInt32, 16)
         @test_throws ArgumentError AK.randn!(x_bad; prefer_threads)
         @test_throws ArgumentError AK.randn!(AK.CounterRNG(0x1), x_bad; prefer_threads)
+    end
+
+
+    @testset "randn allocation convenience" begin
+        rng = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox())
+        y = AK.randn(rng, BACKEND, Float32, Int32(6), UInt16(7); prefer_threads, block_size=64)
+        @test size(y) == (6, 7)
+        @test eltype(y) === Float32
+        @test _all_finite(Array(y))
+        @test rng.offset == UInt64(length(y))
+
+        rng_alloc = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
+        rng_fill = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
+        y_alloc = AK.randn(rng_alloc, BACKEND, Float32, 128; prefer_threads, block_size=64)
+        y_fill = array_from_host(zeros(Float32, 128))
+        AK.randn!(rng_fill, y_fill; prefer_threads, block_size=64)
+        @test Array(y_alloc) == Array(y_fill)
+        @test rng_alloc.offset == rng_fill.offset == UInt64(128)
+
+        # Warm-up first call path so one-time compilation/backend init does not perturb RNG checks.
+        AK.randn(BACKEND, Float32, 1; prefer_threads, block_size=64)
+
+        # Auto-seeded constructor should match explicit seed capture from default RNG.
+        Random.seed!(0x9abc)
+        seed = Random.rand(Random.default_rng(), UInt64)
+        ref = AK.randn(AK.CounterRNG(seed; alg=AK.Philox()), BACKEND, Float32, 64; prefer_threads, block_size=64)
+        Random.seed!(0x9abc)
+        x = AK.randn(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        @test Array(x) == Array(ref)
+
+        # Reseeding should reproduce the same auto-seeded draw.
+        Random.seed!(0x7777)
+        x1 = AK.randn(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        Random.seed!(0x7777)
+        x2 = AK.randn(BACKEND, Float32, 64; prefer_threads, block_size=64)
+        @test Array(x1) == Array(x2)
+
+        @test_throws ArgumentError AK.randn(AK.CounterRNG(0x1), BACKEND, UInt32, 16; prefer_threads)
+        @test_throws MethodError AK.randn(AK.CounterRNG(0x1), BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
+        @test_throws MethodError AK.randn(BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
     end
 
 

@@ -7,7 +7,7 @@ import AcceleratedKernels as AK
 const N = 100_000_000
 const GPU_BLOCK_SIZE = 256
 
-const RNG_PHILOX = AK.CounterRNG(0x12345678; alg=AK.Philox())
+const RNG_PHILOX = AK.CounterRNG(0x12345678; alg=AK.Philox(), offset=0x0)
 
 TestType = Float32
 

@@ -147,3 +147,59 @@ function rand!(
 )
     return rand!(CounterRNG(), v, args...; kwargs...)
 end
+
+
+"""
+    rand(
+        rng::CounterRNG,
+        backend::Backend,
+        ::Type{T},
+        dims::Integer...;
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
+        prefer_threads::Bool=true,
+        block_size::Int=256,
+    ) where T
+
+Allocate an array of element type `T` on `backend` with shape `dims`, fill it in-place via
+[`rand!`](@ref), and return it.
+"""
+function rand(
+    rng::CounterRNG,
+    backend::Backend,
+    ::Type{T},
+    dims::Integer...;
+
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+    prefer_threads::Bool=true,
+
+    # GPU settings
+    block_size::Int=256,
+) where T
+    return _allocate_and_fill(
+        rand!, rng, backend, T, dims...;
+        max_tasks, min_elems, prefer_threads, block_size,
+    )
+end
+
+
+function rand(
+    backend::Backend,
+    ::Type{T},
+    dims::Integer...;
+    
+    # CPU settings
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
+    prefer_threads::Bool=true,
+
+    # GPU settings
+    block_size::Int=256,
+) where T
+    return rand(
+        CounterRNG(), backend, T, dims...;
+        max_tasks, min_elems, prefer_threads, block_size,
+    )
+end
