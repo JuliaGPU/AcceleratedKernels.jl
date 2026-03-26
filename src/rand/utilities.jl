@@ -16,15 +16,19 @@
 
 
 # Shared allocation + fill helper for rand/randn convenience constructors.
-@inline function _allocate_and_fill(
+@inline function _allocate_and_fill_rand(
     fill!,
     rng::CounterRNG,
     backend::Backend,
     ::Type{T},
     dims::Integer...;
+
+    # CPU settings
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
     prefer_threads::Bool=true,
+
+    # GPU settings
     block_size::Int=256,
 ) where {T}
     dims_int = Base.map(Int, dims)
@@ -34,13 +38,6 @@
 end
 
 
-# Internal scalar eltypes currently supported by rand!.
-const ALLOWED_RAND_SCALARS = Union{
-    UInt8, UInt16, UInt32, UInt64,
-    Int8, Int16, Int32, Int64,
-    Float16, Float32, Float64,
-    Bool
-}
 
 
 @inline _rand_scalar_uint_type(::Type{UInt8}) = UInt32

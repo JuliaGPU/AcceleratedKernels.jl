@@ -1,9 +1,11 @@
-const ALLOWED_RANDN_SCALARS = Union{Float16, Float32, Float64}
+const ALLOWED_RANDN_SCALARS = Union{
+    Float16, Float32, Float64
+}
 
-const U24_MAX_SAFE_MIDPOINT = UInt32(0x00fffffe)                 # 2^24 - 2
-const U53_MAX_SAFE_MIDPOINT = UInt64(0x001ffffffffffffe)         # 2^53 - 2
-const MIDPOINT_SCALE_F32 = ldexp(Float32(1), -24)                # 2^-24
-const MIDPOINT_SCALE_F64 = ldexp(Float64(1), -53)                # 2^-53
+const OPEN01_MAX_MIDPOINT_INDEX_F32 = UInt32(0x00fffffe)
+const OPEN01_MAX_MIDPOINT_INDEX_F64 = UInt64(0x001ffffffffffffe)
+const OPEN01_MIDPOINT_SCALE_F32 = ldexp(Float32(1), -24)
+const OPEN01_MIDPOINT_SCALE_F64 = ldexp(Float64(1), -53)
 
 
 
@@ -19,16 +21,16 @@ Avoiding 0 is essential for Box-Muller due to the logarithm functions.
 # Convert random UInt32 bits to Float32 in (0, 1) using midpoint mapping on a 24-bit grid.
 @inline function uint32_to_open_unit_float32_midpoint(u::UInt32)::Float32
     # `min` keeps the top midpoint below one after Float32 rounding.
-    k = min(u >> 8, U24_MAX_SAFE_MIDPOINT)
-    return (Float32(k) + 0.5f0) * MIDPOINT_SCALE_F32
+    k = min(u >> 8, OPEN01_MAX_MIDPOINT_INDEX_F32)
+    return (Float32(k) + 0.5f0) * OPEN01_MIDPOINT_SCALE_F32
 end
 
 
 # Convert random UInt64 bits to Float64 in (0, 1) using midpoint mapping on a 53-bit grid.
 @inline function uint64_to_open_unit_float64_midpoint(u::UInt64)::Float64
     # `min` keeps the top midpoint below one after Float64 rounding.
-    k = min(u >> 11, U53_MAX_SAFE_MIDPOINT)
-    return (Float64(k) + 0.5) * MIDPOINT_SCALE_F64
+    k = min(u >> 11, OPEN01_MAX_MIDPOINT_INDEX_F64)
+    return (Float64(k) + 0.5) * OPEN01_MIDPOINT_SCALE_F64
 end
 
 
@@ -201,8 +203,6 @@ end
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1,
-
-        # Implementation choice
         prefer_threads::Bool=true,
 
         # GPU settings
@@ -215,6 +215,8 @@ For `v[i]`, the normal stream counter is `rng.offset + UInt64(i - 1)` in linear 
 Values are generated using Box-Muller from midpoint-open uniforms in `(0, 1)`.
 
 After filling `v`, `rng.offset` advances by `length(v)`.
+
+It can be called without an `rng`, in which case the default `CounterRNG` will be used.
 """
 function randn!(
     rng::CounterRNG,
@@ -269,9 +271,13 @@ end
         backend::Backend,
         ::Type{T},
         dims::Integer...;
+
+        # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1,
         prefer_threads::Bool=true,
+
+        # GPU settings
         block_size::Int=256,
     ) where T
 
@@ -283,12 +289,17 @@ function randn(
     backend::Backend,
     ::Type{T},
     dims::Integer...;
+
+    # CPU settings
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
     prefer_threads::Bool=true,
+
+    # GPU settings
     block_size::Int=256,
 ) where T
-    return _allocate_and_fill(
+    @argcheck T <: ALLOWED_RANDN_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RANDN_SCALARS)"
+    return _allocate_and_fill_rand(
         randn!, rng, backend, T, dims...;
         max_tasks, min_elems, prefer_threads, block_size,
     )
@@ -299,9 +310,13 @@ function randn(
     backend::Backend,
     ::Type{T},
     dims::Integer...;
+
+    # CPU settings
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
     prefer_threads::Bool=true,
+
+    # GPU settings
     block_size::Int=256,
 ) where T
     return randn(

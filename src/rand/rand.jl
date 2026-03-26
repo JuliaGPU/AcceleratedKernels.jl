@@ -1,3 +1,10 @@
+const ALLOWED_RAND_SCALARS = Union{
+    UInt8, UInt16, UInt32, UInt64,
+    Int8, Int16, Int32, Int64,
+    Float16, Float32, Float64,
+    Bool
+}
+
 abstract type CounterRNGAlgorithm end
 
 
@@ -92,7 +99,8 @@ include("randn.jl")
 Fill `v` in-place with pseudo-random values using a counter-based RNG stream. For `v[i]`, the
 counter is `rng.offset + UInt64(i - 1)` in linear indexing order.
 
-After filling `v`, `rng.offset` advances by `length(v)`.
+After filling `v`, `rng.offset` advances by `length(v)`. It can be called without `rng`, in which
+case the default `CounterRNG` is used.
 
 Supported scalar element types are:
 - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -155,9 +163,13 @@ end
         backend::Backend,
         ::Type{T},
         dims::Integer...;
+
+        # CPU settings
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1,
         prefer_threads::Bool=true,
+
+        # GPU settings
         block_size::Int=256,
     ) where T
 
@@ -178,7 +190,8 @@ function rand(
     # GPU settings
     block_size::Int=256,
 ) where T
-    return _allocate_and_fill(
+    @argcheck T <: ALLOWED_RAND_SCALARS "Unsupported eltype $T. Supported: $(ALLOWED_RAND_SCALARS)"
+    return _allocate_and_fill_rand(
         rand!, rng, backend, T, dims...;
         max_tasks, min_elems, prefer_threads, block_size,
     )

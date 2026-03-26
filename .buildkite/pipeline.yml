@@ -88,14 +88,13 @@ steps:
       - JuliaCI/julia#v1:
           version: "1.10"
     command: |
-      julia -e 'using Pkg
+      julia --pkgimages=no -e 'using Pkg
 
-                println("--- :julia: Instantiating environment")
-                Pkg.add("oneAPI")
-                Pkg.develop(path=".")
-
-                println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
+                               println("--- :julia: Instantiating environment")
+                               Pkg.add("oneAPI")
+                               Pkg.develop(path=".") 
+                               println("+++ :julia: Running tests")
+                               Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
     agents:
       queue: "juliagpu"
       intel: "*"
