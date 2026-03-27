@@ -365,12 +365,24 @@ end
 
 
     @testset "rand allocation convenience" begin
+        default_alloc_type = IS_CPU_BACKEND ? Float64 : Float32
+
         rng = AK.CounterRNG(UInt64(0x1234); alg=AK.Philox())
         y = AK.rand(rng, BACKEND, Float32, Int32(6), UInt16(7); prefer_threads, block_size=64)
         @test size(y) == (6, 7)
         @test eltype(y) === Float32
         @test _is_unit_interval(Array(y))
         @test rng.offset == UInt64(length(y))
+
+        rng_default = AK.CounterRNG(UInt64(0x99); alg=AK.Philox())
+        rng_default_ref = AK.CounterRNG(UInt64(0x99); alg=AK.Philox())
+        y_default = AK.rand(rng_default, BACKEND, 128; prefer_threads, block_size=64)
+        y_default_ref = AK.rand(
+            rng_default_ref, BACKEND, default_alloc_type, 128; prefer_threads, block_size=64
+        )
+        @test eltype(y_default) === default_alloc_type
+        @test Array(y_default) == Array(y_default_ref)
+        @test rng_default.offset == rng_default_ref.offset == UInt64(128)
 
         rng_alloc = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
         rng_fill = AK.CounterRNG(UInt64(0x55); alg=AK.Philox())
@@ -379,6 +391,26 @@ end
         AK.rand!(rng_fill, y_fill; prefer_threads, block_size=64)
         @test Array(y_alloc) == Array(y_fill)
         @test rng_alloc.offset == rng_fill.offset == UInt64(128)
+
+        rng_cpu_default = AK.CounterRNG(UInt64(0x66); alg=AK.Philox())
+        rng_cpu_default_ref = AK.CounterRNG(UInt64(0x66); alg=AK.Philox())
+        y_cpu_default = AK.rand(rng_cpu_default, 128; prefer_threads, block_size=64)
+        y_cpu_default_ref = AK.rand(
+            rng_cpu_default_ref, AK.get_backend([]), 128; prefer_threads, block_size=64
+        )
+        @test eltype(y_cpu_default) === Float64
+        @test Array(y_cpu_default) == Array(y_cpu_default_ref)
+        @test rng_cpu_default.offset == rng_cpu_default_ref.offset == UInt64(128)
+
+        rng_cpu_typed = AK.CounterRNG(UInt64(0x77); alg=AK.Philox())
+        rng_cpu_typed_ref = AK.CounterRNG(UInt64(0x77); alg=AK.Philox())
+        y_cpu_typed = AK.rand(rng_cpu_typed, Float32, 128; prefer_threads, block_size=64)
+        y_cpu_typed_ref = AK.rand(
+            rng_cpu_typed_ref, AK.get_backend([]), Float32, 128; prefer_threads, block_size=64
+        )
+        @test eltype(y_cpu_typed) === Float32
+        @test Array(y_cpu_typed) == Array(y_cpu_typed_ref)
+        @test rng_cpu_typed.offset == rng_cpu_typed_ref.offset == UInt64(128)
 
         # Warm-up first call path so one-time compilation/backend init does not perturb RNG checks.
         AK.rand(BACKEND, Float32, 1; prefer_threads, block_size=64)
@@ -391,6 +423,54 @@ end
         x = AK.rand(BACKEND, Float32, 64; prefer_threads, block_size=64)
         @test Array(x) == Array(ref)
 
+        # Auto-seeded convenience without explicit type should use backend-dependent default type.
+        Random.seed!(0x4242)
+        seed_default = Random.rand(Random.default_rng(), UInt64)
+        ref_default = AK.rand(
+            AK.CounterRNG(seed_default; alg=AK.Philox()),
+            BACKEND,
+            default_alloc_type,
+            64;
+            prefer_threads,
+            block_size=64,
+        )
+        Random.seed!(0x4242)
+        x_default = AK.rand(BACKEND, 64; prefer_threads, block_size=64)
+        @test eltype(x_default) === default_alloc_type
+        @test Array(x_default) == Array(ref_default)
+
+        # Convenience without backend should default to CPU backend and Float64.
+        Random.seed!(0x4545)
+        seed_cpu_default = Random.rand(Random.default_rng(), UInt64)
+        ref_cpu_default = AK.rand(
+            AK.CounterRNG(seed_cpu_default; alg=AK.Philox()),
+            AK.get_backend([]),
+            Float64,
+            64;
+            prefer_threads,
+            block_size=64,
+        )
+        Random.seed!(0x4545)
+        x_cpu_default = AK.rand(64; prefer_threads, block_size=64)
+        @test eltype(x_cpu_default) === Float64
+        @test Array(x_cpu_default) == Array(ref_cpu_default)
+
+        # Type-only convenience should default to CPU backend.
+        Random.seed!(0x5656)
+        seed_cpu_typed = Random.rand(Random.default_rng(), UInt64)
+        ref_cpu_typed = AK.rand(
+            AK.CounterRNG(seed_cpu_typed; alg=AK.Philox()),
+            AK.get_backend([]),
+            Float32,
+            64;
+            prefer_threads,
+            block_size=64,
+        )
+        Random.seed!(0x5656)
+        x_cpu_typed_no_rng = AK.rand(Float32, 64; prefer_threads, block_size=64)
+        @test eltype(x_cpu_typed_no_rng) === Float32
+        @test Array(x_cpu_typed_no_rng) == Array(ref_cpu_typed)
+
         # Reseeding should reproduce the same auto-seeded draw.
         Random.seed!(0x7777)
         x1 = AK.rand(BACKEND, Float32, 64; prefer_threads, block_size=64)
@@ -401,5 +481,8 @@ end
         @test_throws ArgumentError AK.rand(AK.CounterRNG(0x1), BACKEND, UInt128, 16; prefer_threads)
         @test_throws MethodError AK.rand(AK.CounterRNG(0x1), BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
         @test_throws MethodError AK.rand(BACKEND, Float32, 16; prefer_threads, bad=:kwarg)
+        @test_throws MethodError AK.rand(BACKEND, 16; prefer_threads, bad=:kwarg)
+        @test_throws MethodError AK.rand(16; prefer_threads, bad=:kwarg)
+        @test_throws ArgumentError AK.rand()
     end
 end

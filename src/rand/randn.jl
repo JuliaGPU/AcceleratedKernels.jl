@@ -2,76 +2,6 @@ const ALLOWED_RANDN_SCALARS = Union{
     Float16, Float32, Float64
 }
 
-const OPEN01_MAX_MIDPOINT_INDEX_F32 = UInt32(0x00fffffe)
-const OPEN01_MAX_MIDPOINT_INDEX_F64 = UInt64(0x001ffffffffffffe)
-const OPEN01_MIDPOINT_SCALE_F32 = ldexp(Float32(1), -24)
-const OPEN01_MIDPOINT_SCALE_F64 = ldexp(Float64(1), -53)
-
-
-
-
-#=
-The below Float constructions are not duplicates of those in utilities.jl - they are needed to
-ensure an interval of (0, 1) as opposed to [0, 1). Achieving this purely logically with midpoint
-mapping means we can avoid a check for producing a 0 (which would normally cause a redraw).
-Avoiding 0 is essential for Box-Muller due to the logarithm functions.
-=#
-
-
-# Convert random UInt32 bits to Float32 in (0, 1) using midpoint mapping on a 24-bit grid.
-@inline function uint32_to_open_unit_float32_midpoint(u::UInt32)::Float32
-    # `min` keeps the top midpoint below one after Float32 rounding.
-    k = min(u >> 8, OPEN01_MAX_MIDPOINT_INDEX_F32)
-    return (Float32(k) + 0.5f0) * OPEN01_MIDPOINT_SCALE_F32
-end
-
-
-# Convert random UInt64 bits to Float64 in (0, 1) using midpoint mapping on a 53-bit grid.
-@inline function uint64_to_open_unit_float64_midpoint(u::UInt64)::Float64
-    # `min` keeps the top midpoint below one after Float64 rounding.
-    k = min(u >> 11, OPEN01_MAX_MIDPOINT_INDEX_F64)
-    return (Float64(k) + 0.5) * OPEN01_MIDPOINT_SCALE_F64
-end
-
-
-# Float16 path reuses Float32 midpoint sampling for robust math in Box-Muller.
-@inline function rand_open01(
-    seed::UInt64,
-    alg::CounterRNGAlgorithm,
-    counter::UInt64,
-    ::Type{Float16},
-)::Float16
-    return Float16(rand_open01(seed, alg, counter, Float32))
-end
-
-
-@inline function rand_open01(
-    seed::UInt64,
-    alg::CounterRNGAlgorithm,
-    counter::UInt64,
-    ::Type{Float32},
-)::Float32
-    return uint32_to_open_unit_float32_midpoint(rand_uint(seed, alg, counter, UInt32))
-end
-
-
-@inline function rand_open01(
-    seed::UInt64,
-    alg::CounterRNGAlgorithm,
-    counter::UInt64,
-    ::Type{Float64},
-)::Float64
-    return uint64_to_open_unit_float64_midpoint(rand_uint(seed, alg, counter, UInt64))
-end
-
-
-@inline function rand_open01(::UInt64, ::CounterRNGAlgorithm, ::UInt64, ::Type{T}) where {T}
-    throw(ArgumentError(
-        "Unsupported open-interval random type $(T). Supported: $(ALLOWED_RANDN_SCALARS)"
-    ))
-end
-
-
 @inline function randn_pair(
     seed::UInt64,
     alg::CounterRNGAlgorithm,
@@ -90,8 +20,8 @@ end
     ::Type{Float32},
 )::Tuple{Float32, Float32}
     u = rand_uint(seed, alg, pair_counter, UInt64)
-    u1 = uint32_to_open_unit_float32_midpoint(_u32_lo(u))
-    u2 = uint32_to_open_unit_float32_midpoint(_u32_hi(u))
+    u1 = _uint32_to_open_unit_float32_midpoint(_u32_lo(u))
+    u2 = _uint32_to_open_unit_float32_midpoint(_u32_hi(u))
     radius = sqrt(-2.0f0 * log(u1))
     theta = Float32(2pi) * u2
     stheta, ctheta = sincos(theta)
@@ -106,8 +36,8 @@ end
     ::Type{Float64},
 )::Tuple{Float64, Float64}
     c0 = pair_counter << 1
-    u1 = rand_open01(seed, alg, c0, Float64)
-    u2 = rand_open01(seed, alg, c0 + UInt64(1), Float64)
+    u1 = rand_float_open01(seed, alg, c0, Float64)
+    u2 = rand_float_open01(seed, alg, c0 + UInt64(1), Float64)
     radius = sqrt(-2.0 * log(u1))
     theta = Float64(2pi) * u2
     stheta, ctheta = sincos(theta)
@@ -256,13 +186,7 @@ function randn!(
 end
 
 
-function randn!(
-    v::AbstractArray,
-    args...;
-    kwargs...,
-)
-    return randn!(CounterRNG(), v, args...; kwargs...)
-end
+randn!(v::AbstractArray, args...; kwargs...) = randn!(CounterRNG(), v, args...; kwargs...)
 
 
 """
@@ -283,6 +207,11 @@ end
 
 Allocate an array of element type `T` on `backend` with shape `dims`, fill it in-place via
 [`randn!`](@ref), and return it.
+
+Convenience overloads:
+- `rng` omitted: uses a fresh `CounterRNG()`.
+- `backend` omitted: defaults to `CPU_BACKEND`.
+- `T` omitted: defaults by backend (`Float64` on CPU backend, `Float32` otherwise).
 """
 function randn(
     rng::CounterRNG,
@@ -306,21 +235,14 @@ function randn(
 end
 
 
-function randn(
-    backend::Backend,
-    ::Type{T},
-    dims::Integer...;
-
-    # CPU settings
-    max_tasks::Int=Threads.nthreads(),
-    min_elems::Int=1,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int=256,
-) where T
-    return randn(
-        CounterRNG(), backend, T, dims...;
-        max_tasks, min_elems, prefer_threads, block_size,
-    )
+function randn(rng::CounterRNG, backend::Backend, dims::Integer...; kwargs...)
+    DefaultScalarType = (backend == CPU_BACKEND) ? Float64 : Float32
+    randn(rng, backend, DefaultScalarType, dims...; kwargs...)
 end
+
+
+randn(rng::CounterRNG, args...; kwargs...) = randn(rng, CPU_BACKEND, args...; kwargs...)
+randn(backend::Backend, args...; kwargs...) = randn(CounterRNG(), backend, args...; kwargs...)
+randn(::Type{T}, dims::Integer...; kwargs...) where {T} = randn(CPU_BACKEND, T, dims...; kwargs...)
+randn(dims::Integer...; kwargs...) = randn(CPU_BACKEND, dims...; kwargs...)
+randn(; kwargs...) = throw(ArgumentError("randn requires at least one dimension"))

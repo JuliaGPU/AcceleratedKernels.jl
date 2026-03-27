@@ -148,13 +148,7 @@ function rand!(
 end
 
 
-function rand!(
-    v::AbstractArray,
-    args...;
-    kwargs...,
-)
-    return rand!(CounterRNG(), v, args...; kwargs...)
-end
+rand!(v::AbstractArray, args...; kwargs...) = rand!(CounterRNG(), v, args...; kwargs...)
 
 
 """
@@ -175,6 +169,11 @@ end
 
 Allocate an array of element type `T` on `backend` with shape `dims`, fill it in-place via
 [`rand!`](@ref), and return it.
+
+Convenience overloads:
+- `rng` omitted: uses a fresh `CounterRNG()`.
+- `backend` omitted: defaults to `CPU_BACKEND`.
+- `T` omitted: defaults by backend (`Float64` on CPU backend, `Float32` otherwise).
 """
 function rand(
     rng::CounterRNG,
@@ -198,21 +197,16 @@ function rand(
 end
 
 
-function rand(
-    backend::Backend,
-    ::Type{T},
-    dims::Integer...;
-    
-    # CPU settings
-    max_tasks::Int=Threads.nthreads(),
-    min_elems::Int=1,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int=256,
-) where T
-    return rand(
-        CounterRNG(), backend, T, dims...;
-        max_tasks, min_elems, prefer_threads, block_size,
-    )
+function rand(rng::CounterRNG, backend::Backend, dims::Integer...; kwargs...)
+    DefaultScalarType = (backend == CPU_BACKEND) ? Float64 : Float32
+    rand(rng, backend, DefaultScalarType, dims...; kwargs...)
 end
+
+
+rand(rng::CounterRNG, args...; kwargs...) = rand(rng, CPU_BACKEND, args...; kwargs...)
+rand(backend::Backend, args...; kwargs...) = rand(CounterRNG(), backend, args...; kwargs...)
+rand(::Type{T}, dims::Integer...; kwargs...) where {T} = rand(CPU_BACKEND, T, dims...; kwargs...)
+rand(dims::Integer...; kwargs...) = rand(CPU_BACKEND, dims...; kwargs...)
+rand(; kwargs...) = throw(ArgumentError("rand requires at least one dimension"))
+
+

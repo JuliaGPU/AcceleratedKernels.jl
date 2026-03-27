@@ -48,6 +48,4 @@ display(@benchmark run_cuda_randn!($x_cuda))
 println("\nAK.randn! Philox benchmark (GPU, CuArray{$TestType})")
 display(@benchmark run_ak_randn_gpu!($RNG_PHILOX, $x_philox))
 
-# println("\nAK.randn! benchmark (CPU, Vector{$TestType}, Philox)")
-# display(@benchmark run_ak_randn_cpu!($RNG_PHILOX, $x_cpu))
 

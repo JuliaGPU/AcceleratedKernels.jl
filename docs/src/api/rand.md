@@ -3,6 +3,10 @@
 Counter-based random generation for CPU and GPU backends with deterministic stream behavior for
 fixed `seed`, algorithm, and call sequence.
 
+Both in-place and allocation forms are supported:
+- Uniform: `AK.rand!`, `AK.rand`
+- Standard normal: `AK.randn!`, `AK.randn`
+
 `CounterRNG` carries an internal `offset` (starting at `0`) that advances by `length(v)` on each
 `AK.rand!(rng, v)` call. This means chunked fills are stream-consistent:
 - filling `100` then `100` elements yields the same `200` values as one `200`-element fill.
@@ -16,8 +20,15 @@ Use an explicit `CounterRNG` when reproducibility is required. For
 convenience,
 `AK.rand!(v)` creates a fresh `CounterRNG()` on each call using one auto-seeded
 `Base.rand(UInt64)` draw, so repeated calls produce different outputs unless Random.seed!() is used.
+Likewise, `AK.rand(backend, args...)` creates a fresh auto-seeded `CounterRNG()` on each call.
 
 `AK.reset!(rng::AK.CounterRNG)` rewinds `rng.offset` to `0x0`.
+
+Allocation convenience:
+- Canonical forms are `AK.rand(rng, backend, T, dims...)` and `AK.randn(rng, backend, T, dims...)`.
+- Defaults are shared: omit `rng` -> fresh `CounterRNG()`; omit `backend` -> CPU backend; omit `T` -> `Float64` on CPU backend and `Float32` otherwise.
+- Common shorthands include `AK.rand(dims...)`, `AK.rand(T, dims...)`, `AK.rand(backend, dims...)`, and the corresponding `AK.randn(...)` variants.
+- For explicit `rng`, both `AK.rand` and `AK.randn` advance `rng.offset` by `prod(dims)`.
 
 Custom algorithms:
 - Define an algorithm type `MyAlg <: AK.CounterRNGAlgorithm`.
@@ -38,6 +49,9 @@ Supported element types:
 - `Float16`, `Float32`, `Float64`
 
 `AK.randn!` uses Box-Muller with open-interval uniforms in `(0, 1)` from a branch-free midpoint mapping.
+
+`AK.randn!(v)` and `AK.randn(backend, args...)` create a fresh auto-seeded `CounterRNG()` on each
+call, so repeated calls produce different outputs unless `Random.seed!()` is used.
 
 The core of the random number generation produces either a `UInt32` or `UInt64` depending on the width of the requested element type.
 That `UInt` is then either:
@@ -72,6 +86,7 @@ Examples:
 ```julia
 import AcceleratedKernels as AK
 using oneAPI
+using ROCArray
 
 # Reproducible
 rng = AK.CounterRNG(0x12345678; alg=AK.Philox())
@@ -88,9 +103,19 @@ AK.rand!(rng, v2)
 y = oneArray{Float32}(undef, 1024)
 AK.rand!(y)
 
-# Standard normal samples
-z = oneArray{Float32}(undef, 1024)
+# Allocation form
+y_cpu_auto = AK.rand(1024)                               # defaults to CPU, Vector{Float64}
+y_oneArray = AK.rand(oneAPIBackend(), Float32, 1024)     # fresh RNG, allocate and fill oneArray
+y_cpu_typed = AK.rand(rng, Float16, 1024)                # CPU backend, explicit type, explicit RNG
+
+# Standard normal filling
+z = ROCArray{Float32}(undef, 1024)
 AK.randn!(rng, z)
+
+# Standard normal allocation form
+z_cpu_auto = AK.randn(1024)                              # defaults to CPU, Vector{Float64}
+z_ROCArray = AK.randn(oneAPIBackend(), 1024)             # allocate and fill ROCArray{Float32}
+z_cpu_typed = AK.randn(rng, Float16, 1024)               # CPU backend, explicit type, explicit RNG
 ```
 
 ```@docs
@@ -98,5 +123,7 @@ AcceleratedKernels.CounterRNG
 AcceleratedKernels.CounterRNGAlgorithm
 AcceleratedKernels.reset!
 AcceleratedKernels.rand!
+AcceleratedKernels.rand
 AcceleratedKernels.randn!
+AcceleratedKernels.randn
 ```

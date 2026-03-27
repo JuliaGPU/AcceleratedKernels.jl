@@ -1,8 +1,7 @@
 [deps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
 AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Cthulhu = "f68482b8-f384-11e8-15f7-abe071a5a75f"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
-PProf = "e4faabce-9ead-11e9-39d9-4379958e3056"
-Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"

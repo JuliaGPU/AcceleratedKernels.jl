@@ -143,3 +143,70 @@ end
     # Interpret as 1.mantissa, then subtract 1 for [0, 1)
     reinterpret(Float64, bits) - 1.0
 end
+
+
+
+
+
+### Helpers for randn ###
+
+
+# Midpoint-mapped open-interval Float sampling in (0, 1), used for Box-Muller
+const OPEN01_MAX_MIDPOINT_INDEX_F32 = UInt32(0x00fffffe)
+const OPEN01_MAX_MIDPOINT_INDEX_F64 = UInt64(0x001ffffffffffffe)
+const OPEN01_MIDPOINT_SCALE_F32 = ldexp(Float32(1), -24)
+const OPEN01_MIDPOINT_SCALE_F64 = ldexp(Float64(1), -53)
+
+
+# Convert random UInt32 bits to Float32 in (0, 1) using midpoint mapping on a 24-bit grid.
+@inline function _uint32_to_open_unit_float32_midpoint(u::UInt32)::Float32
+    # `min` keeps the top midpoint below one after Float32 rounding.
+    k = min(u >> 8, OPEN01_MAX_MIDPOINT_INDEX_F32)
+    return (Float32(k) + 0.5f0) * OPEN01_MIDPOINT_SCALE_F32
+end
+
+
+# Convert random UInt64 bits to Float64 in (0, 1) using midpoint mapping on a 53-bit grid.
+@inline function _uint64_to_open_unit_float64_midpoint(u::UInt64)::Float64
+    # `min` keeps the top midpoint below one after Float64 rounding.
+    k = min(u >> 11, OPEN01_MAX_MIDPOINT_INDEX_F64)
+    return (Float64(k) + 0.5) * OPEN01_MIDPOINT_SCALE_F64
+end
+
+
+# Float16 path reuses Float32 midpoint sampling for robust math in Box-Muller.
+@inline function rand_float_open01(
+    seed::UInt64,
+    alg::CounterRNGAlgorithm,
+    counter::UInt64,
+    ::Type{Float16},
+)::Float16
+    return Float16(rand_float_open01(seed, alg, counter, Float32))
+end
+
+
+@inline function rand_float_open01(
+    seed::UInt64,
+    alg::CounterRNGAlgorithm,
+    counter::UInt64,
+    ::Type{Float32},
+)::Float32
+    return _uint32_to_open_unit_float32_midpoint(rand_uint(seed, alg, counter, UInt32))
+end
+
+
+@inline function rand_float_open01(
+    seed::UInt64,
+    alg::CounterRNGAlgorithm,
+    counter::UInt64,
+    ::Type{Float64},
+)::Float64
+    return _uint64_to_open_unit_float64_midpoint(rand_uint(seed, alg, counter, UInt64))
+end
+
+
+@inline function rand_float_open01(::UInt64, ::CounterRNGAlgorithm, ::UInt64, ::Type{T}) where {T}
+    throw(ArgumentError(
+        "Unsupported open-interval random type $(T). Supported: Union{Float16, Float32, Float64}"
+    ))
+end
