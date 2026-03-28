@@ -72,6 +72,34 @@ end
 Every RNG algorithm implements rand_uint(seed, alg, counter, UInt32/UInt64).
 This is the fallback for unsupported RNG algorithms.
 =#
+"""
+    rand_uint(seed::UInt64, alg::CounterRNGAlgorithm, counter::UInt64, ::Type{UIntType}) -> UIntType
+    where {UIntType <: Union{UInt32, UInt64}}
+
+Low-level extension point for counter-based RNG algorithms used by [`CounterRNG`](@ref).
+
+`rand_uint` must deterministically map `(seed, alg, counter)` to a raw unsigned integer of the
+requested width. Custom algorithms should implement methods for both:
+
+- `rand_uint(seed::UInt64, alg::MyAlg, counter::UInt64, ::Type{UInt32})::UInt32`
+- `rand_uint(seed::UInt64, alg::MyAlg, counter::UInt64, ::Type{UInt64})::UInt64`
+
+These methods are used internally by [`rand!`](@ref), [`rand`](@ref), [`randn!`](@ref), and
+[`randn`](@ref) to generate integers, floats, and normal samples.
+
+# Requirements
+- The mapping must be deterministic for fixed `seed`, `alg`, and `counter`.
+- Implement both `UInt32` and `UInt64` widths.
+- The method should return raw random bits; higher-level type conversion is handled by AK separately.
+
+# Notes
+- `counter` is the logical stream position (typically the array index).
+- For block-based algorithms such as Philox or Threefry, the `UInt32` and `UInt64` methods may
+  share an internal block computation.
+- The fallback method throws an `ArgumentError` for algorithms that do not implement `rand_uint`.
+
+See also: [`CounterRNGAlgorithm`](@ref), [`CounterRNG`](@ref).
+"""
 @inline function rand_uint(
     ::UInt64,
     alg::CounterRNGAlgorithm,

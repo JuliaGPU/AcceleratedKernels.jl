@@ -5,6 +5,15 @@ const ALLOWED_RAND_SCALARS = Union{
     Bool
 }
 
+
+"""
+    CounterRNGAlgorithm
+
+Abstract supertype for algorithms used by [`CounterRNG`](@ref).
+
+To define a custom counter-based RNG algorithm, subtype `CounterRNGAlgorithm` and implement
+[`rand_uint`](@ref) for both `UInt32` and `UInt64` outputs.
+"""
 abstract type CounterRNGAlgorithm end
 
 
