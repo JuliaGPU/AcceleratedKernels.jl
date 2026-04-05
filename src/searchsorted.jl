@@ -70,9 +70,9 @@ end
 
 """
     searchsortedfirst!(
-        ix::AbstractVector,
+        ix::AbstractArray,
         v::AbstractVector,
-        x::AbstractVector,
+        x::AbstractArray,
         backend::Backend=get_backend(x);
 
         by=identity, lt=isless, rev::Bool=false,
@@ -89,9 +89,9 @@ Equivalent to applying `searchsortedfirst!` element-wise to each element of `x`.
 settings are the same as for [`foreachindex`](@ref).
 """
 function searchsortedfirst!(
-    ix::AbstractVector,
+    ix::AbstractArray,
     v::AbstractVector,
-    x::AbstractVector,
+    x::AbstractArray,
     backend::Backend=get_backend(x);
 
     by=identity, lt=isless, rev::Bool=false,
@@ -102,7 +102,7 @@ function searchsortedfirst!(
     kwargs...
 )
     # Simple sanity checks
-    @argcheck length(ix) == length(x)
+    @argcheck size(ix) == size(x)
 
     # Construct comparator
     ord = Base.Order.ord(lt, by, rev)
@@ -120,7 +120,7 @@ end
 """
     searchsortedfirst(
         v::AbstractVector,
-        x::AbstractVector,
+        x::AbstractArray,
         backend::Backend=get_backend(x);
 
         by=identity, lt=isless, rev::Bool=false,
@@ -138,7 +138,7 @@ settings are the same as for [`foreachindex`](@ref).
 """
 function searchsortedfirst(
     v::AbstractVector,
-    x::AbstractVector,
+    x::AbstractArray,
     backend::Backend=get_backend(x);
     kwargs...
 )
@@ -153,9 +153,9 @@ end
 
 """
     searchsortedlast!(
-        ix::AbstractVector,
+        ix::AbstractArray,
         v::AbstractVector,
-        x::AbstractVector,
+        x::AbstractArray,
         backend::Backend=get_backend(x);
 
         by=identity, lt=isless, rev::Bool=false,
@@ -172,9 +172,9 @@ Equivalent to applying `searchsortedlast!` element-wise to each element of `x`. 
 settings are the same as for [`foreachindex`](@ref).
 """
 function searchsortedlast!(
-    ix::AbstractVector,
+    ix::AbstractArray,
     v::AbstractVector,
-    x::AbstractVector,
+    x::AbstractArray,
     backend::Backend=get_backend(x);
 
     by=identity, lt=isless, rev::Bool=false,
@@ -185,7 +185,7 @@ function searchsortedlast!(
     kwargs...
 )
     # Simple sanity checks
-    @argcheck length(ix) == length(x)
+    @argcheck size(ix) == size(x)
 
     # Construct comparator
     ord = Base.Order.ord(lt, by, rev)
@@ -203,7 +203,7 @@ end
 """
     searchsortedlast(
         v::AbstractVector,
-        x::AbstractVector,
+        x::AbstractArray,
         backend::Backend=get_backend(x);
 
         by=identity, lt=isless, rev::Bool=false,
@@ -221,7 +221,7 @@ settings are the same as for [`foreachindex`](@ref).
 """
 function searchsortedlast(
     v::AbstractVector,
-    x::AbstractVector,
+    x::AbstractArray,
     backend::Backend=get_backend(x);
     kwargs...
 )

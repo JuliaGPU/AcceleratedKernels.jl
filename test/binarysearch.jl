@@ -66,6 +66,32 @@
         @test all(Array(ix) .== ixh .== ixh_base)
     end
 
+    # Testing searchsortedfirst with multidimensional x and ix
+    v = array_from_host(sort(rand(Int32, 100_000)))
+    x = array_from_host(rand(Int32, 1000, 5))
+    ix = similar(x, Int32)
+    AK.searchsortedfirst!(ix, v, x; prefer_threads)
+
+    vh = Array(v)
+    xh = Array(x)
+    ixh = AK.searchsortedfirst(vh, xh; prefer_threads)
+    ixh_base = [searchsortedfirst(vh, e) for e in xh]
+
+    @test all(Array(ix) .== ixh .== ixh_base)
+
+    # Testing searchsortedlast with multidimensional x and ix
+    v = array_from_host(sort(rand(Int32, 100_000)))
+    x = array_from_host(rand(Int32, 1000, 5))
+    ix = similar(x, Int32)
+    AK.searchsortedlast!(ix, v, x; prefer_threads)
+
+    vh = Array(v)
+    xh = Array(x)
+    ixh = AK.searchsortedlast(vh, xh; prefer_threads)
+    ixh_base = [searchsortedlast(vh, e) for e in xh]
+
+    @test all(Array(ix) .== ixh .== ixh_base)
+
     # Testing different settings
     v = array_from_host(sort(rand(Int32, 100_000)))
     x = array_from_host(rand(Int32, 10_000))
