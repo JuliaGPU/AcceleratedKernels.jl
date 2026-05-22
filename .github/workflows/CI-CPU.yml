@@ -58,7 +58,7 @@ jobs:
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         env:
@@ -78,7 +78,7 @@ jobs:
         with:
           version: 1
           arch: x64
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -98,7 +98,7 @@ jobs:
   #       with:
   #         version: 1
   #         arch: x64
-  #     - uses: julia-actions/cache@v2
+  #     - uses: julia-actions/cache@v3
   #     - uses: julia-actions/julia-buildpkg@v1
   #     - uses: julia-actions/julia-runtest@v1
   #       with:
