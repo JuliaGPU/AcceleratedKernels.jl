@@ -7,7 +7,8 @@ include("mapreduce_nd.jl")
 
 """
     reduce(
-        op, src::AbstractArray, backend::Backend=get_backend(src);
+        op, src::AbstractArray;
+        backend::Backend=get_backend(src),
         init,
         neutral=neutral_element(op, eltype(src)),
         dims::Union{Nothing, Int}=nothing,
@@ -74,13 +75,14 @@ mcolsum = AK.reduce(+, m; init=zero(eltype(m)), dims=2)
 ```
 """
 function reduce(
-    op, src::AbstractArray, backend::Backend=get_backend(src);
+    op, src::AbstractArray;
+    backend::Backend=get_backend(src),
     init,
     kwargs...
 )
     _mapreduce_impl(
-        identity, op, src, backend;
-        init,
+        identity, op, src;
+        backend, init,
         kwargs...
     )
 end
@@ -90,7 +92,8 @@ end
 
 """
     mapreduce(
-        f, op, src::AbstractArray, backend::Backend=get_backend(src);
+        f, op, src::AbstractArray;
+        backend::Backend=get_backend(src),
         init,
         neutral=neutral_element(op, eltype(src)),
         dims::Union{Nothing, Int}=nothing,
@@ -154,20 +157,22 @@ mcolsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=2)
 ```
 """
 function mapreduce(
-    f, op, src::AbstractArray, backend::Backend=get_backend(src);
+    f, op, src::AbstractArray;
+    backend::Backend=get_backend(src),
     init,
     kwargs...
 )
     _mapreduce_impl(
-        f, op, src, backend;
-        init,
+        f, op, src;
+        backend, init,
         kwargs...
     )
 end
 
 
 function _mapreduce_impl(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::AbstractArray;
+    backend::Backend,
     init,
     neutral=neutral_element(op, eltype(src)),
     dims::Union{Nothing, Int}=nothing,
@@ -185,16 +190,16 @@ function _mapreduce_impl(
     if isnothing(dims)
         if use_gpu_algorithm(backend, prefer_threads)
             mapreduce_1d_gpu(
-                f, op, src, backend;
-                init, neutral,
+                f, op, src;
+                backend, init, neutral,
                 max_tasks, min_elems,
                 block_size, temp,
                 switch_below
             )
         else
             mapreduce_1d_cpu(
-                f, op, src, backend;
-                init, neutral,
+                f, op, src;
+                backend, init, neutral,
                 max_tasks, min_elems,
                 block_size, temp,
                 switch_below
@@ -202,8 +207,8 @@ function _mapreduce_impl(
         end
     else
         return mapreduce_nd(
-            f, op, src, backend;
-            init, neutral, dims,
+            f, op, src; 
+            backend, init, neutral, dims,
             max_tasks, prefer_threads,
             min_elems, block_size,
             temp,

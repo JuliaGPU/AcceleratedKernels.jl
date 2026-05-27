@@ -1,6 +1,7 @@
 """
     map!(
-        f, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
+        f, dst::AbstractArray, src::AbstractArray...;
+        backend::Backend=get_backend(src);
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -32,15 +33,16 @@ end
 ```
 """
 function map!(
-    f, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
+    f, dst::AbstractArray, src::AbstractArray...;
+    backend::Backend=get_backend(src[1]),
     kwargs...
 )
-    @argcheck length(dst) == length(src)
+    @argcheck lengthcheck(dst, src...)
     foreachindex(
-        src, backend;
+        dst, backend;
         kwargs...
     ) do idx
-        dst[idx] = f(src[idx])
+        dst[idx] = f(indextuple(src, idx)...)
     end
     dst
 end
@@ -48,7 +50,8 @@ end
 
 """
     map(
-        f, src::AbstractArray, backend::Backend=get_backend(src);
+        f, src::AbstractArray;
+        backend::Backend=get_backend(src),
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -63,12 +66,13 @@ changes the `eltype`, allocate `dst` separately and call [`map!`](@ref)). The CP
 settings are the same as for [`foreachindex`](@ref).
 """
 function map(
-    f, src::AbstractArray, backend::Backend=get_backend(src);
+    f, src::AbstractArray...;
+    backend::Backend=get_backend(src[1]),
     kwargs...
 )
-    dst = similar(src)
+    dst = similar(src[1])
     map!(
-        f, dst, src, backend;
-        kwargs...
+        f, dst, src...;
+        backend, kwargs...
     )
 end

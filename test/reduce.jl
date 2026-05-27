@@ -115,7 +115,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     for _ in 1:100
         num_elems = rand(1:1000)
         v = 1:num_elems
-        s = AK.reduce(+, v, BACKEND; prefer_threads, init=Int32(0))
+        s = AK.reduce(+, v; backend=BACKEND, prefer_threads, init=Int32(0))
         vh = Array(v)
         @test s == reduce(+, vh)
     end
@@ -337,7 +337,7 @@ end
     for _ in 1:100
         num_elems = rand(1:1000)
         v = 1:num_elems
-        s = AK.mapreduce(abs, +, v, BACKEND; prefer_threads, init=Int32(0))
+        s = AK.mapreduce(abs, +, v; backend=BACKEND, prefer_threads, init=Int32(0))
         vh = Array(v)
         @test s == mapreduce(abs, +, vh)
     end
