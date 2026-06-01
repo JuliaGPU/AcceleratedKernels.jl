@@ -170,7 +170,7 @@ function _mapreduce_impl(
     f, op, src::AbstractArray, backend::Backend;
     init,
     neutral=neutral_element(op, eltype(src)),
-    dims::Union{Nothing, Int}=nothing,
+    dims::Union{Nothing, Int, Tuple{Vararg{Int}}} = nothing,
 
     # CPU settings
     max_tasks::Int=Threads.nthreads(),

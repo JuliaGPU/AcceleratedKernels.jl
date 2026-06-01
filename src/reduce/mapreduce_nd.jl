@@ -2,7 +2,7 @@ function mapreduce_nd(
     f, op, src::AbstractArray, backend::Backend;
     init,
     neutral=neutral_element(op, eltype(src)),
-    dims::Int,
+    dims::Union{Int, Tuple{Vararg{Int}}},
 
     # CPU settings - ignored here
     max_tasks::Int,
@@ -18,7 +18,7 @@ function mapreduce_nd(
     # Degenerate cases begin; order of priority matters
 
     # Invalid dims
-    if dims < 1
+    if Base.any(d < 1 for d in (dims isa Int ? (dims,) : dims))
         throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
     end
 
@@ -27,7 +27,7 @@ function mapreduce_nd(
     #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))
     #   3×5 Matrix{Float32}     # Negative numbers
     src_sizes = size(src)
-    if dims > length(src_sizes)
+    if Base.all(d > length(src_sizes) for d in (dims isa Int ? (dims,) : dims))
         if isnothing(temp)
             dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
         else
@@ -42,7 +42,7 @@ function mapreduce_nd(
 
     # The per-dimension sizes of the destination array; construct tuple without allocations
     dst_sizes = unrolled_map_index(src_sizes) do i
-        i == dims ? 1 : src_sizes[i]
+        i in dims ? 1 : src_sizes[i]
     end
 
     # If any dimension except dims is zero, return empty similar array except with the dims
@@ -51,7 +51,7 @@ function mapreduce_nd(
     #   julia> reduce(+, x, dims=3)
     #   3×0×1 Array{Float64, 3}
     for isize in eachindex(src_sizes)
-        isize == dims && continue
+        isize in dims && continue
         if src_sizes[isize] == 0
             if isnothing(temp)
                 dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
@@ -73,7 +73,7 @@ function mapreduce_nd(
     #    0.0
     #    0.0
     #   [...]
-    len = src_sizes[dims]
+    len = Base.prod(src_sizes[d] for d in (dims isa Int ? (dims,) : dims))
     if len == 0
         if isnothing(temp)
             dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
@@ -118,72 +118,47 @@ function mapreduce_nd(
         _mapreduce_nd_cpu_sections!(
             f, op, dst, src;
             init,
-            dims,
             max_tasks=max_tasks,
             min_elems=min_elems,
         )
     else
-        # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
-        #   - If the dimension we are reducing has more elements, (e.g. reduce(+, rand(3, 1000), dims=2)),
-        #     we use a block of threads per dst element - thus, a block of threads reduces the dims axis
-        #   - If the other dimensions have more elements (e.g. reduce(+, rand(3, 1000), dims=1)), we
-        #     use a single thread per dst element - thus, a thread reduces the dims axis sequentially,
-        #     while the other dimensions are processed in parallel, independently
-        if dst_size >= src_sizes[dims]
+        Rother  = CartesianIndices(dst)
+        Rreduce = CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
+
+        if dst_size >= len
             blocks = (dst_size + block_size - 1) ÷ block_size
             kernel1! = _mapreduce_nd_by_thread!(backend, block_size)
             kernel1!(
-                src, dst, f, op, init, dims,
+                src, dst, f, op, init, Rother, Rreduce,
                 ndrange=(block_size * blocks,),
             )
         else
-            # One block per output element
             blocks = dst_size
             kernel2! = _mapreduce_nd_by_block!(backend, block_size)
             kernel2!(
-                src, dst, f, op, init, neutral, dims,
+                src, dst, f, op, init, neutral, Rother, Rreduce,
                 ndrange=(block_size * blocks,),
             )
         end
     end
-
     return dst
 end
-
 
 function _mapreduce_nd_cpu_sections!(
     f, op, dst, src;
     init,
-    dims,
     max_tasks, min_elems,
 )
-    src_sizes = size(src)
-    src_strides = strides(src)
-    dst_strides = strides(dst)
+    Rother  = CartesianIndices(dst)
+    Rreduce = CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
 
-    reduce_size = src_sizes[dims]
-    ndims = length(src_sizes)
-
-    # Each thread handles a section of the output array - i.e. reducing along the dims, for
-    # multiple output strides
     foreachindex(dst, max_tasks=max_tasks, min_elems=min_elems) do idst
-
         @inbounds begin
-            # Compute the base index in src (excluding the reduced axis)
-            input_base_idx = 0
-            tmp = idst - 1
-            KernelAbstractions.Extras.@unroll for i in ndims:-1:1
-                if i != dims
-                    input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
-                end
-                tmp = tmp % dst_strides[i]
-            end
-
-            # Go over each element in the reduced dimension
+            Iother = Rother[idst]
             res = init
-            for i in 0:reduce_size - 1
-                src_idx = input_base_idx + i * src_strides[dims]
-                res = op(res, f(src[src_idx + 1]))
+            for Ireduce in Rreduce
+                J = max(Iother, Ireduce)
+                res = op(res, f(src[J]))
             end
             dst[idst] = res
         end
@@ -192,149 +167,70 @@ function _mapreduce_nd_cpu_sections!(
     dst
 end
 
-
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
     @Const(src), dst,
     f, op,
-    init, dims,
+    init, Rother, Rreduce,
 )
-    # One thread per output element, when there are more outer elements than in the reduced dim
-    # e.g. reduce(+, rand(3, 1000), dims=1) => only 3 elements in the reduced dim
-    src_sizes = size(src)
-    src_strides = strides(src)
-    dst_sizes = size(dst)
-    dst_strides = strides(dst)
-
-    output_size = length(dst)
-    reduce_size = src_sizes[dims]
-
-    ndims = length(src_sizes)
+    # One thread per output element, when there are more outer elements than in the reduced dims
+    output_size = length(Rother)
+    reduce_size = length(Rreduce)
 
     N = @groupsize()[1]
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-
-    # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
+    iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # Each thread handles one output element
     tid = ithread + iblock * N
     if tid < output_size
+        Iother = Rother[tid + 0x1]
 
-        # # Sometimes slightly faster method using additional memory with
-        # # output_idx = @private typeof(iblock) (ndims,)
-        # tmp = tid
-        # KernelAbstractions.Extras.@unroll for i in ndims:-1:1
-        #     output_idx[i] = tmp ÷ dst_strides[i]
-        #     tmp = tmp % dst_strides[i]
-        # end
-        # # Compute the base index in src (excluding the reduced axis)
-        # input_base_idx = 0
-        # KernelAbstractions.Extras.@unroll for i in 1:ndims
-        #     i == dims && continue
-        #     input_base_idx += output_idx[i] * src_strides[i]
-        # end
-
-        # Compute the base index in src (excluding the reduced axis)
-        input_base_idx = typeof(ithread)(0)
-        tmp = tid
-        KernelAbstractions.Extras.@unroll for i in ndims:-1i16:1i16
-            if i != dims
-                input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
-            end
-            tmp = tmp % dst_strides[i]
-        end
-
-        # Go over each element in the reduced dimension; this implementation assumes that there
-        # are so many outer elements (each processed by an independent thread) that we afford to
-        # loop sequentially over the reduced dimension (e.g. reduce(+, rand(3, 1000), dims=1))
         res = init
-        for i in 0x0:reduce_size - 0x1
-            src_idx = input_base_idx + i * src_strides[dims]
-            res = op(res, f(src[src_idx + 0x1]))
+        for i in 0x1:reduce_size
+            Ireduce = Rreduce[i]
+            J = max(Iother, Ireduce)
+            res = op(res, f(src[J]))
         end
-        dst[tid + 0x1] = res
+        dst[Iother] = res
     end
 end
-
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op,
     init, neutral,
-    dims,
+    Rother, Rreduce,
 )
-    # One block per output element, when there are more elements in the reduced dim than in outer
+    # One block per output element, when there are more elements in the reduced dims than outer
     # e.g. reduce(+, rand(3, 1000), dims=2) => only 3 elements in outer dimensions
-    src_sizes = size(src)
-    src_strides = strides(src)
-    dst_sizes = size(dst)
-    dst_strides = strides(dst)
-
-    output_size = length(dst)
-    reduce_size = src_sizes[dims]
-
-    ndims = length(src_sizes)
+    reduce_size = length(Rreduce)
 
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(dst) (N,)
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-
-    # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
+    iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # Each block handles one output element - thus, iblock ∈ [0, output_size)
+    # Each block handles one output element
+    Iother = Rother[iblock + 0x1]
 
-    # # Sometimes slightly faster method using additional memory with
-    # # output_idx = @private typeof(iblock) (ndims,)
-    # tmp = iblock
-    # KernelAbstractions.Extras.@unroll for i in ndims:-1:1
-    #     output_idx[i] = tmp ÷ dst_strides[i]
-    #     tmp = tmp % dst_strides[i]
-    # end
-    # # Compute the base index in src (excluding the reduced axis)
-    # input_base_idx = 0
-    # KernelAbstractions.Extras.@unroll for i in 1:ndims
-    #     i == dims && continue
-    #     input_base_idx += output_idx[i] * src_strides[i]
-    # end
-
-    # Compute the base index in src (excluding the reduced axis)
-    input_base_idx = typeof(ithread)(0)
-    tmp = iblock
-    KernelAbstractions.Extras.@unroll for i in ndims:-1i16:1i16
-        if i != dims
-            input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
-        end
-        tmp = tmp % dst_strides[i]
-    end
-
-    # We have a block of threads to process the whole reduced dimension. First do pre-reduction
-    # in strides of N
+    # Pre-reduce in strides of N across the reduction space
     partial = neutral
-    i = ithread
-    while i < reduce_size
-        src_idx = input_base_idx + i * src_strides[dims]
-        partial = op(partial, f(src[src_idx + 0x1]))
+    i = ithread + 0x1
+    while i <= reduce_size
+        Ireduce = Rreduce[i]
+        J = max(Iother, Ireduce)
+        partial = op(partial, f(src[J]))
         i += N
     end
 
-    # Store partial result in shared memory; now we are down to a single block to reduce within
+    # Store partial result in shared memory and reduce within block
     sdata[ithread + 0x1] = partial
     @synchronize()
 
     @inline reduce_group!(@context, op, sdata, N, ithread)
 
     if ithread == 0x0
-        dst[iblock + 0x1] = op(init, sdata[0x1])
+        dst[Iother] = op(init, sdata[0x1])
     end
 end

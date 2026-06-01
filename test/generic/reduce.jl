@@ -222,6 +222,17 @@ end
         end
     end
 
+    # Tuple dims support
+    for dims in [(1,2), (1,3), (2,3), (1,2,3)]
+        for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
+            vh = rand(Int32(1):Int32(100), n1, n2, n3)
+            v = array_from_host(vh)
+            s = AK.reduce(+, v; prefer_threads, init=Int32(0), dims)
+            sh = Array(s)
+            @test sh == sum(vh; dims)
+        end
+    end
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10, 10)); prefer_threads, init=10, bad=:kwarg)
 
@@ -455,6 +466,17 @@ end
             s = AK.mapreduce(-, +, v; prefer_threads, init=Int32(init), dims)
             sh = Array(s)
             @test sh == mapreduce(-, +, vh; dims, init)
+        end
+    end
+
+    # Tuple dims support
+    for dims in [(1,2), (1,3), (2,3), (1,2,3)]
+        for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
+            vh = rand(Int32(1):Int32(100), n1, n2, n3)
+            v = array_from_host(vh)
+            s = AK.mapreduce(-, +, v; prefer_threads, init=Int32(0), dims)
+            sh = Array(s)
+            @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
         end
     end
 
