@@ -1,7 +1,40 @@
 # Generalized N-dimensional mapreduce for GPU and CPU backends.
-# Uses stride-arithmetic-based indexing (no CartesianIndices in GPU kernels)
-# with multi-group reduction for large reduction dimensions.
-# Note: This file was developed with AI assistance (Claude, Anthropic).
+
+# 1. Dimension canonicalization: collapse adjacent reducible dims into contiguous segments
+# 2. ND decode happens ONCE outside the inner loop using Val{sizes} (compile-time div → mulhi)
+# 3. Inner loop is pure multiply-add, zero div/mod — compiler can vectorize
+# 4. Multi-group reduction for large reduce spaces
+# 5. Input staging (K elements per thread before shared memory)
+
+# Host-side canonicalization
+
+function _canonicalize_dims(src_sizes, src_strides, dims_valid)
+    ndim = length(src_sizes)
+    reduce_segs = Tuple{Int,Int}[]
+    outer_segs  = Tuple{Int,Int}[]
+
+    i = 1
+    while i <= ndim
+        if i in dims_valid
+            seg_stride = src_strides[i]
+            seg_size   = src_sizes[i]
+            while i + 1 <= ndim &&
+                  (i + 1) in dims_valid &&
+                  src_strides[i + 1] == seg_stride * seg_size
+                i += 1
+                seg_size *= src_sizes[i]
+            end
+            push!(reduce_segs, (seg_stride, seg_size))
+        else
+            push!(outer_segs, (src_strides[i], src_sizes[i]))
+        end
+        i += 1
+    end
+
+    return Tuple(reduce_segs), Tuple(outer_segs)
+end
+
+# Main entry point
 
 function mapreduce_nd(
     f, op, src::AbstractArray, backend::Backend;
@@ -20,22 +53,18 @@ function mapreduce_nd(
 )
     @argcheck 1 <= block_size <= 1024
 
-    # Normalize dims to a tuple
     dims_all = dims isa Int ? (dims,) : dims
 
-    # Invalid dims: negative or zero
     if Base.any(d < 1 for d in dims_all)
         throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
     end
 
-    src_sizes = size(src)
-    ndim = length(src_sizes)
+    src_sizes   = size(src)
+    src_strides = strides(src)
+    ndim        = length(src_sizes)
 
-    # Filter out-of-range dims (Base silently ignores them)
-    # e.g. dims=(1,4) on a 3D array → only dim 1 is reduced
     dims_valid = Tuple(d for d in dims_all if d <= ndim)
 
-    # If ALL dims are out of range, just map each element through f and add init
     if isempty(dims_valid)
         if isnothing(temp)
             dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
@@ -49,12 +78,10 @@ function mapreduce_nd(
         return dst
     end
 
-    # Destination sizes: reduced dims become 1
     dst_sizes = unrolled_map_index(src_sizes) do i
         i in dims_valid ? 1 : src_sizes[i]
     end
 
-    # If any kept dimension is zero → return empty array
     for isize in eachindex(src_sizes)
         isize in dims_valid && continue
         if src_sizes[isize] == 0
@@ -69,10 +96,8 @@ function mapreduce_nd(
         end
     end
 
-    # Total number of elements being reduced per output element
     len = Base.prod(src_sizes[d] for d in dims_valid)
 
-    # If reduced dims are all zero → fill with init
     if len == 0
         if isnothing(temp)
             dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
@@ -86,7 +111,6 @@ function mapreduce_nd(
         return dst
     end
 
-    # If reduced dims are all 1 → just apply f element-wise
     if len == 1
         if isnothing(temp)
             dst = KernelAbstractions.allocate(backend, typeof(init), src_sizes)
@@ -100,7 +124,6 @@ function mapreduce_nd(
         return dst
     end
 
-    # Allocate destination
     if isnothing(temp)
         dst = KernelAbstractions.allocate(backend, typeof(init), dst_sizes)
     else
@@ -112,78 +135,83 @@ function mapreduce_nd(
     dst_size = length(dst)
 
     if !use_gpu_algorithm(backend, prefer_threads)
-        _mapreduce_nd_cpu_sections!(
-            f, op, dst, src;
-            init,
-            dims=dims_valid,
-            max_tasks=max_tasks,
-            min_elems=min_elems,
-        )
+        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, dims=dims_valid, max_tasks, min_elems)
     else
-        # Precompute strides on host — passed as tuples to kernel
-        # This avoids CartesianIndices div/mod inside the kernel
-        src_str = strides(src)
-        dst_str = strides(dst)
+        reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
-        # reduce_strides: for each src dim, its stride if it's a reduced dim, else 0
-        # Used to walk through the reduced subspace
-        reduce_str = unrolled_map_index(src_str) do i
-            i in dims_valid ? src_str[i] : 0
+        outer_sizes_tup    = Tuple(s   for (_, s)   in outer_segs)
+        outer_strides_tup  = Tuple(str for (str, _) in outer_segs)
+        reduce_sizes_tup   = Tuple(s   for (_, s)   in reduce_segs)
+        reduce_strides_tup = Tuple(str for (str, _) in reduce_segs)
+
+        reduce_size   = len
+        # Multi-group heuristic:
+        # - Always use if reduce_size is very large (> 16 * block_size)
+        # - Skip if dst_size is tiny AND reduce_size is moderate (overhead dominates)
+        raw_groups = (reduce_size + block_size - 1) ÷ block_size
+        reduce_groups = if raw_groups <= 1
+            1
+        elseif dst_size >= block_size
+            raw_groups  # large output: always multi-group
+        elseif reduce_size > 16 * block_size
+            raw_groups  # large reduction: need multi-group regardless
+        else
+            1           # small output + moderate reduction: single-group wins
         end
 
-        if dst_size >= len
-            # More output elements than reduction elements → one thread per output
-            blocks = (dst_size + block_size - 1) ÷ block_size
-            kernel1! = _mapreduce_nd_by_thread!(backend, block_size)
-            kernel1!(
-                src, dst, f, op, init,
-                src_str, dst_str, reduce_str,
-                dst_size, len, ndim,
-                ndrange=(block_size * blocks,),
-            )
-        else
-            # More reduction elements than output elements → one block per output
-            reduce_groups = (len + block_size - 1) ÷ block_size
-
-            if reduce_groups == 1
-                # Single group — all threads in one block handle one output element
-                kernel2! = _mapreduce_nd_by_block!(backend, block_size)
-                kernel2!(
+        if reduce_groups == 1
+            if dst_size >= reduce_size
+                blocks = (dst_size + block_size - 1) ÷ block_size
+                kernel! = _mapreduce_nd_by_thread!(backend, block_size)
+                kernel!(
+                    src, dst, f, op, init,
+                    outer_strides_tup, Val(outer_sizes_tup),
+                    reduce_strides_tup, Val(reduce_sizes_tup),
+                    dst_size, reduce_size,
+                    ndrange=(block_size * blocks,),
+                )
+            else
+                kernel! = _mapreduce_nd_by_block!(backend, block_size)
+                kernel!(
                     src, dst, f, op, init, neutral,
-                    src_str, dst_str, reduce_str,
-                    dst_size, len, ndim,
+                    outer_strides_tup, Val(outer_sizes_tup),
+                    reduce_strides_tup, Val(reduce_sizes_tup),
+                    dst_size, reduce_size,
+                    ndrange=(block_size * dst_size,),
+                )
+            end
+        else
+            partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
+
+            kernel! = _mapreduce_nd_multigroup!(backend, block_size)
+            kernel!(
+                src, partial, f, op, neutral,
+                outer_strides_tup, Val(outer_sizes_tup),
+                reduce_strides_tup, Val(reduce_sizes_tup),
+                dst_size, reduce_size, reduce_groups,
+                ndrange=(block_size * dst_size * reduce_groups,),
+            )
+
+            # Second pass: reduce partial (dst_size × reduce_groups) → dst
+            if reduce_groups <= block_size
+                # Small enough: one block handles it sequentially — low overhead
+                kernel2! = _mapreduce_partial_to_dst!(backend, block_size)
+                kernel2!(
+                    partial, dst, op, init,
+                    dst_size, reduce_groups,
                     ndrange=(block_size * dst_size,),
                 )
             else
-                # Multi-group — multiple blocks per output element
-                # partial shape: (dst_sizes..., reduce_groups)
-                partial_sizes = (dst_sizes..., reduce_groups)
-                partial = KernelAbstractions.allocate(backend, typeof(init), partial_sizes)
-
-                partial_str = strides(partial)
-
-                kernel3! = _mapreduce_nd_by_block_multigroup!(backend, block_size)
-                kernel3!(
-                    src, partial, f, op, neutral,
-                    src_str, dst_str, reduce_str, partial_str,
-                    dst_size, len, reduce_groups, ndim,
-                    ndrange=(block_size * dst_size * reduce_groups,),
-                )
-
-                # Second pass: reduce partial → dst
-                # partial has shape (dst_sizes..., reduce_groups)
-                # treat last dim as the reduction dim
-                partial_dst_str = strides(partial)[1:ndim]  # strides of first ndim dims
-                reduce_str2 = unrolled_map_index(strides(partial)) do i
-                    i == ndim + 1 ? strides(partial)[ndim + 1] : 0
-                end
-
-                kernel4! = _mapreduce_nd_by_block!(backend, block_size)
-                kernel4!(
-                    partial, dst, identity, op, init, neutral,
-                    strides(partial), dst_str, reduce_str2,
-                    dst_size, reduce_groups, ndim + 1,
-                    ndrange=(block_size * dst_size,),
+                # Large: recurse with proper block reduction
+                dst_2d = reshape(dst, (dst_size, 1))
+                mapreduce_nd(
+                    identity, op, partial, backend;
+                    init,
+                    neutral,
+                    dims=2,
+                    max_tasks, min_elems, prefer_threads,
+                    block_size,
+                    temp=dst_2d,
                 )
             end
         end
@@ -192,13 +220,11 @@ function mapreduce_nd(
     return dst
 end
 
+# CPU path
 
-# CPU path — CartesianIndices is fine here
 function _mapreduce_nd_cpu_sections!(
     f, op, dst, src;
-    init,
-    dims,
-    max_tasks, min_elems,
+    init, dims, max_tasks, min_elems,
 )
     Rother  = CartesianIndices(dst)
     Rreduce = CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
@@ -214,64 +240,77 @@ function _mapreduce_nd_cpu_sections!(
             dst[idst] = res
         end
     end
-
     dst
 end
 
+# Index helpers
 
-# GPU kernel: one thread per output element
-# Uses stride arithmetic — no CartesianIndices
+@inline function _outer_decode(tid, outer_strides, ::Val{outer_sizes}) where outer_sizes
+    # Walk dims from smallest stride to largest stride (column-major order)
+    # outer_segs are already in column-major order (dim 1 first, lowest stride first)
+    # So we walk 1..N: extract the low-order index first
+    base = 0
+    tmp  = tid
+    @inbounds for i in 1:length(outer_sizes)
+        q    = tmp ÷ outer_sizes[i]
+        r    = tmp - q * outer_sizes[i]
+        base += r * outer_strides[i]
+        tmp   = q
+    end
+    base
+end
+
+@inline function _reduce_offset(j, reduce_strides, ::Val{reduce_sizes}) where reduce_sizes
+    # Walk from smallest stride to largest (column-major)
+    off = 0
+    tmp = j
+    @inbounds for i in 1:length(reduce_sizes)
+        q   = tmp ÷ reduce_sizes[i]
+        r   = tmp - q * reduce_sizes[i]
+        off += r * reduce_strides[i]
+        tmp  = q
+    end
+    off
+end
+
+# GPU kernel: by_thread: one thread per output element
+
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
     @Const(src), dst,
     f, op, init,
-    src_str, dst_str, reduce_str,
-    output_size, reduce_size, ndim,
-)
-    N = @groupsize()[1]
+    outer_strides, ::Val{outer_sizes},
+    reduce_strides, ::Val{reduce_sizes},
+    output_size, reduce_size,
+) where {outer_sizes, reduce_sizes}
+    N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
-    tid = ithread + iblock * N
+    tid     = ithread + iblock * N
 
     if tid < output_size
-        # Compute base index in src for this output element
-        # Walk dst linear index → per-dim indices → src offset (skip reduced dims)
-        input_base_idx = typeof(ithread)(0)
-        tmp = tid
-        KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-            if dst_str[i] > 0 && reduce_str[i] == 0
-                # This is a kept dim
-                dim_idx = tmp ÷ dst_str[i]
-                input_base_idx += dim_idx * src_str[i]
-            end
-            tmp = tmp % dst_str[i]
-        end
+        input_base = _outer_decode(tid, outer_strides, Val(outer_sizes))
 
-        # Walk through reduced subspace using reduce_str
         res = init
         for j in 0x0:reduce_size - 0x1
-            reduce_offset = typeof(ithread)(0)
-            tmp2 = j
-            KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-                if reduce_str[i] > 0
-                    reduce_offset += (tmp2 ÷ (reduce_str[i] ÷ src_str[1])) * src_str[i]
-                    tmp2 = tmp2 % (reduce_str[i] ÷ src_str[1])
-                end
-            end
-            res = op(res, f(src[input_base_idx + reduce_offset + 0x1]))
+            off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+            res = op(res, f(src[input_base + off + 0x1]))
         end
 
         dst[tid + 0x1] = res
     end
 end
 
+# GPU kernel: by_block: one block per output element, single group
 
-# GPU kernel: one block per output element, single group
+const _STAGING = 4
+
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op, init, neutral,
-    src_str, dst_str, reduce_str,
-    output_size, reduce_size, ndim,
-)
+    outer_strides, ::Val{outer_sizes},
+    reduce_strides, ::Val{reduce_sizes},
+    output_size, reduce_size,
+) where {outer_sizes, reduce_sizes}
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(dst) (N,)
 
@@ -279,35 +318,21 @@ end
     ithread = @index(Local, Linear) - 0x1
 
     if iblock < output_size
-        # Compute base index in src for this output element
-        input_base_idx = typeof(ithread)(0)
-        tmp = iblock
-        KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-            if reduce_str[i] == 0
-                dim_idx = tmp ÷ dst_str[i]
-                input_base_idx += dim_idx * src_str[i]
-            end
-            tmp = tmp % dst_str[i]
-        end
+        input_base = _outer_decode(iblock, outer_strides, Val(outer_sizes))
 
-        # Each thread reduces a strided slice of the reduce space
-        partial = neutral
-        j = ithread
+        acc = neutral
+        j   = ithread
         while j < reduce_size
-            reduce_offset = typeof(ithread)(0)
-            tmp2 = j
-            KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-                if reduce_str[i] > 0
-                    s = reduce_str[i] ÷ src_str[1]
-                    reduce_offset += (tmp2 ÷ s) * src_str[i]
-                    tmp2 = tmp2 % s
+            KernelAbstractions.Extras.@unroll for k in 1:_STAGING
+                if j < reduce_size
+                    off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+                    acc = op(acc, f(src[input_base + off + 0x1]))
+                    j  += N
                 end
             end
-            partial = op(partial, f(src[input_base_idx + reduce_offset + 0x1]))
-            j += N
         end
 
-        sdata[ithread + 0x1] = partial
+        sdata[ithread + 0x1] = acc
         @synchronize()
 
         @inline reduce_group!(@context, op, sdata, N, ithread)
@@ -318,54 +343,36 @@ end
     end
 end
 
+# GPU kernel: multi-group
 
-# GPU kernel: multi-group reduction — multiple blocks per output element
-# Writes partial results to a (dst_sizes..., reduce_groups) array
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block_multigroup!(
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_multigroup!(
     @Const(src), partial,
     f, op, neutral,
-    src_str, dst_str, reduce_str, partial_str,
-    output_size, reduce_size, reduce_groups, ndim,
-)
+    outer_strides, ::Val{outer_sizes},
+    reduce_strides, ::Val{reduce_sizes},
+    output_size, reduce_size, reduce_groups,
+) where {outer_sizes, reduce_sizes}
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(partial) (N,)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # iblock encodes both which output element and which reduce group
-    iout   = iblock % output_size          # which output element
-    igroup = iblock ÷ output_size          # which reduce group
+    iout   = iblock % output_size
+    igroup = iblock ÷ output_size
 
-    # Compute base index in src for this output element
-    input_base_idx = typeof(ithread)(0)
-    tmp = iout
-    KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-        if reduce_str[i] == 0
-            dim_idx = tmp ÷ dst_str[i]
-            input_base_idx += dim_idx * src_str[i]
-        end
-        tmp = tmp % dst_str[i]
-    end
-
-    # Each group handles a chunk of the reduce space
-    chunk_start = igroup * N + ithread    # starting position in reduce space
-    chunk_stride = N * reduce_groups      # stride across groups
+    input_base = _outer_decode(iout, outer_strides, Val(outer_sizes))
 
     acc = neutral
-    j = chunk_start
+    j   = ithread + igroup * N
     while j < reduce_size
-        reduce_offset = typeof(ithread)(0)
-        tmp2 = j
-        KernelAbstractions.Extras.@unroll for i in ndim:-1i16:1i16
-            if reduce_str[i] > 0
-                s = reduce_str[i] ÷ src_str[1]
-                reduce_offset += (tmp2 ÷ s) * src_str[i]
-                tmp2 = tmp2 % s
+        KernelAbstractions.Extras.@unroll for k in 1:_STAGING
+            if j < reduce_size
+                off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+                acc = op(acc, f(src[input_base + off + 0x1]))
+                j  += N * reduce_groups
             end
         end
-        acc = op(acc, f(src[input_base_idx + reduce_offset + 0x1]))
-        j += chunk_stride
     end
 
     sdata[ithread + 0x1] = acc
@@ -374,8 +381,40 @@ end
     @inline reduce_group!(@context, op, sdata, N, ithread)
 
     if ithread == 0x0
-        # Write to partial[(iout linear), igroup+1]
-        partial_idx = iout + igroup * output_size
-        partial[partial_idx + 0x1] = sdata[0x1]
+        partial[iout + igroup * output_size + 0x1] = sdata[0x1]
+    end
+end
+
+# GPU kernel: second pass — partial → dst
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_partial_to_dst!(
+    @Const(partial), dst,
+    op, init,
+    output_size, reduce_groups,
+)
+    # One block per output element — block reduces over reduce_groups
+    @uniform N = @groupsize()[1]
+    sdata = @localmem eltype(dst) (N,)
+
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+
+    if iblock < output_size
+        # Each thread strides over reduce_groups
+        acc = eltype(dst)(0)  # neutral for this pass — init applied at end
+        g = ithread
+        while g < reduce_groups
+            acc = op(acc, partial[iblock + g * output_size + 0x1])
+            g += N
+        end
+
+        sdata[ithread + 0x1] = acc
+        @synchronize()
+
+        @inline reduce_group!(@context, op, sdata, N, ithread)
+
+        if ithread == 0x0
+            dst[iblock + 0x1] = op(init, sdata[0x1])
+        end
     end
 end
