@@ -165,8 +165,8 @@ function mapreduce_nd(
                 kernel! = _mapreduce_nd_by_thread!(backend, block_size)
                 kernel!(
                     src, dst, f, op, init,
-                    outer_strides_tup, Val(outer_sizes_tup),
-                    reduce_strides_tup, Val(reduce_sizes_tup),
+                    outer_strides_tup, outer_sizes_tup,
+                    reduce_strides_tup, reduce_sizes_tup,
                     dst_size, reduce_size,
                     ndrange=(block_size * blocks,),
                 )
@@ -174,8 +174,8 @@ function mapreduce_nd(
                 kernel! = _mapreduce_nd_by_block!(backend, block_size)
                 kernel!(
                     src, dst, f, op, init, neutral,
-                    outer_strides_tup, Val(outer_sizes_tup),
-                    reduce_strides_tup, Val(reduce_sizes_tup),
+                    outer_strides_tup, outer_sizes_tup,
+                    reduce_strides_tup, reduce_sizes_tup,
                     dst_size, reduce_size,
                     ndrange=(block_size * dst_size,),
                 )
@@ -186,8 +186,8 @@ function mapreduce_nd(
             kernel! = _mapreduce_nd_multigroup!(backend, block_size)
             kernel!(
                 src, partial, f, op, neutral,
-                outer_strides_tup, Val(outer_sizes_tup),
-                reduce_strides_tup, Val(reduce_sizes_tup),
+                outer_strides_tup, outer_sizes_tup,
+                reduce_strides_tup, reduce_sizes_tup,
                 dst_size, reduce_size, reduce_groups,
                 ndrange=(block_size * dst_size * reduce_groups,),
             )
@@ -245,10 +245,8 @@ end
 
 # Index helpers
 
-@inline function _outer_decode(tid, outer_strides, ::Val{outer_sizes}) where outer_sizes
-    # Walk dims from smallest stride to largest stride (column-major order)
-    # outer_segs are already in column-major order (dim 1 first, lowest stride first)
-    # So we walk 1..N: extract the low-order index first
+@inline function _outer_decode(tid, outer_strides, outer_sizes)
+    isempty(outer_sizes) && return 0
     base = 0
     tmp  = tid
     @inbounds for i in 1:length(outer_sizes)
@@ -260,8 +258,8 @@ end
     base
 end
 
-@inline function _reduce_offset(j, reduce_strides, ::Val{reduce_sizes}) where reduce_sizes
-    # Walk from smallest stride to largest (column-major)
+@inline function _reduce_offset(j, reduce_strides, reduce_sizes)
+    isempty(reduce_sizes) && return 0
     off = 0
     tmp = j
     @inbounds for i in 1:length(reduce_sizes)
@@ -278,21 +276,21 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
     @Const(src), dst,
     f, op, init,
-    outer_strides, ::Val{outer_sizes},
-    reduce_strides, ::Val{reduce_sizes},
+    outer_strides, outer_sizes,
+    reduce_strides, reduce_sizes,
     output_size, reduce_size,
-) where {outer_sizes, reduce_sizes}
+)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
     tid     = ithread + iblock * N
 
     if tid < output_size
-        input_base = _outer_decode(tid, outer_strides, Val(outer_sizes))
+        input_base = _outer_decode(tid, outer_strides, outer_sizes)
 
         res = init
         for j in 0x0:reduce_size - 0x1
-            off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+            off = _reduce_offset(j, reduce_strides, reduce_sizes)
             res = op(res, f(src[input_base + off + 0x1]))
         end
 
@@ -307,10 +305,10 @@ const _STAGING = 4
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op, init, neutral,
-    outer_strides, ::Val{outer_sizes},
-    reduce_strides, ::Val{reduce_sizes},
+    outer_strides, outer_sizes,
+    reduce_strides, reduce_sizes,
     output_size, reduce_size,
-) where {outer_sizes, reduce_sizes}
+)
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(dst) (N,)
 
@@ -318,14 +316,14 @@ const _STAGING = 4
     ithread = @index(Local, Linear) - 0x1
 
     if iblock < output_size
-        input_base = _outer_decode(iblock, outer_strides, Val(outer_sizes))
+        input_base = _outer_decode(iblock, outer_strides, outer_sizes)
 
         acc = neutral
         j   = ithread
         while j < reduce_size
             KernelAbstractions.Extras.@unroll for k in 1:_STAGING
                 if j < reduce_size
-                    off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+                    off = _reduce_offset(j, reduce_strides, reduce_sizes)
                     acc = op(acc, f(src[input_base + off + 0x1]))
                     j  += N
                 end
@@ -348,10 +346,10 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_multigroup!(
     @Const(src), partial,
     f, op, neutral,
-    outer_strides, ::Val{outer_sizes},
-    reduce_strides, ::Val{reduce_sizes},
+    outer_strides, outer_sizes,
+    reduce_strides, reduce_sizes,
     output_size, reduce_size, reduce_groups,
-) where {outer_sizes, reduce_sizes}
+)
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(partial) (N,)
 
@@ -361,14 +359,14 @@ end
     iout   = iblock % output_size
     igroup = iblock ÷ output_size
 
-    input_base = _outer_decode(iout, outer_strides, Val(outer_sizes))
+    input_base = _outer_decode(iout, outer_strides, outer_sizes)
 
     acc = neutral
     j   = ithread + igroup * N
     while j < reduce_size
         KernelAbstractions.Extras.@unroll for k in 1:_STAGING
             if j < reduce_size
-                off = _reduce_offset(j, reduce_strides, Val(reduce_sizes))
+                off = _reduce_offset(j, reduce_strides, reduce_sizes)
                 acc = op(acc, f(src[input_base + off + 0x1]))
                 j  += N * reduce_groups
             end
