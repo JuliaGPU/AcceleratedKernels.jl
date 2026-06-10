@@ -222,6 +222,18 @@ end
         end
     end
 
+    # Duplicate dims should error
+    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=Int32(0), dims=(2,2))
+
+    # min/max with dims: tests correct neutral element in partial reduction
+    for dims in 1:3
+        n1 = rand(1:50); n2 = rand(1:50); n3 = rand(1:50)
+        vh = rand(Int32(1):Int32(100), n1, n2, n3)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(min, v; prefer_threads, init=typemax(Int32), neutral=typemax(Int32), dims)) == minimum(vh; dims)
+        @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
+    end
+
     # Tuple dims support
     for dims in [(1,2), (1,3), (2,3), (1,2,3)]
         for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
@@ -467,6 +479,18 @@ end
             sh = Array(s)
             @test sh == mapreduce(-, +, vh; dims, init)
         end
+    end
+
+    # Duplicate dims should error
+    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=Int32(0), dims=(2,2))
+
+    # min/max with dims: tests correct neutral element in partial reduction
+    for dims in 1:3
+        n1 = rand(1:50); n2 = rand(1:50); n3 = rand(1:50)
+        vh = rand(Int32(1):Int32(100), n1, n2, n3)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(min, v; prefer_threads, init=typemax(Int32), neutral=typemax(Int32), dims)) == minimum(vh; dims)
+        @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
     end
 
     # Tuple dims support

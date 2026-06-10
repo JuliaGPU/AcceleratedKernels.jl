@@ -59,6 +59,11 @@ function mapreduce_nd(
         throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
     end
 
+    # Duplicate dims check: Base errors on dims=(2,2)
+    if length(dims_all) != length(Base.unique(dims_all))
+        throw(ArgumentError("region dimension(s) must be unique, got $dims"))
+    end
+
     src_sizes   = size(src)
     src_strides = strides(src)
     ndim        = length(src_sizes)
@@ -197,7 +202,7 @@ function mapreduce_nd(
                 # Small enough: one block handles it sequentially — low overhead
                 kernel2! = _mapreduce_partial_to_dst!(backend, block_size)
                 kernel2!(
-                    partial, dst, op, init,
+                    partial, dst, op, init, neutral,
                     dst_size, reduce_groups,
                     ndrange=(block_size * dst_size,),
                 )
@@ -387,7 +392,7 @@ end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_partial_to_dst!(
     @Const(partial), dst,
-    op, init,
+    op, init, neutral,
     output_size, reduce_groups,
 )
     # One block per output element — block reduces over reduce_groups
@@ -399,7 +404,7 @@ end
 
     if iblock < output_size
         # Each thread strides over reduce_groups
-        acc = eltype(dst)(0)  # neutral for this pass — init applied at end
+        acc = neutral
         g = ithread
         while g < reduce_groups
             acc = op(acc, partial[iblock + g * output_size + 0x1])
