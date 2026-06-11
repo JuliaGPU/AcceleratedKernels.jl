@@ -6,6 +6,11 @@
 # 4. Multi-group reduction for large reduce spaces
 # 5. Input staging (K elements per thread before shared memory)
 
+# Number of first-pass blocks the multi-group reduction aims to launch, so a reduction with
+# very few output elements can still fill the GPU. A heuristic GPU-occupancy target; the
+# multi-group path is never used unless it launches at least as many blocks as by_block would.
+const TARGET_BLOCKS = 256
+
 # Host-side canonicalization
 
 function _canonicalize_dims(src_sizes, src_strides, dims_valid)
@@ -149,43 +154,18 @@ function mapreduce_nd(
         reduce_sizes_tup   = Tuple(s   for (_, s)   in reduce_segs)
         reduce_strides_tup = Tuple(str for (str, _) in reduce_segs)
 
-        reduce_size   = len
-        # Multi-group heuristic:
-        # - Always use if reduce_size is very large (> 16 * block_size)
-        # - Skip if dst_size is tiny AND reduce_size is moderate (overhead dominates)
-        raw_groups = (reduce_size + block_size - 1) ÷ block_size
-        reduce_groups = if raw_groups <= 1
-            1
-        elseif dst_size >= block_size
-            raw_groups  # large output: always multi-group
-        elseif reduce_size > 16 * block_size
-            raw_groups  # large reduction: need multi-group regardless
-        else
-            1           # small output + moderate reduction: single-group wins
+        reduce_size = len
+
+        # One block per output (by_block) launches `dst_size` blocks. When there are too few
+        # outputs to fill the GPU *and* the reduction is large, split each output's reduction
+        # across `reduce_groups` blocks and combine the partials in a cheap second pass. Capping
+        # at `block_size` keeps that second pass to a single block per output.
+        reduce_groups = 1
+        if dst_size < reduce_size && dst_size < TARGET_BLOCKS
+            reduce_groups = min(cld(reduce_size, block_size), block_size, cld(TARGET_BLOCKS, dst_size))
         end
 
-        if reduce_groups == 1
-            if dst_size >= reduce_size
-                blocks = (dst_size + block_size - 1) ÷ block_size
-                kernel! = _mapreduce_nd_by_thread!(backend, block_size)
-                kernel!(
-                    src, dst, f, op, init,
-                    outer_strides_tup, outer_sizes_tup,
-                    reduce_strides_tup, reduce_sizes_tup,
-                    dst_size, reduce_size,
-                    ndrange=(block_size * blocks,),
-                )
-            else
-                kernel! = _mapreduce_nd_by_block!(backend, block_size)
-                kernel!(
-                    src, dst, f, op, init, neutral,
-                    outer_strides_tup, outer_sizes_tup,
-                    reduce_strides_tup, reduce_sizes_tup,
-                    dst_size, reduce_size,
-                    ndrange=(block_size * dst_size,),
-                )
-            end
-        else
+        if reduce_groups > 1
             partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
 
             kernel! = _mapreduce_nd_multigroup!(backend, block_size)
@@ -197,28 +177,32 @@ function mapreduce_nd(
                 ndrange=(block_size * dst_size * reduce_groups,),
             )
 
-            # Second pass: reduce partial (dst_size × reduce_groups) → dst
-            if reduce_groups <= block_size
-                # Small enough: one block handles it sequentially — low overhead
-                kernel2! = _mapreduce_partial_to_dst!(backend, block_size)
-                kernel2!(
-                    partial, dst, op, init, neutral,
-                    dst_size, reduce_groups,
-                    ndrange=(block_size * dst_size,),
-                )
-            else
-                # Large: recurse with proper block reduction
-                dst_2d = reshape(dst, (dst_size, 1))
-                mapreduce_nd(
-                    identity, op, partial, backend;
-                    init,
-                    neutral,
-                    dims=2,
-                    max_tasks, min_elems, prefer_threads,
-                    block_size,
-                    temp=dst_2d,
-                )
-            end
+            # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block per output
+            kernel2! = _mapreduce_partial_to_dst!(backend, block_size)
+            kernel2!(
+                partial, dst, op, init, neutral,
+                dst_size, reduce_groups,
+                ndrange=(block_size * dst_size,),
+            )
+        elseif dst_size >= reduce_size
+            blocks = cld(dst_size, block_size)
+            kernel! = _mapreduce_nd_by_thread!(backend, block_size)
+            kernel!(
+                src, dst, f, op, init,
+                outer_strides_tup, outer_sizes_tup,
+                reduce_strides_tup, reduce_sizes_tup,
+                dst_size, reduce_size,
+                ndrange=(block_size * blocks,),
+            )
+        else
+            kernel! = _mapreduce_nd_by_block!(backend, block_size)
+            kernel!(
+                src, dst, f, op, init, neutral,
+                outer_strides_tup, outer_sizes_tup,
+                reduce_strides_tup, reduce_sizes_tup,
+                dst_size, reduce_size,
+                ndrange=(block_size * dst_size,),
+            )
         end
     end
 
