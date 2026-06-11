@@ -309,8 +309,6 @@ end
 
 # GPU kernel: by_block: one block per output element, single group
 
-const _STAGING = 4
-
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op, init, neutral,
@@ -327,16 +325,13 @@ const _STAGING = 4
     if iblock < output_size
         input_base = _outer_decode(iblock, outer_strides, outer_sizes)
 
+        # Pre-reduce in strides of N (consecutive threads read consecutive elements)
         acc = neutral
         j   = ithread
         while j < reduce_size
-            KernelAbstractions.Extras.@unroll for k in 1:_STAGING
-                if j < reduce_size
-                    off = _reduce_offset(j, reduce_strides, reduce_sizes)
-                    acc = op(acc, f(src[input_base + off + 0x1]))
-                    j  += N
-                end
-            end
+            off = _reduce_offset(j, reduce_strides, reduce_sizes)
+            acc = op(acc, f(src[input_base + off + 0x1]))
+            j  += N
         end
 
         sdata[ithread + 0x1] = acc
@@ -373,13 +368,9 @@ end
     acc = neutral
     j   = ithread + igroup * N
     while j < reduce_size
-        KernelAbstractions.Extras.@unroll for k in 1:_STAGING
-            if j < reduce_size
-                off = _reduce_offset(j, reduce_strides, reduce_sizes)
-                acc = op(acc, f(src[input_base + off + 0x1]))
-                j  += N * reduce_groups
-            end
-        end
+        off = _reduce_offset(j, reduce_strides, reduce_sizes)
+        acc = op(acc, f(src[input_base + off + 0x1]))
+        j  += N * reduce_groups
     end
 
     sdata[ithread + 0x1] = acc
