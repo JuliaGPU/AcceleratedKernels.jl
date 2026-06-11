@@ -1,5 +1,6 @@
 [deps]
 AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
