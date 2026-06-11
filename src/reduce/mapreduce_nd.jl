@@ -252,6 +252,7 @@ end
 
 @inline function _outer_decode(tid, outer_strides, outer_sizes)
     isempty(outer_sizes) && return 0
+    length(outer_sizes) == 1 && return tid * outer_strides[1]
     base = 0
     tmp  = tid
     @inbounds for i in 1:length(outer_sizes)
@@ -265,6 +266,9 @@ end
 
 @inline function _reduce_offset(j, reduce_strides, reduce_sizes)
     isempty(reduce_sizes) && return 0
+    # Single segment (the common case after canonicalization): j < reduce_size, so the
+    # decode is just j * stride — no per-element division.
+    length(reduce_sizes) == 1 && return j * reduce_strides[1]
     off = 0
     tmp = j
     @inbounds for i in 1:length(reduce_sizes)
