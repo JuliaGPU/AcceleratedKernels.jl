@@ -51,10 +51,10 @@ if args.custom["cpu-ka"] !== nothing
     end)
 end
 
-# GPU backends: auto-detect functional ones, or enable explicitly via CLI flags.
-# Always assert functional() before proceeding, then print versioninfo() once.
+# GPU backends are only tested when explicitly requested via a CLI flag, in which case
+# they are expected to be functional: load or initialization failures propagate.
 
-if try; using CUDA; CUDA.functional(); catch; false; end || args.custom["cuda"] !== nothing
+if args.custom["cuda"] !== nothing
     using CUDA
     @assert CUDA.functional()
     @info "CUDA information:\n" * sprint(CUDA.versioninfo)
@@ -68,7 +68,7 @@ if try; using CUDA; CUDA.functional(); catch; false; end || args.custom["cuda"] 
     end)
 end
 
-if try; using AMDGPU; AMDGPU.functional(); catch; false; end || args.custom["amdgpu"] !== nothing
+if args.custom["amdgpu"] !== nothing
     using AMDGPU
     @assert AMDGPU.functional()
     @info "AMDGPU information:\n" * sprint(AMDGPU.versioninfo)
@@ -82,7 +82,7 @@ if try; using AMDGPU; AMDGPU.functional(); catch; false; end || args.custom["amd
     end)
 end
 
-if try; using Metal; Metal.functional(); catch; false; end || args.custom["metal"] !== nothing
+if args.custom["metal"] !== nothing
     using Metal
     @assert Metal.functional()
     @info "Metal information:\n" * sprint(Metal.versioninfo)
@@ -96,7 +96,7 @@ if try; using Metal; Metal.functional(); catch; false; end || args.custom["metal
     end)
 end
 
-if try; using oneAPI; oneAPI.functional(); catch; false; end || args.custom["oneapi"] !== nothing
+if args.custom["oneapi"] !== nothing
     using oneAPI
     @assert oneAPI.functional()
     @info "oneAPI information:\n" * sprint(oneAPI.versioninfo)
@@ -110,7 +110,7 @@ if try; using oneAPI; oneAPI.functional(); catch; false; end || args.custom["one
     end)
 end
 
-if try; using pocl_jll, OpenCL; !isempty(OpenCL.cl.platforms()); catch; false; end || args.custom["opencl"] !== nothing
+if args.custom["opencl"] !== nothing
     using pocl_jll, OpenCL
     @assert !isempty(OpenCL.cl.platforms())
     @info "OpenCL information:\n" * sprint(OpenCL.versioninfo)
