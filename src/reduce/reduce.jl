@@ -23,8 +23,9 @@ include("mapreduce_nd.jl")
     )
 
 Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` is `nothing`, reduce
-`src` to a scalar. If `dims` is an integer, reduce `src` along that dimension. The `init` value is
-used as the initial value for the reduction; `neutral` is the neutral element for the operator `op`.
+`src` to a scalar. If `dims` is an integer or a tuple of integers, reduce `src` along those
+dimension(s). The `init` value is used as the initial value for the reduction; `neutral` is the
+neutral element for the operator `op`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
@@ -106,8 +107,9 @@ end
     )
 
 Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
-If `dims` is `nothing`, reduce `src` to a scalar. If `dims` is an integer, reduce `src` along that
-dimension. The `init` value is used as the initial value for the reduction (i.e. after mapping).
+If `dims` is `nothing`, reduce `src` to a scalar. If `dims` is an integer or a tuple of integers,
+reduce `src` along those dimension(s). The `init` value is used as the initial value for the
+reduction (i.e. after mapping).
 
 The `neutral` value is the neutral element (zero) for the operator `op`, which is needed for an
 efficient GPU implementation that also allows a nonzero `init`.
