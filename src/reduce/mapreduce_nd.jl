@@ -10,13 +10,22 @@
 #      `dims=(1,3)`) fall back to a per-element multi-dimensional decode.
 #   3. Three work decompositions, chosen by the relative sizes of the output and the reduction:
 #        - by_thread:  one thread per output (many outputs, small reduction)
-#        - by_block:   one block per output  (few outputs, large reduction)
-#        - multigroup: several blocks per output, two-pass (very few outputs, huge reduction)
+#        - by_block:   one block per output, grid-stride over outputs (few outputs, large reduction)
+#        - multigroup: several blocks per output, two-pass (dst_size==1 or very small dst_size)
 
-# Number of first-pass blocks the multi-group reduction aims to launch, so a reduction with
-# very few output elements can still fill the GPU. A heuristic GPU-occupancy target; the
-# multi-group path is never used unless it launches at least as many blocks as by_block would.
-const TARGET_BLOCKS = 256
+# Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
+# few output elements can still fill the GPU. A heuristic GPU-occupancy target.
+const TARGET_BLOCKS = 1024
+
+# Below this many output elements, splitting a single output's reduction across multiple
+# blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
+# too few blocks cannot fill the GPU on its own. At or above this, by_block grid-strides.
+const GS_DST_CUTOFF = 32
+
+# Minimum reduction-loop iterations per thread in the multigroup first pass.
+# Caps reduce_groups so splitting a reduction doesn't shrink per-thread work
+# below the point where launch/scheduling overhead dominates actual work.
+const MIN_ITEMS_PER_THREAD = 8
 
 
 # Host-side canonicalization: split the dimensions into reduced and kept ("outer") segments,
@@ -144,34 +153,37 @@ function mapreduce_nd(
     reduce_sizes   = Tuple(s   for (_, s)   in reduce_segs)
     reduce_size    = len
 
-    # One block per output (by_block) launches `dst_size` blocks. When there are too few
-    # outputs to fill the GPU *and* the reduction is large, split each output's reduction
-    # across `reduce_groups` blocks and combine the partials in a cheap second pass. Capping
-    # at `block_size` keeps that second pass to a single block per output.
-    reduce_groups = 1
-    if dst_size < reduce_size && dst_size < TARGET_BLOCKS
-        reduce_groups = min(cld(reduce_size, block_size), block_size, cld(TARGET_BLOCKS, dst_size))
-    end
+    # ─────────────────────────────────────────────────────────────────────────
+    # Dispatch decision (see header comment for the three paths):
+    #
+    #   - dst_size >= reduce_size                         -> by_thread
+    #   - dst_size == 1, or dst_size < GS_DST_CUTOFF
+    #     (and dst_size < reduce_size)                    -> multigroup (split one
+    #                                                         reduction across blocks,
+    #                                                         needs a 2nd-pass combine)
+    #   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size)
+    #                                                      -> by_block, grid-striding
+    #                                                         over outputs, single pass
+    #
+    # Rationale: grid-striding by_block launches `min(dst_size, TARGET_BLOCKS)` blocks;
+    # for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
+    # the (large) reduction itself across many blocks via multigroup is still better.
+    # For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
+    # option regardless of GS_DST_CUTOFF.
+    # ─────────────────────────────────────────────────────────────────────────
 
-    if reduce_groups > 1
-        partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
+    # Coalescing override: when the reduced dimension is the fastest-varying one
+    # (reduce_strides==(1,)) and reduce_size is large enough to amortize a
+    # shared-memory tree-reduce (>=32, one warp), by_thread's per-thread strided
+    # access (stride==reduce_size across threads) is badly uncoalesced, while
+    # by_block lets consecutive threads read consecutive elements. Below 32,
+    # by_block's sync overhead isn't worth it for so few elements.
+    use_by_block_for_coalescing =
+        dst_size >= reduce_size && reduce_size >= block_size &&
+        length(reduce_sizes) == 1 && reduce_sizes[1] != 0 &&
+        reduce_strides == (1,)
 
-        kernel! = _mapreduce_nd_multigroup!(backend, block_size)
-        kernel!(
-            src, partial, f, op, neutral,
-            outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, reduce_groups,
-            ndrange=(block_size * dst_size * reduce_groups,),
-        )
-
-        # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block per output
-        kernel2! = _mapreduce_partial_to_dst!(backend, block_size)
-        kernel2!(
-            partial, dst, op, init, neutral,
-            dst_size, reduce_groups,
-            ndrange=(block_size * dst_size,),
-        )
-    elseif dst_size >= reduce_size
+    if dst_size >= reduce_size && !use_by_block_for_coalescing
         # Many outputs, small reduction: one thread per output reduces sequentially
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
@@ -181,18 +193,86 @@ function mapreduce_nd(
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
         )
-    else
-        # Few outputs, large reduction: one block of threads cooperatively reduces each output
+    elseif use_by_block_for_coalescing
+        # Grid-stride by_block: consecutive threads read consecutive (stride-1)
+        # elements of the reduced dimension -> coalesced.
+        launch_blocks = min(dst_size, TARGET_BLOCKS)
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
             src, dst, f, op, init, neutral,
             outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size,
-            ndrange=(block_size * dst_size,),
+            dst_size, reduce_size, launch_blocks,
+            ndrange=(block_size * launch_blocks,),
+        )
+    elseif dst_size == 1 || dst_size < GS_DST_CUTOFF
+        # Very few outputs, large reduction: split each output's reduction across
+        # `reduce_groups` blocks (multigroup), combine partials in a second pass.
+        reduce_groups = min(
+            cld(reduce_size, block_size),
+            block_size,
+            cld(TARGET_BLOCKS, dst_size),
+            cld(reduce_size, block_size * MIN_ITEMS_PER_THREAD),
+        )
+        reduce_groups = max(reduce_groups, 1)
+
+        if reduce_groups > 1
+            partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
+
+            kernel! = _mapreduce_nd_multigroup!(backend, block_size)
+            kernel!(
+                src, partial, f, op, neutral,
+                outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                dst_size, reduce_size, reduce_groups,
+                ndrange=(block_size * dst_size * reduce_groups,),
+            )
+
+            # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block
+            # per output. reduce_groups is small (<=block_size by construction), so use
+            # a small block size for this pass to avoid an oversubscribed tree-reduce.
+            pass2_block_size = _pass2_block_size(reduce_groups)
+            kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
+            kernel2!(
+                partial, dst, op, init, neutral,
+                dst_size, reduce_groups,
+                ndrange=(pass2_block_size * dst_size,),
+            )
+        else
+            # reduce_groups collapsed to 1 (e.g. reduce_size <= block_size): just do a
+            # single-block-per-output reduction directly, no partial array needed.
+            kernel! = _mapreduce_nd_by_block!(backend, block_size)
+            kernel!(
+                src, dst, f, op, init, neutral,
+                outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                dst_size, reduce_size, dst_size,
+                ndrange=(block_size * dst_size,),
+            )
+        end
+    else
+        # GS_DST_CUTOFF <= dst_size < reduce_size: grid-stride over outputs, one pass.
+        # Cap launched blocks at TARGET_BLOCKS; each block handles
+        # ceil(dst_size / launch_blocks) outputs sequentially.
+        launch_blocks = min(dst_size, TARGET_BLOCKS)
+        kernel! = _mapreduce_nd_by_block!(backend, block_size)
+        kernel!(
+            src, dst, f, op, init, neutral,
+            outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            dst_size, reduce_size, launch_blocks,
+            ndrange=(block_size * launch_blocks,),
         )
     end
 
     return dst
+end
+
+
+# Smallest power-of-two >= n, capped at 256 (the original fixed block size) and
+# floored at 32 (one warp) — used for the multigroup second pass, which only ever
+# combines `reduce_groups` values (reduce_groups <= block_size by construction).
+@inline function _pass2_block_size(n::Int)
+    n <= 32  && return 32
+    n <= 64  && return 64
+    n <= 128 && return 128
+    return 256
 end
 
 
@@ -292,27 +372,32 @@ end
     end
 end
 
-# GPU kernel: by_block — one block of threads cooperatively reduces each output element.
-# Used when there are more elements in the reduced dimension(s) than output elements,
-# e.g. reduce(+, rand(3, 1000), dims=2) — only 3 output elements.
+# GPU kernel: by_block — each block reduces one output element, then grid-strides to
+# the next output (iout += num_blocks) until all outputs are covered. When
+# num_blocks >= output_size, each block handles at most one output (the original,
+# non-striding behavior) at zero extra cost — the while loop runs once.
+#
+# Used for GS_DST_CUTOFF <= dst_size < reduce_size (grid-stride, num_blocks ==
+# min(dst_size, TARGET_BLOCKS) < dst_size in general), and also for the
+# reduce_groups==1 fallback inside the multigroup branch (num_blocks == dst_size,
+# so the loop runs exactly once per block — identical to the pre-grid-stride kernel).
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op, init, neutral,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    output_size, reduce_size,
+    output_size, reduce_size, num_blocks,
 )
     @uniform N = @groupsize()[1]
     sdata = @localmem eltype(dst) (N,)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
+    iout = iblock
+    while true
+        input_base = _outer_decode(iout, outer_strides, outer_sizes)
 
-    if iblock < output_size
-        input_base = _outer_decode(iblock, outer_strides, outer_sizes)
-
-        # Pre-reduce in strides of N (consecutive threads read consecutive elements)
         acc = neutral
         j   = ithread
         while j < reduce_size
@@ -327,10 +412,16 @@ end
         @inline reduce_group!(@context, op, sdata, N, ithread)
 
         if ithread == 0x0
-            dst[iblock + 0x1] = op(init, sdata[0x1])
+            dst[iout + 0x1] = op(init, sdata[0x1])
         end
+
+        next_iout = iout + num_blocks
+        next_iout >= output_size && break
+
+        @synchronize()
+        iout = next_iout
     end
-end
+   end
 
 # GPU kernel: multi-group first pass — several blocks per output element. Block `iblock`
 # handles output `iout` and group `igroup`, reducing its interleaved slice of the reduction
@@ -373,7 +464,9 @@ end
 end
 
 # GPU kernel: multi-group second pass — one block per output reduces over the `reduce_groups`
-# partials and folds in `init`.
+# partials and folds in `init`. Launched with a block size sized to `reduce_groups`
+# (see _pass2_block_size), avoiding an oversubscribed tree-reduce when reduce_groups
+# is much smaller than 256.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_partial_to_dst!(
     @Const(partial), dst,
@@ -404,3 +497,4 @@ end
         end
     end
 end
+
