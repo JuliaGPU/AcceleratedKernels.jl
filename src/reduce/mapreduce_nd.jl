@@ -15,7 +15,7 @@
 
 # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
 # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
-const TARGET_BLOCKS = 1024
+const TARGET_BLOCKS = 256
 
 # Below this many output elements, splitting a single output's reduction across multiple
 # blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
