@@ -1,0 +1,42 @@
+steps:
+
+  # Metal
+  - label: "Metal - Julia v1.10"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: "1.10"
+    command: |
+      julia -e 'using Pkg
+
+                println("--- :julia: Instantiating environment")
+                Pkg.add("Metal")
+                Pkg.develop(path=".")
+
+                println("+++ :julia: Running tests")
+                Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
+    agents:
+      queue: "juliaecosystem"
+      os: "macos"
+      arch: "aarch64"
+    if: build.message !~ /\[skip tests\]/
+    timeout_in_minutes: 60
+
+  - label: "Metal - Julia v1.11"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: "1.11"
+    command: |
+      julia -e 'using Pkg
+
+                println("--- :julia: Instantiating environment")
+                Pkg.add("Metal")
+                Pkg.develop(path=".")
+
+                println("+++ :julia: Running tests")
+                Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
+    agents:
+      queue: "juliaecosystem"
+      os: "macos"
+      arch: "aarch64"
+    if: build.message !~ /\[skip tests\]/
+    timeout_in_minutes: 60
