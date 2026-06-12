@@ -15,8 +15,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--CUDA"])'
     agents:
-      queue: "juliagpu"
-      cuda: "*"
+      queue: "cuda"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -34,8 +33,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--CUDA"])'
     agents:
-      queue: "juliagpu"
-      cuda: "*"
+      queue: "cuda"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -55,8 +53,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--AMDGPU"])'
     agents:
-      queue: "juliagpu"
-      rocm: "*"
+      queue: "rocm"
       rocmgpu: "*"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
@@ -75,8 +72,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--AMDGPU"])'
     agents:
-      queue: "juliagpu"
-      rocm: "*"
+      queue: "rocm"
       rocmgpu: "*"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
@@ -97,8 +93,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
     agents:
-      queue: "juliagpu"
-      intel: "*"
+      queue: "oneapi"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -116,8 +111,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
     agents:
-      queue: "juliagpu"
-      intel: "*"
+      queue: "oneapi"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -137,9 +131,7 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
     agents:
-      queue: "juliaecosystem"
-      os: "macos"
-      arch: "aarch64"
+      queue: "metal"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -157,8 +149,6 @@ steps:
                 println("+++ :julia: Running tests")
                 Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
     agents:
-      queue: "juliaecosystem"
-      os: "macos"
-      arch: "aarch64"
+      queue: "metal"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
