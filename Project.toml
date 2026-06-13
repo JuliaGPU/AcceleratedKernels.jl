@@ -3,9 +3,6 @@ uuid = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
 authors = ["Andrei-Leonard Nicusan <leonard@evophase.co.uk> and contributors"]
 version = "0.4.3"
 
-[workspace]
-projects = ["test", "docs", "benchmark", "examples", "res/wrap"]
-
 [deps]
 ArgCheck = "dce04be8-c92d-5529-be00-80e4d2c0e197"
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
