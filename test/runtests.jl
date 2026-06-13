@@ -56,7 +56,8 @@ if args.custom["amdgpu"] !== nothing
     Pkg.add("AMDGPU")
     using AMDGPU
     @assert AMDGPU.functional()
-    @info "AMDGPU information:\n" * sprint(AMDGPU.versioninfo)
+    println("AMDGPU information:")
+    AMDGPU.versioninfo()
     push!(backends, "amdgpu" => quote
         using AMDGPU
         global BACKEND = ROCBackend()
