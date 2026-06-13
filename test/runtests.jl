@@ -29,28 +29,6 @@ end
 # Build list of active backends, each with setup code
 backends = Pair{String, Expr}[]
 
-# CPU always active
-using InteractiveUtils
-@info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
-push!(backends, "cpu" => quote
-    global BACKEND = get_backend([])
-    global IS_CPU_BACKEND = true
-    global prefer_threads = true
-    global TEST_DL = Ref{Bool}(false)
-    $_array_from_host_code
-end)
-
-# cpu-ka only when --cpu-ka flag passed
-if args.custom["cpu-ka"] !== nothing
-    push!(backends, "cpu-ka" => quote
-        global BACKEND = get_backend([])
-        global IS_CPU_BACKEND = true
-        global prefer_threads = false
-        global TEST_DL = Ref{Bool}(false)
-        $_array_from_host_code
-    end)
-end
-
 # GPU backends are only tested when explicitly requested via a CLI flag, in which case
 # they are expected to be functional: load or initialization failures propagate.
 
@@ -119,6 +97,30 @@ if args.custom["opencl"] !== nothing
         using OpenCL
         global BACKEND = OpenCLBackend()
         global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
+end
+
+# cpu-ka only when --cpu-ka flag passed
+if args.custom["cpu-ka"] !== nothing
+    push!(backends, "cpu-ka" => quote
+        global BACKEND = get_backend([])
+        global IS_CPU_BACKEND = true
+        global prefer_threads = false
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
+end
+
+# CPU runs if no backend selected or if explicitly specified
+using InteractiveUtils
+@info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
+if args.custom["cpu"] !== nothing || isempty(backends)
+    push!(backends, "cpu" => quote
+        global BACKEND = get_backend([])
+        global IS_CPU_BACKEND = true
         global prefer_threads = true
         global TEST_DL = Ref{Bool}(false)
         $_array_from_host_code
