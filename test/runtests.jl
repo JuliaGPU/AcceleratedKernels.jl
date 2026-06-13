@@ -1,6 +1,9 @@
 import AcceleratedKernels as AK
 using ParallelTestRunner
 
+using InteractiveUtils
+@info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
+
 const init_code = quote
     import AcceleratedKernels as AK
     using KernelAbstractions
@@ -115,8 +118,6 @@ if args.custom["cpu-ka"] !== nothing
 end
 
 # CPU runs if no backend selected or if explicitly specified
-using InteractiveUtils
-@info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
 if args.custom["cpu"] !== nothing || isempty(backends)
     push!(backends, "cpu" => quote
         global BACKEND = get_backend([])
