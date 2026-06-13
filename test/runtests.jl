@@ -13,7 +13,7 @@ const testsuite = find_tests(@__DIR__)
 const generic_tests = find_tests(joinpath(@__DIR__, "generic"))
 
 # Parse args with lowercase hyphenated backend flags
-args = parse_args(ARGS; custom=["cuda", "amdgpu", "metal", "oneapi", "opencl", "cpu-ka"])
+args = parse_args(ARGS; custom=["cuda", "amdgpu", "metal", "oneapi", "opencl", "cpu-ka", "cpu"])
 
 # Common helper code appended to every backend setup
 const _array_from_host_code = quote
