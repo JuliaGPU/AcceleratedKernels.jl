@@ -36,8 +36,8 @@ elseif "--Metal" in ARGS
     Metal.versioninfo()
     const BACKEND = MetalBackend()
 elseif "--OpenCL" in ARGS
-    Pkg.add(name="OpenCL", rev="master")
-    Pkg.add(name="SPIRVIntrinsics", rev="master")
+    Pkg.add(name="OpenCL", rev="main")
+    Pkg.add(name="SPIRVIntrinsics", rev="main")
     Pkg.add("pocl_jll")
     using pocl_jll
     using OpenCL
