@@ -152,3 +152,6 @@ steps:
       queue: "metal"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
+
+env:
+  JULIA_PKG_PRECOMPILE_AUTO: false
