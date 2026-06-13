@@ -12,6 +12,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+env:
+  JULIA_PKG_PRECOMPILE_AUTO: false
+
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - nthreads ${{ matrix.env.JULIA_NUM_THREADS }} - ${{ github.event_name }}
