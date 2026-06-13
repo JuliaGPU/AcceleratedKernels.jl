@@ -33,11 +33,11 @@ backends = Pair{String, Expr}[]
 # they are expected to be functional: load or initialization failures propagate.
 
 if args.custom["cuda"] !== nothing
-    using CUDA
-    @assert CUDA.functional()
-    @info "CUDA information:\n" * sprint(CUDA.versioninfo)
+    using CUDACore
+    @assert CUDACore.functional()
+    @info "CUDACore information:\n" * sprint(CUDACore.versioninfo)
     push!(backends, "cuda" => quote
-        using CUDA
+        using CUDACore
         global BACKEND = CUDABackend()
         global IS_CPU_BACKEND = false
         global prefer_threads = true
