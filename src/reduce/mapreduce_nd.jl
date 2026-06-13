@@ -332,12 +332,20 @@ end
     length(reduce_sizes) == 1 && return j * reduce_strides[1]
     off = 0
     tmp = j
-    @inbounds for i in 1:length(reduce_sizes)
-        q    = tmp ÷ reduce_sizes[i]
-        r    = tmp - q * reduce_sizes[i]
+    @inbounds for i in 1:length(reduce_sizes) - 1
+        sz = reduce_sizes[i]
+        if ispow2(sz)
+            shift = trailing_zeros(sz)
+            r   = tmp & (sz - 1)
+            tmp = tmp >> shift
+        else
+            q   = tmp ÷ sz
+            r   = tmp - q * sz
+            tmp = q
+        end
         off += r * reduce_strides[i]
-        tmp  = q
     end
+    off += tmp * reduce_strides[end]
     off
 end
 
