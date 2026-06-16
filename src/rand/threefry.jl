@@ -1,0 +1,75 @@
+struct Threefry <: CounterRNGAlgorithm end
+
+# Threefry magic numbers
+const THREEFRY_PARITY = UInt32(0x1BD11BDA)
+const THREEFRY_ROTATIONS = (
+    UInt32(13), UInt32(15), UInt32(26), UInt32(6),
+    UInt32(17), UInt32(29), UInt32(16), UInt32(24),
+)
+const THREEFRY_ROUNDS = 20
+
+
+@inline function _threefry_key_word(k0::UInt32, k1::UInt32, k2::UInt32, idx::UInt32)::UInt32
+    idx == UInt32(0) && return k0
+    idx == UInt32(1) && return k1
+    return k2
+end
+
+
+# Evaluate one Threefry block at `counter`, returning two 32-bit lanes `(x0, x1)`
+@inline function _threefry2x32_block(
+    seed::UInt64,
+    counter::UInt64,
+)::Tuple{UInt32, UInt32}
+
+    x0 = _u32_lo(counter)
+    x1 = _u32_hi(counter)
+
+    k0 = _u32_lo(seed)
+    k1 = _u32_hi(seed)
+    k2 = xor(THREEFRY_PARITY, xor(k0, k1))
+
+    x0 += k0
+    x1 += k1
+
+    @inbounds for round in 0:(THREEFRY_ROUNDS - 1)
+        round_u32 = UInt32(round)
+        rot = THREEFRY_ROTATIONS[Int((round_u32 & UInt32(0x7)) + UInt32(1))]
+        x0 += x1
+        x1 = xor(_rotl32(x1, rot), x0)
+
+        if (round_u32 & UInt32(0x3)) == UInt32(0x3)
+            s = (round_u32 >>> 2) + UInt32(1)
+            i0 = s % UInt32(3)
+            i1 = (s + UInt32(1)) % UInt32(3)
+            x0 += _threefry_key_word(k0, k1, k2, i0)
+            x1 += _threefry_key_word(k0, k1, k2, i1) + s
+        end
+    end
+
+    return x0, x1
+end
+
+
+# Return lane 0 from the single Threefry block at `counter`
+@inline function rand_uint(
+    seed::UInt64,
+    alg::Threefry,
+    counter::UInt64,
+    ::Type{UInt32},
+)::UInt32
+    x0, _ = _threefry2x32_block(seed, counter)
+    return x0
+end
+
+
+# Build UInt64 from the two lanes `(x0, x1)` of the same Threefry block at `counter`
+@inline function rand_uint(
+    seed::UInt64,
+    alg::Threefry,
+    counter::UInt64,
+    ::Type{UInt64},
+)::UInt64
+    x0, x1 = _threefry2x32_block(seed, counter)
+    return _u64_from_u32s(x0, x1)
+end

@@ -15,6 +15,7 @@ using ArgCheck: @argcheck
 using GPUArraysCore: AnyGPUArray, @allowscalar
 using KernelAbstractions
 using KernelAbstractions: @context
+using Random
 import UnsafeAtomics
 
 
@@ -31,6 +32,7 @@ include("map.jl")
 include("sort/sort.jl")
 include("reduce/reduce.jl")
 include("accumulate/accumulate.jl")
+include("rand/rand.jl")
 include("searchsorted.jl")
 include("predicates.jl")
 include("arithmetics.jl")

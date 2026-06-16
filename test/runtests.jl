@@ -69,6 +69,8 @@ end
 include("partition.jl")
 include("looping.jl")
 include("map.jl")
+include("rand.jl")
+include("randn.jl")
 include("sort.jl")
 include("reduce.jl")
 include("accumulate.jl")
