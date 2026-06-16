@@ -1,7 +1,6 @@
 import AcceleratedKernels as AK
 using InteractiveUtils
 using ParallelTestRunner
-using Pkg
 
 @info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
 
@@ -37,8 +36,6 @@ backends = Pair{String, Expr}[]
 # they are expected to be functional: load or initialization failures propagate.
 
 if args.custom["cuda"] !== nothing
-    Pkg.add("CUDACore")
-    Pkg.add("CUDATools")
     using CUDACore, CUDATools
     @assert CUDACore.functional()
     @info "CUDACore information:\n" * sprint(CUDATools.versioninfo)
@@ -53,7 +50,6 @@ if args.custom["cuda"] !== nothing
 end
 
 if args.custom["amdgpu"] !== nothing
-    Pkg.add("AMDGPU")
     using AMDGPU
     @assert AMDGPU.functional()
     println("AMDGPU information:")
@@ -69,7 +65,6 @@ if args.custom["amdgpu"] !== nothing
 end
 
 if args.custom["metal"] !== nothing
-    Pkg.add("Metal")
     using Metal
     @assert Metal.functional()
     @info "Metal information:\n" * sprint(Metal.versioninfo)
@@ -84,7 +79,6 @@ if args.custom["metal"] !== nothing
 end
 
 if args.custom["oneapi"] !== nothing
-    Pkg.add("oneAPI")
     using oneAPI
     @assert oneAPI.functional()
     @info "oneAPI information:\n" * sprint(oneAPI.versioninfo)
@@ -99,7 +93,6 @@ if args.custom["oneapi"] !== nothing
 end
 
 if args.custom["opencl"] !== nothing
-    Pkg.add(["pocl_jll", "OpenCL"])
     using pocl_jll, OpenCL
     @assert !isempty(OpenCL.cl.platforms())
     @info "OpenCL information:\n" * sprint(OpenCL.versioninfo)
