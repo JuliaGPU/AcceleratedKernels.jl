@@ -428,10 +428,16 @@ end
     # Multi-input mapreduce lowers through a broadcasted source.
     vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
     vh_b = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_c = rand(Int32(-10):Int32(10), 4, 5, 6)
     v_a = array_from_host(vh_a)
     v_b = array_from_host(vh_b)
+    v_c = array_from_host(vh_c)
     @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0)) ==
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b, BACKEND; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
+    @test AK.mapreduce((x, y, z) -> x + y * z, +, v_a, v_b, v_c, BACKEND; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y, z) -> x + y * z, +, vh_a, vh_b, vh_c; init=Int32(0))
     @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
     @test Array(AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=())) ==
@@ -600,6 +606,8 @@ end
         @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims)) ==
             mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims)
     end
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb, BACKEND; prefer_threads, init=Int32(0), dims=(1, 2))) ==
+        mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=(1, 2))
     @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims=())) ==
         mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=())
     @test Array(AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_ma, v_mb; prefer_threads, init=0f0, dims=(1, 2))) ≈

@@ -155,6 +155,7 @@ end
     )
 
     mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray...; init, kwargs...)
+    mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray..., backend::Backend; init, kwargs...)
 
 Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
 If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of
@@ -216,6 +217,11 @@ Computing a two-input dimensional reduction:
 ```julia
 rows = AK.mapreduce((x, y) -> x * y, +, a, b; init=0f0, dims=1)
 ```
+
+An explicit backend may be passed after all input arrays:
+```julia
+rows = AK.mapreduce((x, y) -> x * y, +, a, b, backend; init=0f0, dims=1)
+```
 """
 function mapreduce(
     f, op, src::MapReduceSource, backend::Backend=_mapreduce_backend(src);
@@ -234,10 +240,37 @@ function mapreduce(
     init,
     kwargs...
 )
-    _mapreduce_check_map_axes(src, src2, srcs...)
-    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, src2, srcs...))
+    return _mapreduce_multi(
+        f, op, nothing, src, src2, srcs...;
+        init,
+        kwargs...
+    )
+end
+
+function mapreduce(
+    f, op, src::AbstractArray, src2::AbstractArray, arg, args...;
+    init,
+    kwargs...
+)
+    backend = isempty(args) ? arg : args[end]
+    backend isa Backend || throw(MethodError(mapreduce, (f, op, src, src2, arg, args...)))
+    srcs = isempty(args) ? () : (arg, args[1:end - 1]...)
+    return _mapreduce_multi(
+        f, op, backend, src, src2, srcs...;
+        init,
+        kwargs...
+    )
+end
+
+function _mapreduce_multi(
+    f, op, backend::Union{Nothing, Backend}, src::AbstractArray, srcs::AbstractArray...;
+    init,
+    kwargs...
+)
+    _mapreduce_check_map_axes(src, srcs...)
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
     return mapreduce(
-        identity, op, bc, _mapreduce_backend(bc);
+        identity, op, bc, isnothing(backend) ? _mapreduce_backend(bc) : backend;
         init,
         kwargs...
     )
