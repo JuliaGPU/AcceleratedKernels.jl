@@ -78,8 +78,8 @@ The returned type is the same as `init` - to control output precision, specify `
 
 ## CPU settings
 Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims::Int`) multithreading currently only becomes faster for `max_tasks >= 4`; all other
-cases are scaling linearly with the number of threads.
+arrays (`dims` is an integer or tuple) multithreading currently only becomes faster for
+`max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
 
 Note that multithreading reductions only improves performance for cases with more compute-heavy
 operations, which hide the memory latency and thread launch overhead - that includes:
@@ -174,8 +174,8 @@ are reduced without materializing the intermediate array. Mismatched axes throw
 
 ## CPU settings
 Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims::Int`) multithreading currently only becomes faster for `max_tasks >= 4`; all other
-cases are scaling linearly with the number of threads.
+arrays (`dims` is an integer or tuple) multithreading currently only becomes faster for
+`max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
 
 ## GPU settings
 The `block_size` parameter controls the number of threads per block.

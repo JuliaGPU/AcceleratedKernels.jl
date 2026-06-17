@@ -8,10 +8,12 @@
 #   2. The inner reduce loop must avoid per-element integer division. For a single segment the
 #      element offset is just `j * stride`; only genuinely non-contiguous dim sets (e.g.
 #      `dims=(1,3)`) fall back to a per-element multi-dimensional decode.
-#   3. Three work decompositions, chosen by the relative sizes of the output and the reduction:
-#        - by_thread:  one thread per output (many outputs, small reduction)
-#        - by_block:   one block per output, grid-stride over outputs (few outputs, large reduction)
-#        - multigroup: several blocks per output, two-pass (dst_size==1 or very small dst_size)
+#   3. Four work decompositions, chosen by the relative sizes and strides of the output and
+#      the reduction:
+#        - by_thread:     one thread per output (many outputs, small reduction)
+#        - tiled_strided: several contiguous outputs per block, for square-like strided reductions
+#        - by_block:      one block per output, grid-stride over outputs (few outputs, large reduction)
+#        - multigroup:    several blocks per output, two-pass (dst_size==1 or very small dst_size)
 
 # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
 # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
@@ -26,6 +28,10 @@ const GS_DST_CUTOFF = 32
 # Caps reduce_groups so splitting a reduction doesn't shrink per-thread work
 # below the point where launch/scheduling overhead dominates actual work.
 const MIN_ITEMS_PER_THREAD = 8
+
+# Number of contiguous output rows handled by each tiled-strided block. With the default
+# 256-thread block this gives 32 lanes per row.
+const TILED_STRIDED_ROWS_PER_BLOCK = 8
 
 
 # Host-side canonicalization: split the dimensions into reduced and kept ("outer") segments,
@@ -160,16 +166,16 @@ function mapreduce_nd(
     reduce_size    = len
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Dispatch decision (see header comment for the three paths):
+    # Dispatch decision (see header comment for the four paths):
     #
-    #   - dst_size >= reduce_size                         -> by_thread
+    #   - square-like, contiguous output with strided input -> tiled_strided
+    #   - dst_size >= reduce_size                          -> by_thread
     #   - dst_size == 1, or dst_size < GS_DST_CUTOFF
-    #     (and dst_size < reduce_size)                    -> multigroup (split one
-    #                                                         reduction across blocks,
-    #                                                         needs a 2nd-pass combine)
-    #   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size)
-    #                                                      -> by_block, grid-striding
-    #                                                         over outputs, single pass
+    #     (and dst_size < reduce_size)                     -> multigroup (split one
+    #                                                          reduction across blocks,
+    #                                                          needs a 2nd-pass combine)
+    #   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size) -> by_block, grid-striding
+    #                                                            over outputs, single pass
     #
     # Rationale: grid-striding by_block launches `min(dst_size, TARGET_BLOCKS)` blocks;
     # for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
@@ -186,12 +192,12 @@ function mapreduce_nd(
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0 &&
         reduce_strides == (1,)
 
-    # by_block override 2: when by_thread would launch too few blocks for a square
+    # by_block override 2: when by_thread would launch too few blocks for a square-like
     # output/reduction shape, split each output reduction across a full block. This
-    # helps shapes like 1024×1024 dims=2 where by_thread launches only four
-    # 256-thread blocks and each thread performs a long serial reduction. Avoid
-    # applying this to wide-output shapes, where by_thread's cross-output coalescing
-    # is better than a strided block reduction.
+    # fallback is mostly for layouts that do not satisfy the narrower tiled-strided
+    # pattern below; the common contiguous-output strided case uses tiled_strided.
+    # Avoid applying this to wide-output shapes, where by_thread's cross-output
+    # coalescing is better than a strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
         cld(dst_size, block_size) < TARGET_BLOCKS &&
@@ -202,15 +208,17 @@ function mapreduce_nd(
         dst_size == reduce_size && reduce_size >= block_size &&
         length(outer_sizes) == 1 && outer_strides == (1,) &&
         length(reduce_sizes) == 1 && reduce_strides[1] > 1 &&
-        block_size % 8 == 0 && ispow2(block_size ÷ 8)
+        block_size % TILED_STRIDED_ROWS_PER_BLOCK == 0 &&
+        ispow2(block_size ÷ TILED_STRIDED_ROWS_PER_BLOCK)
 
     if use_tiled_strided
-        # Square-like row reductions with contiguous outputs and strided input
-        # reads, e.g. size=(1024,1024), dims=2. Several outputs share a block:
-        # small lane groups reduce one output each, preserving more cross-output
-        # memory coalescing than by_block while launching many more blocks than
-        # by_thread.
-        rows_per_block = 8
+        # Narrow layout-specific path: square-like row reductions with contiguous
+        # outputs and strided input reads, e.g. size=(1024,1024), dims=2. Several
+        # outputs share a block: small lane groups reduce one output each, preserving
+        # more cross-output memory coalescing than by_block while launching many more
+        # blocks than by_thread. This is the only extra kernel beyond the generic
+        # by_thread/by_block/multigroup shapes.
+        rows_per_block = TILED_STRIDED_ROWS_PER_BLOCK
         blocks = cld(dst_size, rows_per_block)
         kernel! = _mapreduce_nd_by_thread_tiled_strided!(backend, block_size)
         kernel!(
@@ -530,7 +538,7 @@ end
         @synchronize()
         iout = next_iout
     end
-   end
+end
 
 # GPU kernel: multi-group first pass — several blocks per output element. Block `iblock`
 # handles output `iout` and group `igroup`, reducing its interleaved slice of the reduction

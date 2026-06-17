@@ -245,8 +245,8 @@ end
         @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
     end
 
-    # Tuple dims support
-    for dims in [(1,2), (1,3), (2,3), (1,2,3)]
+    # Tuple dims support. Order and duplicates match Base semantics.
+    for dims in [(1,2), (1,3), (2,3), (1,2,3), (2,1), (3,1), (2,1,2)]
         for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
@@ -608,8 +608,8 @@ end
         @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
     end
 
-    # Tuple dims support
-    for dims in [(1,2), (1,3), (2,3), (1,2,3)]
+    # Tuple dims support. Order and duplicates match Base semantics.
+    for dims in [(1,2), (1,3), (2,3), (1,2,3), (2,1), (3,1), (2,1,2)]
         for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
