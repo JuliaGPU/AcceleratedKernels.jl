@@ -231,7 +231,7 @@ function mapreduce_nd(
             kernel!(
                 src, partial, f, op, neutral,
                 outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-                dst_size, reduce_size, reduce_groups,
+                Val(dst_size), reduce_size, reduce_groups,
                 ndrange=(block_size * dst_size * reduce_groups,),
             )
 
@@ -358,6 +358,10 @@ end
     off
 end
 
+@inline _val(::Val{x}) where {x} = x
+@inline _udiv_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.udiv_int(UInt(x), UInt(y)))
+@inline _urem_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.urem_int(UInt(x), UInt(y)))
+
 # GPU kernel: by_thread — one thread per output element, reducing sequentially.
 # Used when there are more output elements than elements in the reduced dimension(s),
 # e.g. reduce(+, rand(3, 1000), dims=1) — only 3 elements to reduce per output.
@@ -449,16 +453,17 @@ end
     f, op, neutral,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    output_size, reduce_size, reduce_groups,
+    output_size_val, reduce_size, reduce_groups,
 )
     @uniform N = @groupsize()[1]
+    @uniform output_size = _val(output_size_val)
     sdata = @localmem eltype(partial) (N,)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    iout   = iblock % output_size
-    igroup = iblock ÷ output_size
+    iout   = _urem_const(iblock, output_size_val)
+    igroup = _udiv_const(iblock, output_size_val)
 
     input_base = _outer_decode(iout, outer_strides, outer_sizes)
 
