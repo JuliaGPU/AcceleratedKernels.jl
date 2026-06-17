@@ -408,8 +408,20 @@ end
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
     @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=())) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=())
     @test AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_a, v_b; prefer_threads, init=0f0) ≈
         mapreduce((x, y) -> Float32(x - y) / 3, +, vh_a, vh_b; init=0f0)
+
+    for (shape, dims) in (((0, 3), 1), ((2, 0), 2), ((0, 0), (1, 2)), ((0, 3), ()))
+        h_empty1 = reshape(Int32[], shape...)
+        h_empty2 = fill(Int32(2), shape...)
+        @test Array(AK.mapreduce((x, y) -> x + y, +,
+                                  array_from_host(h_empty1),
+                                  array_from_host(h_empty2);
+                                  prefer_threads, init=Int32(10), dims)) ==
+            mapreduce((x, y) -> x + y, +, h_empty1, h_empty2; init=Int32(10), dims)
+    end
 
     @test_throws DimensionMismatch AK.mapreduce(
         (x, y) -> x + y, +,
@@ -425,6 +437,8 @@ end
             mapreduce(identity, +, bc; init=0)
         @test Array(AK.mapreduce(identity, +, bc; prefer_threads, init=0, dims=2)) ==
             mapreduce(identity, +, bc; init=0, dims=2)
+        @test Array(AK.mapreduce(identity, +, bc; prefer_threads, init=0, dims=())) ==
+            mapreduce(identity, +, bc; init=0, dims=())
     end
 
     # Testing different settings, enforcing change of type between f and op
@@ -557,6 +571,8 @@ end
         @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims)) ==
             mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims)
     end
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims=())) ==
+        mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=())
     @test Array(AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_ma, v_mb; prefer_threads, init=0f0, dims=(1, 2))) ≈
         mapreduce((x, y) -> Float32(x - y) / 3, +, vh_ma, vh_mb; init=0f0, dims=(1, 2))
 
