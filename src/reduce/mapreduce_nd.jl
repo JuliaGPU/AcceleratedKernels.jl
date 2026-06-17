@@ -158,6 +158,7 @@ function mapreduce_nd(
     end
 
     src_strides = _mapreduce_strides(src)
+    _mapreduce_check_dense_strides(src, src_strides)
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
     outer_strides  = Tuple(str for (str, _) in outer_segs)
@@ -322,6 +323,26 @@ function _mapreduce_strides(src::Base.Broadcast.Broadcasted)
         s
     end
 end
+
+function _mapreduce_dense_strides(sizes::Tuple)
+    stride = 1
+    return ntuple(length(sizes)) do i
+        s = stride
+        stride *= sizes[i]
+        s
+    end
+end
+
+function _mapreduce_check_dense_strides(src::AbstractArray, src_strides)
+    dense_strides = _mapreduce_dense_strides(size(src))
+    src_strides == dense_strides && return nothing
+    throw(ArgumentError(
+        "GPU mapreduce with dims currently requires dense column-major source arrays; " *
+        "got strides $(src_strides), expected $(dense_strides)",
+    ))
+end
+
+_mapreduce_check_dense_strides(src::Base.Broadcast.Broadcasted, src_strides) = nothing
 
 
 # Smallest power-of-two >= n, capped at 256 (the original fixed block size) and

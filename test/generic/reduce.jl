@@ -274,6 +274,10 @@ end
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
             sum(vh; init=0, dims=(1,2))
+    else
+        vh = reshape(Int32(1):Int32(40), 5, 8)
+        v = array_from_host(vh)
+        @test_throws ArgumentError AK.reduce(+, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)
     end
 
     # Test that undefined kwargs are not accepted
@@ -642,6 +646,10 @@ end
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.mapreduce(x -> 2x, +, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
             mapreduce(x -> 2x, +, vh; init=0, dims=(1,2))
+    else
+        vh = reshape(Int32(1):Int32(40), 5, 8)
+        v = array_from_host(vh)
+        @test_throws ArgumentError AK.mapreduce(identity, +, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)
     end
 
     # Test that undefined kwargs are not accepted
