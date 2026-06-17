@@ -33,11 +33,11 @@ m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.sum(m, dims=1)
 ```
 
-If you know the shape of the resulting array (in case of a axis-wise sum, i.e. `dims` is not
+If you know the shape of the resulting array (in case of a dimensionwise sum, i.e. `dims` is not
 `nothing`), you can provide the `temp` argument to save results into and avoid allocations:
 ```julia
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = MtlArray(zeros(Int32, 10))
+temp = MtlArray(zeros(Int32, 10, 1))
 s = AK.sum(m, dims=2, temp=temp)
 ```
 """
@@ -89,11 +89,11 @@ m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
 p = AK.prod(m, dims=1)
 ```
 
-If you know the shape of the resulting array (in case of a axis-wise product, i.e. `dims` is not
+If you know the shape of the resulting array (in case of a dimensionwise product, i.e. `dims` is not
 `nothing`), you can provide the `temp` argument to save results into and avoid allocations:
 ```julia
 m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = ROCArray(ones(Int32, 10))
+temp = ROCArray(ones(Int32, 10, 1))
 p = AK.prod(m, dims=2, temp=temp)
 ```
 """
@@ -145,11 +145,11 @@ m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
 m = AK.maximum(m, dims=1)
 ```
 
-If you know the shape of the resulting array (in case of a axis-wise maximum, i.e. `dims` is not
+If you know the shape of the resulting array (in case of a dimensionwise maximum, i.e. `dims` is not
 `nothing`), you can provide the `temp` argument to save results into and avoid allocations:
 ```julia
 m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = oneArray(zeros(Int32, 10))
+temp = oneArray(zeros(Int32, 10, 1))
 m = AK.maximum(m, dims=2, temp=temp)
 ```
 """
@@ -201,11 +201,11 @@ m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
 m = AK.minimum(m, dims=1)
 ```
 
-If you know the shape of the resulting array (in case of a axis-wise minimum, i.e. `dims` is not
+If you know the shape of the resulting array (in case of a dimensionwise minimum, i.e. `dims` is not
 `nothing`), you can provide the `temp` argument to save results into and avoid allocations:
 ```julia
 m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = CuArray(ones(Int32, 10))
+temp = CuArray(ones(Int32, 10, 1))
 m = AK.minimum(m, dims=2, temp=temp)
 ```
 """
@@ -263,12 +263,12 @@ m = MtlArray(rand(Bool, 10, 100_000))
 c = AK.count(m, dims=1)
 ```
 
-If you know the shape of the resulting array (in case of a axis-wise count, i.e. `dims` is not
+If you know the shape of the resulting array (in case of a dimensionwise count, i.e. `dims` is not
 `nothing`), you can provide the `temp` argument to save results into and avoid allocations:
 ```julia
 m = MtlArray(rand(Bool, 10, 100_000))
-temp = MtlArray(zeros(Int32, 10))
-c = AK.count(m, dims=2, temp=temp)
+temp = MtlArray(zeros(Int32, 10, 1))
+c = AK.count(m; init=Int32(0), dims=2, temp=temp)
 ```
 """
 function count(
