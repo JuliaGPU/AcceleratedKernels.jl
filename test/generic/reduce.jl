@@ -392,6 +392,13 @@ end
     @test AK.mapreduce(abs, +, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
         mapreduce(abs, +, vh_one; init=Int32(10))
 
+    vh_typechange = rand(Int32(-10):Int32(10), 4, 5)
+    f_typechange = x -> Float32(x) / 2
+    @test AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0) ≈
+        mapreduce(f_typechange, +, vh_typechange; init=0f0)
+    @test Array(AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0, dims=2)) ≈
+        mapreduce(f_typechange, +, vh_typechange; init=0f0, dims=2)
+
     # Multi-input mapreduce lowers through a broadcasted source.
     vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
     vh_b = rand(Int32(-10):Int32(10), 4, 5, 6)
@@ -401,6 +408,8 @@ end
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
     @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
+    @test AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_a, v_b; prefer_threads, init=0f0) ≈
+        mapreduce((x, y) -> Float32(x - y) / 3, +, vh_a, vh_b; init=0f0)
 
     @test_throws DimensionMismatch AK.mapreduce(
         (x, y) -> x + y, +,
@@ -548,6 +557,8 @@ end
         @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims)) ==
             mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims)
     end
+    @test Array(AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_ma, v_mb; prefer_threads, init=0f0, dims=(1, 2))) ≈
+        mapreduce((x, y) -> Float32(x - y) / 3, +, vh_ma, vh_mb; init=0f0, dims=(1, 2))
 
     # min/max with dims: tests correct neutral element in partial reduction
     for dims in 1:3
