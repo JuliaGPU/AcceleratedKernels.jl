@@ -190,8 +190,27 @@ function mapreduce_nd(
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
+    use_tiled_strided =
+        dst_size == reduce_size && reduce_size >= block_size &&
+        length(outer_sizes) == 1 && outer_strides == (1,) &&
+        length(reduce_sizes) == 1 && reduce_strides[1] > 1 &&
+        block_size % 8 == 0 && ispow2(block_size ÷ 8)
 
-    if dst_size >= reduce_size && !use_by_block
+    if use_tiled_strided
+        # Square-like row reductions with contiguous outputs and strided input
+        # reads, e.g. size=(1024,1024), dims=2. Several outputs share a block:
+        # small lane groups reduce one output each, preserving more cross-output
+        # memory coalescing than by_block while launching many more blocks than
+        # by_thread.
+        rows_per_block = 8
+        blocks = cld(dst_size, rows_per_block)
+        kernel! = _mapreduce_nd_by_thread_tiled_strided!(backend, block_size)
+        kernel!(
+            src, dst, f, op, init, neutral,
+            reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
+            ndrange=(block_size * blocks,),
+        )
+    elseif dst_size >= reduce_size && !use_by_block
         # Many outputs, small reduction: one thread per output reduces sequentially
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
@@ -375,6 +394,53 @@ end
 @inline _val(::Val{x}) where {x} = x
 @inline _udiv_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.udiv_int(UInt(x), UInt(y)))
 @inline _urem_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.urem_int(UInt(x), UInt(y)))
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
+    @Const(src), dst,
+    f, op, init, neutral,
+    reduce_stride,
+    output_size, reduce_size,
+    rows_val,
+)
+    @uniform N = @groupsize()[1]
+    @uniform rows = _val(rows_val)
+    @uniform reduce_threads = N ÷ rows
+    sdata = @localmem eltype(dst) (N,)
+
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+
+    row  = _urem_const(ithread, rows_val)
+    lane = _udiv_const(ithread, rows_val)
+    iout = iblock * rows + row
+
+    acc = neutral
+    if iout < output_size
+        j = lane
+        while j < reduce_size
+            acc = op(acc, f(src[iout + j * reduce_stride + 0x1]))
+            j += reduce_threads
+        end
+    end
+
+    sdata[ithread + 0x1] = acc
+    @synchronize()
+
+    step = reduce_threads ÷ 2
+    while step >= 1
+        if lane < step
+            dst_lane = row + lane * rows
+            src_lane = row + (lane + step) * rows
+            sdata[dst_lane + 0x1] = op(sdata[dst_lane + 0x1], sdata[src_lane + 0x1])
+        end
+        @synchronize()
+        step ÷= 2
+    end
+
+    if lane == 0x0 && iout < output_size
+        dst[iout + 0x1] = op(init, sdata[row + 0x1])
+    end
+end
 
 # GPU kernel: by_thread — one thread per output element, reducing sequentially.
 # Used when there are more output elements than elements in the reduced dimension(s),
