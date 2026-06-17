@@ -256,6 +256,16 @@ end
         end
     end
 
+    # Tiled strided GPU path: contiguous kept dimensions, one strided reduce
+    # dimension, and dst_size == reduce_size. The 3D case also exercises a
+    # partial output tile.
+    for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
+        vh = rand(Int32(1):Int32(3), shape...)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(+, v; prefer_threads, init=Int32(0), dims)) ==
+            sum(vh; init=Int32(0), dims)
+    end
+
     if IS_CPU_BACKEND
         # The CPU fallback should not require strided storage.
         vh = reshape(1:12, 1, 3, 4)
@@ -607,6 +617,15 @@ end
             sh = Array(s)
             @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
         end
+    end
+
+    # Tiled strided GPU path coverage for mapreduce, including a 3D case with
+    # a partial output tile.
+    for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
+        vh = rand(Int32(1):Int32(3), shape...)
+        v = array_from_host(vh)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, v; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce(x -> x - Int32(1), +, vh; init=Int32(0), dims)
     end
 
     if IS_CPU_BACKEND
