@@ -60,7 +60,7 @@ include("mapreduce_nd.jl")
     reduce(
         op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
-        neutral=neutral_element(op, eltype(src)),
+        neutral=neutral_element(op, typeof(init)),
         dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
@@ -145,7 +145,7 @@ end
     mapreduce(
         f, op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
-        neutral=neutral_element(op, eltype(src)),
+        neutral=neutral_element(op, typeof(init)),
         dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
@@ -251,7 +251,7 @@ end
 function _mapreduce_impl(
     f, op, src::MapReduceSource, backend::Backend;
     init,
-    neutral=neutral_element(op, _mapreduce_eltype(src)),
+    neutral=neutral_element(op, typeof(init)),
     dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon} = nothing,
 
     # CPU settings

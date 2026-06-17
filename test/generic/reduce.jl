@@ -398,6 +398,12 @@ end
         mapreduce(f_typechange, +, vh_typechange; init=0f0)
     @test Array(AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0, dims=2)) ≈
         mapreduce(f_typechange, +, vh_typechange; init=0f0, dims=2)
+    f_min_typechange = x -> Float32(10_000_000_000 + x)
+    f_max_typechange = x -> Float32(-10_000_000_000 + x)
+    @test AK.mapreduce(f_min_typechange, min, array_from_host(vh_typechange); prefer_threads, init=Inf32) ≈
+        mapreduce(f_min_typechange, min, vh_typechange; init=Inf32)
+    @test AK.mapreduce(f_max_typechange, max, array_from_host(vh_typechange); prefer_threads, init=-Inf32) ≈
+        mapreduce(f_max_typechange, max, vh_typechange; init=-Inf32)
 
     # Multi-input mapreduce lowers through a broadcasted source.
     vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
@@ -575,6 +581,13 @@ end
         mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=())
     @test Array(AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_ma, v_mb; prefer_threads, init=0f0, dims=(1, 2))) ≈
         mapreduce((x, y) -> Float32(x - y) / 3, +, vh_ma, vh_mb; init=0f0, dims=(1, 2))
+    vh_typechange_nd = rand(Int32(-10):Int32(10), 4, 5)
+    f_min_typechange_nd = x -> Float32(10_000_000_000 + x)
+    f_max_typechange_nd = x -> Float32(-10_000_000_000 + x)
+    @test Array(AK.mapreduce(f_min_typechange_nd, min, array_from_host(vh_typechange_nd); prefer_threads, init=Inf32, dims=2)) ≈
+        mapreduce(f_min_typechange_nd, min, vh_typechange_nd; init=Inf32, dims=2)
+    @test Array(AK.mapreduce(f_max_typechange_nd, max, array_from_host(vh_typechange_nd); prefer_threads, init=-Inf32, dims=2)) ≈
+        mapreduce(f_max_typechange_nd, max, vh_typechange_nd; init=-Inf32, dims=2)
 
     # min/max with dims: tests correct neutral element in partial reduction
     for dims in 1:3
