@@ -125,6 +125,10 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     @test AK.reduce(+, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
         reduce(+, vh_colon; init=Int32(0), dims=:)
 
+    vh_one = Int32[7]
+    @test AK.reduce(+, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
+        reduce(+, vh_one; init=Int32(10))
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10)); init=10, bad=:kwarg)
 
@@ -384,6 +388,10 @@ end
     @test AK.mapreduce(abs, +, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
         mapreduce(abs, +, vh_colon; init=Int32(0), dims=:)
 
+    vh_one = Int32[-7]
+    @test AK.mapreduce(abs, +, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
+        mapreduce(abs, +, vh_one; init=Int32(10))
+
     # Multi-input mapreduce lowers through a broadcasted source.
     vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
     vh_b = rand(Int32(-10):Int32(10), 4, 5, 6)
@@ -393,6 +401,14 @@ end
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
     @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
+
+    @test_throws DimensionMismatch AK.mapreduce(
+        (x, y) -> x + y, +,
+        array_from_host(rand(Int32, 2, 3)),
+        array_from_host(rand(Int32, 1, 3));
+        prefer_threads,
+        init=Int32(0),
+    )
 
     # Testing different settings, enforcing change of type between f and op
     f(s, temp) = AK.mapreduce(

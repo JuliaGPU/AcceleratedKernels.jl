@@ -34,6 +34,14 @@ function _mapreduce_backend_from_args(args::Tuple)
     return backend
 end
 
+function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
+    src_axes = axes(src)
+    for other in srcs
+        axes(other) == src_axes || throw(DimensionMismatch("all input arrays must have the same axes"))
+    end
+    return nothing
+end
+
 include("mapreduce_1d_cpu.jl")
 include("mapreduce_1d_gpu.jl")
 include("mapreduce_nd.jl")
@@ -208,6 +216,7 @@ function mapreduce(
     init,
     kwargs...
 )
+    _mapreduce_check_map_axes(src, src2, srcs...)
     bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, src2, srcs...))
     return mapreduce(
         identity, op, bc, _mapreduce_backend(bc);

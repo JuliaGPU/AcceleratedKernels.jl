@@ -66,7 +66,7 @@ function mapreduce_1d_gpu(
     # Degenerate cases
     len = length(src)
     len == 0 && return init
-    len == 1 && return @allowscalar f(src[1])
+    len == 1 && return op(init, @allowscalar f(src[1]))
     if len < switch_below
         h_src = Vector(src)
         return Base.mapreduce(f, op, h_src; init)
