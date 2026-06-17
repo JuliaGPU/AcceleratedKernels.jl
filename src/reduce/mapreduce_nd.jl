@@ -49,7 +49,15 @@ function _canonicalize_dims(src_sizes, src_strides, dims_valid)
             end
             push!(reduce_segs, (seg_stride, seg_size))
         else
-            push!(outer_segs, (src_strides[i], src_sizes[i]))
+            seg_stride = src_strides[i]
+            seg_size   = src_sizes[i]
+            while i + 1 <= ndim &&
+                  !((i + 1) in dims_valid) &&
+                  src_strides[i + 1] == seg_stride * seg_size
+                i += 1
+                seg_size *= src_sizes[i]
+            end
+            push!(outer_segs, (seg_stride, seg_size))
         end
         i += 1
     end
