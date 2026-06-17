@@ -170,18 +170,26 @@ function mapreduce_nd(
     # option regardless of GS_DST_CUTOFF.
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Coalescing override: when the reduced dimension is the fastest-varying one
-    # (reduce_strides==(1,)) and reduce_size is large enough to amortize a
-    # shared-memory tree-reduce (>=32, one warp), by_thread's per-thread strided
-    # access (stride==reduce_size across threads) is badly uncoalesced, while
-    # by_block lets consecutive threads read consecutive elements. Below 32,
-    # by_block's sync overhead isn't worth it for so few elements.
+    # by_block override 1: when the reduced dimension is the fastest-varying one
+    # (reduce_strides==(1,)), by_thread's per-thread strided access is badly
+    # uncoalesced, while by_block lets consecutive threads read consecutive elements.
     use_by_block_for_coalescing =
         dst_size >= reduce_size && reduce_size >= block_size &&
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0 &&
         reduce_strides == (1,)
 
-    if dst_size >= reduce_size && !use_by_block_for_coalescing
+    # by_block override 2: when by_thread would launch too few blocks, split each
+    # output reduction across a full block. This helps shapes like 1024×1024 dims=2
+    # where by_thread launches only four 256-thread blocks and each thread performs
+    # a long serial reduction.
+    use_by_block_for_low_occupancy =
+        dst_size >= reduce_size && reduce_size >= block_size &&
+        cld(dst_size, block_size) < TARGET_BLOCKS &&
+        length(reduce_sizes) == 1 && reduce_sizes[1] != 0
+
+    use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
+
+    if dst_size >= reduce_size && !use_by_block
         # Many outputs, small reduction: one thread per output reduces sequentially
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
@@ -191,9 +199,10 @@ function mapreduce_nd(
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
         )
-    elseif use_by_block_for_coalescing
-        # Grid-stride by_block: consecutive threads read consecutive (stride-1)
-        # elements of the reduced dimension -> coalesced.
+    elseif use_by_block
+        # Grid-stride by_block: one full block cooperates on each output, then
+        # grid-strides across remaining outputs if fewer blocks than outputs were
+        # launched.
         launch_blocks = min(dst_size, TARGET_BLOCKS)
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
