@@ -82,14 +82,11 @@ function mapreduce_nd(
         throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
     end
 
-    # Duplicate dims check: Base errors on dims=(2,2)
-    if length(dims_all) != length(Base.unique(dims_all))
-        throw(ArgumentError("region dimension(s) must be unique, got $dims"))
-    end
+    # Match Base: duplicate dims are ignored, e.g. dims=(2,2) behaves like dims=2.
+    dims_all = Tuple(Base.unique(dims_all))
 
-    src_sizes   = size(src)
-    src_strides = strides(src)
-    ndim        = length(src_sizes)
+    src_sizes = size(src)
+    ndim      = length(src_sizes)
 
     dims_valid = Tuple(d for d in dims_all if d <= ndim)
 
@@ -140,11 +137,12 @@ function mapreduce_nd(
     dst = _alloc_or_temp(backend, temp, init, dst_sizes)
     dst_size = length(dst)
 
-    if !use_gpu_algorithm(backend, prefer_threads)
+    if backend == CPU_BACKEND
         _mapreduce_nd_cpu_sections!(f, op, dst, src; init, max_tasks, min_elems)
         return dst
     end
 
+    src_strides = strides(src)
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
     outer_strides  = Tuple(str for (str, _) in outer_segs)
@@ -505,4 +503,3 @@ end
         end
     end
 end
-

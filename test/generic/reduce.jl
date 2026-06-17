@@ -222,8 +222,10 @@ end
         end
     end
 
-    # Duplicate dims should error
-    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=Int32(0), dims=(2,2))
+    # Duplicate dims match Base semantics and are reduced once.
+    vh_dup = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test Array(AK.reduce(+, array_from_host(vh_dup); prefer_threads, init=Int32(0), dims=(2,2))) ==
+        sum(vh_dup; init=Int32(0), dims=(2,2))
 
     # min/max with dims: tests correct neutral element in partial reduction
     for dims in 1:3
@@ -243,6 +245,13 @@ end
             sh = Array(s)
             @test sh == sum(vh; dims)
         end
+    end
+
+    if IS_CPU_BACKEND
+        # The CPU fallback should not require strided storage.
+        vh = reshape(1:12, 1, 3, 4)
+        @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
+            sum(vh; init=0, dims=(1,2))
     end
 
     # Test that undefined kwargs are not accepted
@@ -481,8 +490,10 @@ end
         end
     end
 
-    # Duplicate dims should error
-    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=Int32(0), dims=(2,2))
+    # Duplicate dims match Base semantics and are reduced once.
+    vh_dup = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test Array(AK.mapreduce(-, +, array_from_host(vh_dup); prefer_threads, init=Int32(0), dims=(2,2))) ==
+        mapreduce(-, +, vh_dup; init=Int32(0), dims=(2,2))
 
     # min/max with dims: tests correct neutral element in partial reduction
     for dims in 1:3
@@ -502,6 +513,13 @@ end
             sh = Array(s)
             @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
         end
+    end
+
+    if IS_CPU_BACKEND
+        # The CPU fallback should not require strided storage.
+        vh = reshape(1:12, 1, 3, 4)
+        @test Array(AK.mapreduce(x -> 2x, +, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
+            mapreduce(x -> 2x, +, vh; init=0, dims=(1,2))
     end
 
     # Test that undefined kwargs are not accepted
