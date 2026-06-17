@@ -178,12 +178,14 @@ function mapreduce_nd(
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0 &&
         reduce_strides == (1,)
 
-    # by_block override 2: when by_thread would launch too few blocks, split each
-    # output reduction across a full block. This helps shapes like 1024×1024 dims=2
-    # where by_thread launches only four 256-thread blocks and each thread performs
-    # a long serial reduction.
+    # by_block override 2: when by_thread would launch too few blocks for a square
+    # output/reduction shape, split each output reduction across a full block. This
+    # helps shapes like 1024×1024 dims=2 where by_thread launches only four
+    # 256-thread blocks and each thread performs a long serial reduction. Avoid
+    # applying this to wide-output shapes, where by_thread's cross-output coalescing
+    # is better than a strided block reduction.
     use_by_block_for_low_occupancy =
-        dst_size >= reduce_size && reduce_size >= block_size &&
+        dst_size == reduce_size && reduce_size >= block_size &&
         cld(dst_size, block_size) < TARGET_BLOCKS &&
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0
 
