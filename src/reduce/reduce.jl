@@ -158,6 +158,8 @@ end
         switch_below::Int=0,
     )
 
+    mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray...; init, kwargs...)
+
 Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
 If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of
 integers, reduce `src` along those dimension(s). The `init` value is used as the initial value for
@@ -167,6 +169,12 @@ The `neutral` value is the neutral element (zero) for the operator `op`, which i
 efficient GPU implementation that also allows a nonzero `init`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
+
+Multiple input arrays are supported with the same axes. This follows `Base.mapreduce(f, op, A, B,
+...)` semantics: `f` is mapped across corresponding elements of the inputs and the mapped values
+are reduced without materializing the intermediate array. Mismatched axes throw
+`DimensionMismatch`; singleton-expanding broadcast semantics are reserved for internal
+`Broadcasted` sources used by array backends.
 
 ## CPU settings
 Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
@@ -206,6 +214,11 @@ f(x) = x * x
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
 mrowsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=1)
 mcolsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=2)
+```
+
+Computing a two-input dimensional reduction:
+```julia
+rows = AK.mapreduce((x, y) -> x * y, +, a, b; init=0f0, dims=1)
 ```
 """
 function mapreduce(
