@@ -3,10 +3,6 @@ include("utilities.jl")
 
 const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}
 
-_mapreduce_eltype(src::AbstractArray) = eltype(src)
-_mapreduce_eltype(src::Base.Broadcast.Broadcasted) =
-    Base.Broadcast.combine_eltypes(identity, (src,))
-
 function _mapreduce_backend(src::AbstractArray)
     return _mapreduce_get_backend(src)
 end
@@ -165,8 +161,8 @@ If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer
 integers, reduce `src` along those dimension(s). The `init` value is used as the initial value for
 the reduction (i.e. after mapping).
 
-The `neutral` value is the neutral element (zero) for the operator `op`, which is needed for an
-efficient GPU implementation that also allows a nonzero `init`.
+The `neutral` value is the neutral element for the operator `op`, which is needed for an efficient
+GPU implementation that also allows a nonzero `init`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
