@@ -120,6 +120,11 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == reduce(+, vh)
     end
 
+    # Base-compatible alias: dims=: reduces all dimensions to a scalar.
+    vh_colon = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test AK.reduce(+, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
+        reduce(+, vh_colon; init=Int32(0), dims=:)
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10)); init=10, bad=:kwarg)
 
@@ -374,6 +379,11 @@ end
         @test s == mapreduce(abs, +, vh)
     end
 
+    # Base-compatible alias: dims=: reduces all dimensions to a scalar.
+    vh_colon = rand(Int32(-10):Int32(10), 3, 4, 5)
+    @test AK.mapreduce(abs, +, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
+        mapreduce(abs, +, vh_colon; init=Int32(0), dims=:)
+
     # Testing different settings, enforcing change of type between f and op
     f(s, temp) = AK.mapreduce(
         p -> (p.x, p.y),
@@ -592,6 +602,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.sum(v; prefer_threads, block_size=64)
+    @test AK.sum(v; prefer_threads, dims=:) == sum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.sum(v; prefer_threads, bad=:kwarg)
@@ -637,6 +648,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.prod(v; prefer_threads, block_size=64)
+    @test AK.prod(v; prefer_threads, dims=:) == prod(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.prod(v; prefer_threads, bad=:kwarg)
@@ -682,6 +694,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.minimum(v; prefer_threads, block_size=64)
+    @test AK.minimum(v; prefer_threads, dims=:) == minimum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.minimum(v; prefer_threads, bad=:kwarg)
@@ -727,6 +740,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.maximum(v; prefer_threads, block_size=64)
+    @test AK.maximum(v; prefer_threads, dims=:) == maximum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.maximum(v; prefer_threads, bad=:kwarg)
@@ -779,6 +793,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.count(x->x>0, v; prefer_threads, block_size=64)
+    @test AK.count(x->x>0, v; prefer_threads, dims=:) == count(x->x>0, Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.count(v; prefer_threads, bad=:kwarg)

@@ -10,7 +10,7 @@ include("mapreduce_nd.jl")
         op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
         neutral=neutral_element(op, eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
@@ -22,10 +22,10 @@ include("mapreduce_nd.jl")
         switch_below::Int=0,
     )
 
-Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` is `nothing`, reduce
-`src` to a scalar. If `dims` is an integer or a tuple of integers, reduce `src` along those
-dimension(s). The `init` value is used as the initial value for the reduction; `neutral` is the
-neutral element for the operator `op`.
+Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` is `nothing` or
+`:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of integers, reduce `src` along
+those dimension(s). The `init` value is used as the initial value for the reduction; `neutral` is
+the neutral element for the operator `op`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
@@ -45,11 +45,12 @@ For non-memory-bound operations, reductions scale almost linearly with the numbe
 The `block_size` parameter controls the number of threads per block.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
-(`dims=nothing`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 * block_size)` is
-required. For reduction along a dimension (`dims` is an integer), `temp` is used as the destination
-array, and thus must have the exact dimensions required - i.e. same dimensionwise sizes as `src`,
-except for the reduced dimension which becomes 1; there are some corner cases when one dimension is
-zero, check against `Base.reduce` for CPU arrays for exact behavior.
+(`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
+block_size)` is required. For reduction along dimensions (`dims` is an integer or tuple), `temp` is
+used as the destination array, and thus must have the exact dimensions required - i.e. same
+dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
+corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
+behavior.
 
 The `switch_below` parameter controls the threshold below which the reduction is performed on the
 CPU and is only used for 1D reductions (i.e. `dims=nothing`).
@@ -94,7 +95,7 @@ end
         f, op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
         neutral=neutral_element(op, eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
@@ -107,9 +108,9 @@ end
     )
 
 Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
-If `dims` is `nothing`, reduce `src` to a scalar. If `dims` is an integer or a tuple of integers,
-reduce `src` along those dimension(s). The `init` value is used as the initial value for the
-reduction (i.e. after mapping).
+If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of
+integers, reduce `src` along those dimension(s). The `init` value is used as the initial value for
+the reduction (i.e. after mapping).
 
 The `neutral` value is the neutral element (zero) for the operator `op`, which is needed for an
 efficient GPU implementation that also allows a nonzero `init`.
@@ -125,11 +126,12 @@ cases are scaling linearly with the number of threads.
 The `block_size` parameter controls the number of threads per block.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
-(`dims=nothing`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 * block_size)` is
-required. For reduction along a dimension (`dims` is an integer), `temp` is used as the destination
-array, and thus must have the exact dimensions required - i.e. same dimensionwise sizes as `src`,
-except for the reduced dimension which becomes 1; there are some corner cases when one dimension is
-zero, check against `Base.reduce` for CPU arrays for exact behavior.
+(`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
+block_size)` is required. For reduction along dimensions (`dims` is an integer or tuple), `temp` is
+used as the destination array, and thus must have the exact dimensions required - i.e. same
+dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
+corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
+behavior.
 
 The `switch_below` parameter controls the threshold below which the reduction is performed on the
 CPU and is only used for 1D reductions (i.e. `dims=nothing`).
@@ -172,7 +174,7 @@ function _mapreduce_impl(
     f, op, src::AbstractArray, backend::Backend;
     init,
     neutral=neutral_element(op, eltype(src)),
-    dims::Union{Nothing, Int, Tuple{Vararg{Int}}} = nothing,
+    dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon} = nothing,
 
     # CPU settings
     max_tasks::Int=Threads.nthreads(),
@@ -184,7 +186,7 @@ function _mapreduce_impl(
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
 )
-    if isnothing(dims)
+    if isnothing(dims) || dims isa Colon
         if use_gpu_algorithm(backend, prefer_threads)
             mapreduce_1d_gpu(
                 f, op, src, backend;

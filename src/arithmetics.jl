@@ -2,7 +2,7 @@
     sum(
         src::AbstractArray, backend::Backend=get_backend(src);
         init=zero(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -58,7 +58,7 @@ end
     prod(
         src::AbstractArray, backend::Backend=get_backend(src);
         init=one(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -114,7 +114,7 @@ end
     maximum(
         src::AbstractArray, backend::Backend=get_backend(src);
         init=typemin(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -170,7 +170,7 @@ end
     minimum(
         src::AbstractArray, backend::Backend=get_backend(src);
         init=typemax(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -226,7 +226,7 @@ end
     count(
         [f=identity], src::AbstractArray, backend::Backend=get_backend(src);
         init=0,
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
