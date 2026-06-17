@@ -1,76 +1,147 @@
 import AcceleratedKernels as AK
-using KernelAbstractions
-using Test
-using Random
-import Pkg
+using InteractiveUtils
+using ParallelTestRunner
 
-# Set to true when testing backends that support this
-const TEST_DL = Ref{Bool}(false)
+@info "Julia information:\n" * sprint(InteractiveUtils.versioninfo)
 
-# Pass command-line argument to test suite to install the right backend, e.g.
-#   julia> import Pkg
-#   julia> Pkg.test(test_args=["--oneAPI"])
-if "--CUDA" in ARGS
-    Pkg.add("CUDA")
-    using CUDA
-    CUDA.versioninfo()
-    const BACKEND = CUDABackend()
-    TEST_DL[] = true
-elseif "--oneAPI" in ARGS
-    Pkg.add("oneAPI")
-    using oneAPI
-    oneAPI.versioninfo()
-    const BACKEND = oneAPIBackend()
+const init_code = quote
+    import AcceleratedKernels as AK
+    using KernelAbstractions
+    using Test
+    using Random
+end
 
-    # FIXME: need atomic orderings for `DecoupledLookback` in oneAPI
-    # TEST_DL[] = true
-elseif "--AMDGPU" in ARGS
-    Pkg.add("AMDGPU")
+# Discover root-level tests (aqua.jl, partition.jl) and generic tests
+const testsuite = find_tests(@__DIR__)
+const generic_tests = find_tests(joinpath(@__DIR__, "generic"))
+
+# Parse args with lowercase hyphenated backend flags
+args = parse_args(ARGS; custom=["cuda", "amdgpu", "metal", "oneapi", "opencl", "cpu-ka", "cpu"])
+
+# Common helper code appended to every backend setup
+const _array_from_host_code = quote
+    global array_from_host
+    array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
+    function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
+        d_arr = KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
+        copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
+        d_arr
+    end
+end
+
+# Build list of active backends, each with setup code
+backends = Pair{String, Expr}[]
+
+# GPU backends are only tested when explicitly requested via a CLI flag, in which case
+# they are expected to be functional: load or initialization failures propagate.
+
+if args.custom["cuda"] !== nothing
+    using CUDACore, CUDATools
+    @assert CUDACore.functional()
+    @info "CUDACore information:\n" * sprint(CUDATools.versioninfo)
+    push!(backends, "cuda" => quote
+        using CUDACore
+        global BACKEND = CUDABackend()
+        global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(true)
+        $_array_from_host_code
+    end)
+end
+
+if args.custom["amdgpu"] !== nothing
     using AMDGPU
+    @assert AMDGPU.functional()
+    println("AMDGPU information:")
     AMDGPU.versioninfo()
-    const BACKEND = ROCBackend()
-    TEST_DL[] = true
-elseif "--Metal" in ARGS
-    Pkg.add("Metal")
+    push!(backends, "amdgpu" => quote
+        using AMDGPU
+        global BACKEND = ROCBackend()
+        global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(true)
+        $_array_from_host_code
+    end)
+end
+
+if args.custom["metal"] !== nothing
     using Metal
-    Metal.versioninfo()
-    const BACKEND = MetalBackend()
-elseif "--OpenCL" in ARGS
-    Pkg.add(name="OpenCL", rev="main")
-    Pkg.add(name="SPIRVIntrinsics", rev="main")
-    Pkg.add("pocl_jll")
-    using pocl_jll
-    using OpenCL
-    OpenCL.versioninfo()
-    const BACKEND = OpenCLBackend()
-elseif !@isdefined(BACKEND)
-    # Otherwise do CPU tests
-    using InteractiveUtils
-    InteractiveUtils.versioninfo()
-    const BACKEND = get_backend([])
+    @assert Metal.functional()
+    @info "Metal information:\n" * sprint(Metal.versioninfo)
+    push!(backends, "metal" => quote
+        using Metal
+        global BACKEND = MetalBackend()
+        global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
 end
 
-const IS_CPU_BACKEND = BACKEND == get_backend([])
-
-global prefer_threads::Bool = !(IS_CPU_BACKEND && "--cpuKA" in ARGS)
-
-array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
-function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
-    d_arr = KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
-    copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))      # Allow unmaterialised types, e.g. ranges
-    d_arr
+if args.custom["oneapi"] !== nothing
+    using oneAPI
+    @assert oneAPI.functional()
+    @info "oneAPI information:\n" * sprint(oneAPI.versioninfo)
+    push!(backends, "oneapi" => quote
+        using oneAPI
+        global BACKEND = oneAPIBackend()
+        global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
 end
 
-@testset "Aqua" begin
-    using Aqua
-    Aqua.test_all(AK)
+if args.custom["opencl"] !== nothing
+    using pocl_jll, OpenCL
+    @assert !isempty(OpenCL.cl.platforms())
+    @info "OpenCL information:\n" * sprint(OpenCL.versioninfo)
+    push!(backends, "opencl" => quote
+        using pocl_jll
+        using OpenCL
+        global BACKEND = OpenCLBackend()
+        global IS_CPU_BACKEND = false
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
 end
 
-include("partition.jl")
-include("looping.jl")
-include("map.jl")
-include("sort.jl")
-include("reduce.jl")
-include("accumulate.jl")
-include("predicates.jl")
-include("binarysearch.jl")
+# cpu-ka only when --cpu-ka flag passed
+if args.custom["cpu-ka"] !== nothing
+    push!(backends, "cpu-ka" => quote
+        global BACKEND = get_backend([])
+        global IS_CPU_BACKEND = true
+        global prefer_threads = false
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
+end
+
+# CPU runs if no backend selected or if explicitly specified
+if args.custom["cpu"] !== nothing || isempty(backends)
+    push!(backends, "cpu" => quote
+        global BACKEND = get_backend([])
+        global IS_CPU_BACKEND = true
+        global prefer_threads = true
+        global TEST_DL = Ref{Bool}(false)
+        $_array_from_host_code
+    end)
+end
+
+# Duplicate generic tests per active backend
+for (backend_name, setup_code) in backends
+    for (test_name, test_body) in generic_tests
+        testsuite["$backend_name/$test_name"] = quote
+            $setup_code
+            $test_body
+        end
+    end
+end
+
+# Filter tests by user-specified positional args; remove bare generic/ entries if no filter was specified
+if filter_tests!(testsuite, args)
+    filter!(((k,v),) -> !startswith(k, "generic/"), testsuite)
+end
+
+runtests(AK, args; init_code, testsuite)
