@@ -62,7 +62,7 @@ end
 function mapreduce_nd(
     f, op, src::MapReduceSource, backend::Backend;
     init,
-    neutral=neutral_element(op, eltype(src)),
+    neutral=neutral_element(op, _mapreduce_eltype(src)),
     dims::Union{Int, Tuple{Vararg{Int}}},
 
     # CPU settings

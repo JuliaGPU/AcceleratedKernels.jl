@@ -410,6 +410,14 @@ end
         init=Int32(0),
     )
 
+    if IS_CPU_BACKEND
+        bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(+, reshape(1:6, 2, 3), reshape(10:15, 2, 3)))
+        @test AK.mapreduce(identity, +, bc; prefer_threads, init=0) ==
+            mapreduce(identity, +, bc; init=0)
+        @test Array(AK.mapreduce(identity, +, bc; prefer_threads, init=0, dims=2)) ==
+            mapreduce(identity, +, bc; init=0, dims=2)
+    end
+
     # Testing different settings, enforcing change of type between f and op
     f(s, temp) = AK.mapreduce(
         p -> (p.x, p.y),

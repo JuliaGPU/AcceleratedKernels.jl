@@ -8,7 +8,7 @@ _mapreduce_eltype(src::Base.Broadcast.Broadcasted) =
     Base.Broadcast.combine_eltypes(identity, (src,))
 
 function _mapreduce_backend(src::AbstractArray)
-    return get_backend(src)
+    return _mapreduce_get_backend(src)
 end
 
 function _mapreduce_backend(src::Base.Broadcast.Broadcasted)
@@ -16,7 +16,16 @@ function _mapreduce_backend(src::Base.Broadcast.Broadcasted)
     return isnothing(backend) ? CPU_BACKEND : backend
 end
 
-_mapreduce_backend_from_arg(src::AbstractArray) = get_backend(src)
+function _mapreduce_get_backend(src::AbstractArray)
+    try
+        return get_backend(src)
+    catch err
+        err isa ArgumentError || rethrow()
+        return CPU_BACKEND
+    end
+end
+
+_mapreduce_backend_from_arg(src::AbstractArray) = _mapreduce_get_backend(src)
 _mapreduce_backend_from_arg(src::Base.Broadcast.Broadcasted) = _mapreduce_backend(src)
 _mapreduce_backend_from_arg(_) = nothing
 
