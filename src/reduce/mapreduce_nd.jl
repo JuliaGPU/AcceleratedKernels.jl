@@ -89,6 +89,7 @@ function mapreduce_nd(
     temp::Union{Nothing, AbstractArray},
 )
     @argcheck 1 <= block_size <= 1024
+    @argcheck ispow2(block_size)
 
     dims_all = dims isa Int ? (dims,) : dims
 

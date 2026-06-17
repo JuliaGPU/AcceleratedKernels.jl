@@ -61,6 +61,7 @@ function mapreduce_1d_gpu(
     switch_below::Int,
 )
     @argcheck 1 <= block_size <= 1024
+    @argcheck ispow2(block_size)
     @argcheck switch_below >= 0
 
     # Degenerate cases

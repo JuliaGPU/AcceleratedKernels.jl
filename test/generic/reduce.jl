@@ -131,6 +131,9 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10)); init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
+    end
 
     # Testing different settings
     AK.reduce(
@@ -275,6 +278,9 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10, 10)); prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
+    end
 
     # Testing different settings
     AK.reduce(
@@ -477,6 +483,9 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, v; prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
+    end
 end
 
 
@@ -637,6 +646,9 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
+    end
 
     # Testing different settings
     AK.mapreduce(

@@ -89,7 +89,7 @@ operations, which hide the memory latency and thread launch overhead - that incl
 For non-memory-bound operations, reductions scale almost linearly with the number of threads.
 
 ## GPU settings
-The `block_size` parameter controls the number of threads per block.
+The `block_size` parameter controls the number of threads per block and must be a power of two.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
@@ -178,7 +178,7 @@ arrays (`dims` is an integer or tuple) multithreading currently only becomes fas
 `max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
 
 ## GPU settings
-The `block_size` parameter controls the number of threads per block.
+The `block_size` parameter controls the number of threads per block and must be a power of two.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
