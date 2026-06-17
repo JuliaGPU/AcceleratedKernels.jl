@@ -60,7 +60,7 @@ end
 # Main entry point
 
 function mapreduce_nd(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral=neutral_element(op, eltype(src)),
     dims::Union{Int, Tuple{Vararg{Int}}},
@@ -142,7 +142,7 @@ function mapreduce_nd(
         return dst
     end
 
-    src_strides = strides(src)
+    src_strides = _mapreduce_strides(src)
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
     outer_strides  = Tuple(str for (str, _) in outer_segs)
@@ -271,6 +271,20 @@ function mapreduce_nd(
     end
 
     return dst
+end
+
+function _mapreduce_strides(src::AbstractArray)
+    return strides(src)
+end
+
+function _mapreduce_strides(src::Base.Broadcast.Broadcasted)
+    sizes = size(src)
+    stride = 1
+    return ntuple(length(sizes)) do i
+        s = stride
+        stride *= sizes[i]
+        s
+    end
 end
 
 

@@ -384,6 +384,16 @@ end
     @test AK.mapreduce(abs, +, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
         mapreduce(abs, +, vh_colon; init=Int32(0), dims=:)
 
+    # Multi-input mapreduce lowers through a broadcasted source.
+    vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_b = rand(Int32(-10):Int32(10), 4, 5, 6)
+    v_a = array_from_host(vh_a)
+    v_b = array_from_host(vh_b)
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
+
     # Testing different settings, enforcing change of type between f and op
     f(s, temp) = AK.mapreduce(
         p -> (p.x, p.y),
@@ -504,6 +514,16 @@ end
     vh_dup = rand(Int32(1):Int32(10), 3, 4, 5)
     @test Array(AK.mapreduce(-, +, array_from_host(vh_dup); prefer_threads, init=Int32(0), dims=(2,2))) ==
         mapreduce(-, +, vh_dup; init=Int32(0), dims=(2,2))
+
+    # Multi-input mapreduce with dimensional reductions.
+    vh_ma = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_mb = rand(Int32(-10):Int32(10), 4, 5, 6)
+    v_ma = array_from_host(vh_ma)
+    v_mb = array_from_host(vh_mb)
+    for dims in (1, 2, (1, 2), (1, 3), (1, 2, 3), (2, 2))
+        @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims)
+    end
 
     # min/max with dims: tests correct neutral element in partial reduction
     for dims in 1:3

@@ -1,5 +1,39 @@
 # Backend implementations
 include("utilities.jl")
+
+const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}
+
+_mapreduce_eltype(src::AbstractArray) = eltype(src)
+_mapreduce_eltype(src::Base.Broadcast.Broadcasted) =
+    Base.Broadcast.combine_eltypes(identity, (src,))
+
+function _mapreduce_backend(src::AbstractArray)
+    return get_backend(src)
+end
+
+function _mapreduce_backend(src::Base.Broadcast.Broadcasted)
+    backend = _mapreduce_backend_from_args(src.args)
+    return isnothing(backend) ? CPU_BACKEND : backend
+end
+
+_mapreduce_backend_from_arg(src::AbstractArray) = get_backend(src)
+_mapreduce_backend_from_arg(src::Base.Broadcast.Broadcasted) = _mapreduce_backend(src)
+_mapreduce_backend_from_arg(_) = nothing
+
+function _mapreduce_backend_from_args(args::Tuple)
+    backend = nothing
+    for arg in args
+        arg_backend = _mapreduce_backend_from_arg(arg)
+        isnothing(arg_backend) && continue
+        if isnothing(backend)
+            backend = arg_backend
+        else
+            @argcheck arg_backend == backend
+        end
+    end
+    return backend
+end
+
 include("mapreduce_1d_cpu.jl")
 include("mapreduce_1d_gpu.jl")
 include("mapreduce_nd.jl")
@@ -76,7 +110,7 @@ mcolsum = AK.reduce(+, m; init=zero(eltype(m)), dims=2)
 ```
 """
 function reduce(
-    op, src::AbstractArray, backend::Backend=get_backend(src);
+    op, src::AbstractArray, backend::Backend=_mapreduce_backend(src);
     init,
     kwargs...
 )
@@ -158,7 +192,7 @@ mcolsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=2)
 ```
 """
 function mapreduce(
-    f, op, src::AbstractArray, backend::Backend=get_backend(src);
+    f, op, src::MapReduceSource, backend::Backend=_mapreduce_backend(src);
     init,
     kwargs...
 )
@@ -169,11 +203,24 @@ function mapreduce(
     )
 end
 
+function mapreduce(
+    f, op, src::AbstractArray, src2::AbstractArray, srcs::AbstractArray...;
+    init,
+    kwargs...
+)
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, src2, srcs...))
+    return mapreduce(
+        identity, op, bc, _mapreduce_backend(bc);
+        init,
+        kwargs...
+    )
+end
+
 
 function _mapreduce_impl(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::MapReduceSource, backend::Backend;
     init,
-    neutral=neutral_element(op, eltype(src)),
+    neutral=neutral_element(op, _mapreduce_eltype(src)),
     dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon} = nothing,
 
     # CPU settings
