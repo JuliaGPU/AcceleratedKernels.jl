@@ -524,10 +524,10 @@ end
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # rows is a compile-time constant, so unsigned div/rem lowers to a constant
-    # divisor (shift/and for the power-of-two rows) with no DivideError checks.
-    row  = unsigned(ithread) % unsigned(rows)
-    lane = unsigned(ithread) ÷ unsigned(rows)
+    # Int(...) keeps the index decode signed; a bare `unsigned ÷ unsigned` result feeds
+    # the signed index math and adds an Int-conversion throw guard NVPTX keeps (CUDA ~20%).
+    row  = Int(unsigned(ithread) % unsigned(rows))
+    lane = Int(unsigned(ithread) ÷ unsigned(rows))
     iout = iblock * rows + row
 
     acc = neutral
@@ -665,11 +665,9 @@ end
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # output_size is a compile-time constant (Val), so unsigned div/rem keeps the
-    # constant divisor (magic-multiply) with no DivideError checks. Signed div/rem
-    # would route the divisor through air.abs/abs, defeating the constant folding.
-    iout   = unsigned(iblock) % unsigned(output_size)
-    igroup = unsigned(iblock) ÷ unsigned(output_size)
+    # Int(...) keeps the index decode signed (see tiled kernel): avoids a CUDA throw guard.
+    iout   = Int(unsigned(iblock) % unsigned(output_size))
+    igroup = Int(unsigned(iblock) ÷ unsigned(output_size))
 
     input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
 
