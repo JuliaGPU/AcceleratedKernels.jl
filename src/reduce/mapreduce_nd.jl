@@ -429,27 +429,24 @@ end
     off
 end
 
-@inline _val(::Val{x}) where {x} = x
-@inline _udiv_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.udiv_int(UInt(x), UInt(y)))
-@inline _urem_const(x::Integer, ::Val{y}) where {y} = Int(Core.Intrinsics.urem_int(UInt(x), UInt(y)))
-
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
     @Const(src), dst,
     f, op, init, neutral,
     reduce_stride,
     output_size, reduce_size,
-    rows_val,
-)
+    ::Val{rows},
+) where {rows}
     @uniform N = @groupsize()[1]
-    @uniform rows = _val(rows_val)
     @uniform reduce_threads = N ÷ rows
     sdata = @localmem eltype(dst) (N,)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    row  = _urem_const(ithread, rows_val)
-    lane = _udiv_const(ithread, rows_val)
+    # rows is a compile-time constant, so unsigned div/rem lowers to a constant
+    # divisor (shift/and for the power-of-two rows) with no DivideError checks.
+    row  = unsigned(ithread) % unsigned(rows)
+    lane = unsigned(ithread) ÷ unsigned(rows)
     iout = iblock * rows + row
 
     acc = neutral
@@ -571,17 +568,19 @@ end
     f, op, neutral,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    output_size_val, reduce_size, reduce_groups,
-)
+    ::Val{output_size}, reduce_size, reduce_groups,
+) where {output_size}
     @uniform N = @groupsize()[1]
-    @uniform output_size = _val(output_size_val)
     sdata = @localmem eltype(partial) (N,)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    iout   = _urem_const(iblock, output_size_val)
-    igroup = _udiv_const(iblock, output_size_val)
+    # output_size is a compile-time constant (Val), so unsigned div/rem keeps the
+    # constant divisor (magic-multiply) with no DivideError checks. Signed div/rem
+    # would route the divisor through air.abs/abs, defeating the constant folding.
+    iout   = unsigned(iblock) % unsigned(output_size)
+    igroup = unsigned(iblock) ÷ unsigned(output_size)
 
     input_base = _outer_decode(iout, outer_strides, outer_sizes)
 
