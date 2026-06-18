@@ -157,8 +157,24 @@ function mapreduce_nd(
         return dst
     end
 
-    src_strides = _mapreduce_strides(src)
-    _mapreduce_check_dense_strides(src, src_strides)
+    # The stride-based fast paths below index the source by a flat linear offset
+    # (`src[offset + 1]`), which is only valid for a genuinely dense, column-major
+    # array. Any other source — strided views, adjoints, permuted dims, or a
+    # broadcast over such arrays — is reduced through the generic Cartesian-indexed
+    # fallback, which makes no layout assumption (and crucially does not wrap the
+    # source in `@Const`, which is what makes e.g. PermutedDimsArray uncompilable).
+    if !_mapreduce_fastpath_dense(src)
+        blocks = cld(dst_size, block_size)
+        kernel! = _mapreduce_nd_generic!(backend, block_size)
+        kernel!(
+            src, dst, f, op, init,
+            CartesianIndices(dst), _mapreduce_reduce_indices(src, dst), dst_size,
+            ndrange=(block_size * blocks,),
+        )
+        return dst
+    end
+
+    src_strides = strides(src)
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
     outer_strides  = Tuple(str for (str, _) in outer_segs)
@@ -310,20 +326,6 @@ function mapreduce_nd(
     return dst
 end
 
-function _mapreduce_strides(src::AbstractArray)
-    return strides(src)
-end
-
-function _mapreduce_strides(src::Base.Broadcast.Broadcasted)
-    sizes = size(src)
-    stride = 1
-    return ntuple(length(sizes)) do i
-        s = stride
-        stride *= sizes[i]
-        s
-    end
-end
-
 function _mapreduce_dense_strides(sizes::Tuple)
     stride = 1
     return ntuple(length(sizes)) do i
@@ -333,16 +335,26 @@ function _mapreduce_dense_strides(sizes::Tuple)
     end
 end
 
-function _mapreduce_check_dense_strides(src::AbstractArray, src_strides)
-    dense_strides = _mapreduce_dense_strides(size(src))
-    src_strides == dense_strides && return nothing
-    throw(ArgumentError(
-        "GPU mapreduce with dims currently requires dense column-major source arrays; " *
-        "got strides $(src_strides), expected $(dense_strides)",
-    ))
+# Whether the stride-based fast-path kernels are valid for `src`: they index the
+# source by a flat linear offset, so they require a genuinely dense, column-major
+# array. A `Broadcasted` (and anything without dense `strides`) takes the generic
+# Cartesian-indexed fallback instead.
+function _mapreduce_fastpath_dense(src::AbstractArray)
+    try
+        return strides(src) == _mapreduce_dense_strides(size(src))
+    catch err
+        err isa MethodError || rethrow()
+        return false
+    end
 end
 
-_mapreduce_check_dense_strides(src::Base.Broadcast.Broadcasted, src_strides) = nothing
+_mapreduce_fastpath_dense(::Base.Broadcast.Broadcasted) = false
+
+# The reduced-extent index space: full axes along reduced dimensions, a single
+# index (`OneTo(1)`) along kept dimensions. Combined with `max(Iother, Ireduce)`
+# this reproduces Base's `mapreducedim!` iteration without touching strides.
+_mapreduce_reduce_indices(src, dst) =
+    CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
 
 
 # Smallest power-of-two >= n, capped at 256 (the original fixed block size) and
@@ -372,7 +384,7 @@ function _mapreduce_nd_cpu_sections!(
     init, max_tasks, min_elems,
 )
     Rother  = CartesianIndices(dst)
-    Rreduce = CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
+    Rreduce = _mapreduce_reduce_indices(src, dst)
 
     foreachindex(dst, max_tasks=max_tasks, min_elems=min_elems) do idst
         @inbounds begin
@@ -427,6 +439,35 @@ end
     end
     off += tmp * reduce_strides[end]
     off
+end
+
+# GPU kernel: generic fallback — one thread per output element, reducing sequentially
+# over the reduced extents using Cartesian indexing. Makes no assumption about the
+# source's memory layout, so it handles strided views, adjoints, permuted dims, and
+# broadcasts over them. Mirrors the CPU `_mapreduce_nd_cpu_sections!` path.
+#
+# NOTE: the source is deliberately NOT marked `@Const` here. `@Const` prevents the
+# `@inbounds` getindex of some wrappers (e.g. PermutedDimsArray's `genperm`) from
+# being elided, leaving a `throw` that the GPU backends cannot compile.
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_generic!(
+    src, dst,
+    f, op, init,
+    Rother, Rreduce, output_size,
+)
+    N       = @groupsize()[1]
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+    tid     = ithread + iblock * N
+
+    if tid < output_size
+        Iother = Rother[tid + 0x1]
+        res = init
+        for Ireduce in Rreduce
+            J = max(Iother, Ireduce)
+            res = op(res, f(src[J]))
+        end
+        dst[Iother] = res
+    end
 end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
