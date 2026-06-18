@@ -275,11 +275,17 @@ end
         @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
             sum(vh; init=0, dims=(1,2))
     else
-        # Non-dense GPU sources go through the generic Cartesian-indexed fallback.
+        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
+        # fast path over their dense parent buffer; the offset view exercises a nonzero
+        # base offset. Broadcasted/lazy sources still take the generic fallback.
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.reduce(+, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
             Base.reduce(+, @view(vh[:, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.reduce(+, @view(v[2:end, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            Base.reduce(+, @view(vh[2:end, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.reduce(+, v'; prefer_threads, init=Int32(0), dims=1)) ==
+            Base.reduce(+, vh'; init=Int32(0), dims=1)
         @test Array(AK.reduce(+, PermutedDimsArray(v, (2, 1)); prefer_threads, init=Int32(0), dims=1)) ==
             Base.reduce(+, PermutedDimsArray(vh, (2, 1)); init=Int32(0), dims=1)
     end
@@ -659,11 +665,15 @@ end
         @test Array(AK.mapreduce(x -> 2x, +, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
             mapreduce(x -> 2x, +, vh; init=0, dims=(1,2))
     else
-        # Non-dense GPU sources go through the generic Cartesian-indexed fallback.
+        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
+        # fast path over their dense parent buffer; the offset view exercises a nonzero
+        # base offset. Broadcasted/lazy sources still take the generic fallback.
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
             mapreduce(x -> x - Int32(1), +, @view(vh[:, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[2:end, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            mapreduce(x -> x - Int32(1), +, @view(vh[2:end, 1:2:end]); init=Int32(0), dims=2)
         @test Array(AK.mapreduce(x -> x - Int32(1), +, PermutedDimsArray(v, (2, 1)); prefer_threads, init=Int32(0), dims=1)) ==
             mapreduce(x -> x - Int32(1), +, PermutedDimsArray(vh, (2, 1)); init=Int32(0), dims=1)
     end

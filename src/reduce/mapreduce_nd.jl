@@ -157,13 +157,15 @@ function mapreduce_nd(
         return dst
     end
 
-    # The stride-based fast paths below index the source by a flat linear offset
-    # (`src[offset + 1]`), which is only valid for a genuinely dense, column-major
-    # array. Any other source — strided views, adjoints, permuted dims, or a
-    # broadcast over such arrays — is reduced through the generic Cartesian-indexed
+    # The stride-based fast paths below index a flat buffer at
+    # `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`. This works for any source backed
+    # by a single dense column-major buffer (dense arrays, but also strided views,
+    # adjoints, permuted dims, and reshapes over one). Sources without such a buffer
+    # — `Broadcasted`, lazy/computed arrays — take the generic Cartesian-indexed
     # fallback, which makes no layout assumption (and crucially does not wrap the
     # source in `@Const`, which is what makes e.g. PermutedDimsArray uncompilable).
-    if !_mapreduce_fastpath_dense(src)
+    layout = _mapreduce_strided_layout(src)
+    if isnothing(layout)
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_generic!(backend, block_size)
         kernel!(
@@ -174,7 +176,7 @@ function mapreduce_nd(
         return dst
     end
 
-    src_strides = strides(src)
+    buffer, base_offset, src_strides = layout
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
 
     outer_strides  = Tuple(str for (str, _) in outer_segs)
@@ -240,8 +242,8 @@ function mapreduce_nd(
         blocks = cld(dst_size, rows_per_block)
         kernel! = _mapreduce_nd_by_thread_tiled_strided!(backend, block_size)
         kernel!(
-            src, dst, f, op, init, neutral,
-            reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
+            buffer, dst, f, op, init, neutral,
+            base_offset, reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
             ndrange=(block_size * blocks,),
         )
     elseif dst_size >= reduce_size && !use_by_block
@@ -249,8 +251,8 @@ function mapreduce_nd(
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
         kernel!(
-            src, dst, f, op, init,
-            outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            buffer, dst, f, op, init,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
         )
@@ -261,8 +263,8 @@ function mapreduce_nd(
         launch_blocks = min(dst_size, TARGET_BLOCKS)
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
-            src, dst, f, op, init, neutral,
-            outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            buffer, dst, f, op, init, neutral,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
             ndrange=(block_size * launch_blocks,),
         )
@@ -282,8 +284,8 @@ function mapreduce_nd(
 
             kernel! = _mapreduce_nd_multigroup!(backend, block_size)
             kernel!(
-                src, partial, f, op, neutral,
-                outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                buffer, partial, f, op, neutral,
+                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
                 Val(dst_size), reduce_size, reduce_groups,
                 ndrange=(block_size * dst_size * reduce_groups,),
             )
@@ -303,8 +305,8 @@ function mapreduce_nd(
             # single-block-per-output reduction directly, no partial array needed.
             kernel! = _mapreduce_nd_by_block!(backend, block_size)
             kernel!(
-                src, dst, f, op, init, neutral,
-                outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                buffer, dst, f, op, init, neutral,
+                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
                 dst_size, reduce_size, dst_size,
                 ndrange=(block_size * dst_size,),
             )
@@ -316,8 +318,8 @@ function mapreduce_nd(
         launch_blocks = min(dst_size, TARGET_BLOCKS)
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
-            src, dst, f, op, init, neutral,
-            outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            buffer, dst, f, op, init, neutral,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
             ndrange=(block_size * launch_blocks,),
         )
@@ -335,20 +337,58 @@ function _mapreduce_dense_strides(sizes::Tuple)
     end
 end
 
-# Whether the stride-based fast-path kernels are valid for `src`: they index the
-# source by a flat linear offset, so they require a genuinely dense, column-major
-# array. A `Broadcasted` (and anything without dense `strides`) takes the generic
-# Cartesian-indexed fallback instead.
-function _mapreduce_fastpath_dense(src::AbstractArray)
+# Resolve the layout the stride-based fast-path kernels need. Those kernels index a
+# flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`, so they work for any
+# source backed by a single dense column-major buffer — a dense array, but also a
+# strided view, adjoint, permuted-dims, or reshape over one. Returns
+# `(buffer, base_offset, strides)` for such sources, or `nothing` (→ generic
+# Cartesian-indexed fallback) for `Broadcasted` and anything not backed by a dense
+# buffer (lazy/computed arrays, complex adjoints without `strides`, nested wrappers).
+function _mapreduce_strided_layout(src::AbstractArray)
+    s = try
+        strides(src)
+    catch err
+        err isa MethodError || rethrow()
+        return nothing
+    end
+
+    # Dense or contiguous (column-major) — index the source directly, no offset.
+    s == _mapreduce_dense_strides(size(src)) && return (src, 0, s)
+
+    # Non-dense but strided: index the dense parent buffer at the source's offset.
+    # Only one level of wrapping over a dense buffer is supported; deeper nesting
+    # falls back to the generic kernel.
+    p = parent(src)
+    (p === src || !_mapreduce_is_dense_buffer(p)) && return nothing
+    base = _mapreduce_wrapper_offset(src, p)
+    base === nothing && return nothing
+    return (p, base, s)
+end
+
+_mapreduce_strided_layout(::Base.Broadcast.Broadcasted) = nothing
+
+function _mapreduce_is_dense_buffer(p::AbstractArray)
     try
-        return strides(src) == _mapreduce_dense_strides(size(src))
+        return strides(p) == _mapreduce_dense_strides(size(p))
     catch err
         err isa MethodError || rethrow()
         return false
     end
 end
 
-_mapreduce_fastpath_dense(::Base.Broadcast.Broadcasted) = false
+# Offset (0-based, in elements) of the wrapper's first element within its dense
+# parent buffer. SubArrays start at their first selected index; permuted-dims,
+# reshapes, and (real) adjoints/transposes share the parent's first element.
+function _mapreduce_wrapper_offset(src::SubArray, p)
+    try
+        # Base.map (not AK's array `map`, which shadows it inside this module).
+        first_index = Base.map(first, parentindices(src))
+        return LinearIndices(p)[first_index...] - 1
+    catch
+        return nothing   # exotic index types → fall back to the generic kernel
+    end
+end
+_mapreduce_wrapper_offset(src, p) = 0
 
 # The reduced-extent index space: full axes along reduced dimensions, a single
 # index (`OneTo(1)`) along kept dimensions. Combined with `max(Iother, Ireduce)`
@@ -473,7 +513,7 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
     @Const(src), dst,
     f, op, init, neutral,
-    reduce_stride,
+    base_offset, reduce_stride,
     output_size, reduce_size,
     ::Val{rows},
 ) where {rows}
@@ -492,9 +532,12 @@ end
 
     acc = neutral
     if iout < output_size
+        # Contiguous outputs (outer_strides == (1,)), so the source base is just iout;
+        # base_offset (0 for a dense source) is folded in once, outside the reduce loop.
+        sbase = base_offset + iout
         j = lane
         while j < reduce_size
-            acc = op(acc, f(src[iout + j * reduce_stride + 0x1]))
+            acc = op(acc, f(src[sbase + j * reduce_stride + 0x1]))
             j += reduce_threads
         end
     end
@@ -525,19 +568,22 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
     @Const(src), dst,
     f, op, init,
+    base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
 )
     # NOTE: index calculations use zero-indexing (fewer ops, matches the CUDA / ROCm / oneAPI /
     # Metal code this is transpiled to), converting to one-indexing only at memory accesses.
+    # `base_offset` (the source's element offset within its dense buffer; 0 for a dense
+    # source) is folded into the per-output base, so it costs at most one add per thread.
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
     tid     = ithread + iblock * N
 
     if tid < output_size
-        input_base = _outer_decode(tid, outer_strides, outer_sizes)
+        input_base = base_offset + _outer_decode(tid, outer_strides, outer_sizes)
 
         res = init
         for j in 0x0:reduce_size - 0x1
@@ -562,6 +608,7 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
     @Const(src), dst,
     f, op, init, neutral,
+    base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
@@ -573,7 +620,7 @@ end
     ithread = @index(Local, Linear) - 0x1
     iout = iblock
     while true
-        input_base = _outer_decode(iout, outer_strides, outer_sizes)
+        input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
 
         acc = neutral
         j   = ithread
@@ -607,6 +654,7 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_multigroup!(
     @Const(src), partial,
     f, op, neutral,
+    base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     ::Val{output_size}, reduce_size, reduce_groups,
@@ -623,7 +671,7 @@ end
     iout   = unsigned(iblock) % unsigned(output_size)
     igroup = unsigned(iblock) ÷ unsigned(output_size)
 
-    input_base = _outer_decode(iout, outer_strides, outer_sizes)
+    input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
 
     acc = neutral
     j   = ithread + igroup * N
