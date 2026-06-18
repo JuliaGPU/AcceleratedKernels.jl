@@ -293,6 +293,13 @@ function _mapreduce_impl(
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
 )
+
+    # scalar *linear* indexing into a multidimensional Broadcasted object is
+    # only available on Julia 1.12; on earlier version, materialize it first.
+    if VERSION < v"1.12-" && src isa Base.Broadcast.Broadcasted
+        src = Base.Broadcast.materialize(src)
+    end
+
     if isnothing(dims) || dims isa Colon
         if use_gpu_algorithm(backend, prefer_threads)
             mapreduce_1d_gpu(
