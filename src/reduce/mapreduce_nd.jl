@@ -1,5 +1,5 @@
 # Generalized N-dimensional mapreduce for GPU and CPU backends, reducing one or more
-# dimensions (`dims::Int` or `dims::Tuple`) of `src` into `dst`.
+# dimensions (`dims::Integer` or a collection of integers) of `src` into `dst`.
 #
 # Design (see references: CUDA.jl / GPUArrays mapreducedim!, PyTorch Reduce.cuh, CUB):
 #   1. Canonicalize dims: collapse adjacent dimensions with matching strides into contiguous
@@ -77,7 +77,7 @@ function mapreduce_nd(
     f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral=neutral_element(op, typeof(init)),
-    dims::Union{Int, Tuple{Vararg{Int}}},
+    dims,
 
     # CPU settings
     max_tasks::Int,
@@ -91,14 +91,17 @@ function mapreduce_nd(
     @argcheck 1 <= block_size <= 1024
     @argcheck ispow2(block_size)
 
-    dims_all = dims isa Int ? (dims,) : dims
-
-    if Base.any(d < 1 for d in dims_all)
-        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
+    dims_src = dims isa Number ? (dims,) : dims
+    dims_buf = Int[]
+    for d in dims_src
+        d isa Integer || throw(ArgumentError("reduced dimension(s) must be integers"))
+        dim = Int(d)
+        dim < 1 && throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
+        push!(dims_buf, dim)
     end
 
     # Match Base: duplicate dims are ignored, e.g. dims=(2,2) behaves like dims=2.
-    dims_all = Tuple(Base.unique(dims_all))
+    dims_all = Tuple(Base.unique(dims_buf))
 
     src_sizes = size(src)
     ndim      = length(src_sizes)

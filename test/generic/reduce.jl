@@ -259,6 +259,16 @@ end
         end
     end
 
+    # Base also accepts iterable dims such as vectors and ranges.
+    for dims in ([1,2], [1,3], [2,3], [1,2,3], [2,1], [2,1,2], Int[], Any[1,2], Int32[1,2], 1:2)
+        vh = rand(Int32(1):Int32(100), 3, 4, 5)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(+, v; prefer_threads, init=Int32(0), dims)) ==
+            sum(vh; init=Int32(0), dims)
+    end
+
+    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4)); prefer_threads, init=Int32(0), dims=[1.0, 2.0])
+
     # Tiled strided GPU path: contiguous kept dimensions, one strided reduce
     # dimension, and dst_size == reduce_size. The 3D case also exercises a
     # partial output tile.
@@ -649,6 +659,16 @@ end
             @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
         end
     end
+
+    # Base also accepts iterable dims such as vectors and ranges.
+    for dims in ([1,2], [1,3], [2,3], [1,2,3], [2,1], [2,1,2], Int[], Any[1,2], Int32[1,2], 1:2)
+        vh = rand(Int32(1):Int32(100), 3, 4, 5)
+        v = array_from_host(vh)
+        @test Array(AK.mapreduce(-, +, v; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce(-, +, vh; init=Int32(0), dims)
+    end
+
+    @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4)); prefer_threads, init=Int32(0), dims=[1.0, 2.0])
 
     # Tiled strided GPU path coverage for mapreduce, including a 3D case with
     # a partial output tile.

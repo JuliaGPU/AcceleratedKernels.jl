@@ -57,7 +57,7 @@ include("mapreduce_nd.jl")
         op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
         neutral=neutral_element(op, typeof(init)),
-        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
+        dims=nothing,
 
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
@@ -70,16 +70,16 @@ include("mapreduce_nd.jl")
     )
 
 Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` is `nothing` or
-`:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of integers, reduce `src` along
-those dimension(s). The `init` value is used as the initial value for the reduction; `neutral` is
-the neutral element for the operator `op`.
+`:`, reduce `src` to a scalar. If `dims` is an integer or a collection of integers, reduce `src`
+along those dimension(s). The `init` value is used as the initial value for the reduction; `neutral`
+is the neutral element for the operator `op`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
 ## CPU settings
 Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims` is an integer or tuple) multithreading currently only becomes faster for
-`max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
+arrays (`dims` is an integer or a collection of integers) multithreading currently only becomes
+faster for `max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
 
 Note that multithreading reductions only improves performance for cases with more compute-heavy
 operations, which hide the memory latency and thread launch overhead - that includes:
@@ -93,8 +93,8 @@ The `block_size` parameter controls the number of threads per block and must be 
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
-block_size)` is required. For reduction along dimensions (`dims` is an integer or tuple), `temp` is
-used as the destination array, and thus must have the exact dimensions required - i.e. same
+block_size)` is required. For reduction along dimensions (`dims` is an integer or a collection of
+integers), `temp` is used as the destination array, and thus must have the exact dimensions required - i.e. same
 dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
 corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
 behavior.
@@ -142,7 +142,7 @@ end
         f, op, src::AbstractArray, backend::Backend=get_backend(src);
         init,
         neutral=neutral_element(op, typeof(init)),
-        dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon}=nothing,
+        dims=nothing,
 
         # CPU settings
         max_tasks::Int=Threads.nthreads(),
@@ -158,7 +158,7 @@ end
     mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray..., backend::Backend; init, kwargs...)
 
 Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
-If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a tuple of
+If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a collection of
 integers, reduce `src` along those dimension(s). The `init` value is used as the initial value for
 the reduction (i.e. after mapping).
 
@@ -175,16 +175,16 @@ are reduced without materializing the intermediate array. Mismatched axes throw
 
 ## CPU settings
 Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims` is an integer or tuple) multithreading currently only becomes faster for
-`max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
+arrays (`dims` is an integer or a collection of integers) multithreading currently only becomes
+faster for `max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
 
 ## GPU settings
 The `block_size` parameter controls the number of threads per block and must be a power of two.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
-block_size)` is required. For reduction along dimensions (`dims` is an integer or tuple), `temp` is
-used as the destination array, and thus must have the exact dimensions required - i.e. same
+block_size)` is required. For reduction along dimensions (`dims` is an integer or a collection of
+integers), `temp` is used as the destination array, and thus must have the exact dimensions required - i.e. same
 dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
 corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
 behavior.
@@ -281,7 +281,7 @@ function _mapreduce_impl(
     f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral=neutral_element(op, typeof(init)),
-    dims::Union{Nothing, Int, Tuple{Vararg{Int}}, Colon} = nothing,
+    dims = nothing,
 
     # CPU settings
     max_tasks::Int=Threads.nthreads(),
