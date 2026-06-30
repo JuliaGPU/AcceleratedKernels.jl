@@ -19,8 +19,15 @@ Specific implementations that the interfaces above forward to:
 - `merge_sort_by_key!`, `merge_sort_by_key` - sort a vector of keys along with a "payload", a vector of corresponding values.
 - `merge_sortperm!`, `merge_sortperm`, `merge_sortperm_lowmem!`, `merge_sortperm_lowmem` - compute a sorting index permutation. 
 
+Algorithm choice is available on `sort!` / `sort` / `sortperm!` / `sortperm` with `alg=AK.MergeSort()`,
+`alg=AK.MergeSort(lowmem=true)`, `alg=AK.RadixSort()`, or `alg=AK.SampleSort()`, depending on the
+backend and operation.
+
 Function signatures:
 ```@docs
+AcceleratedKernels.MergeSort
+AcceleratedKernels.RadixSort
+AcceleratedKernels.SampleSort
 AcceleratedKernels.sample_sort!
 AcceleratedKernels.sample_sortperm!
 AcceleratedKernels.merge_sort!

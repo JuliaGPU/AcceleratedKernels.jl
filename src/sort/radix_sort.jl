@@ -139,7 +139,7 @@ end
 end
 
 
-# ─── Public API ───────────────────────────────────────────────────────────────
+# ─── Implementation ──────────────────────────────────────────────────────────
 
 _rs_supported(::Type{T}) where T =
     T === UInt32 || T === Int32 || T === Float32 ||
@@ -147,7 +147,7 @@ _rs_supported(::Type{T}) where T =
 
 
 """
-    radix_sort!(
+    _radix_sort!(
         v::AbstractArray, backend::Backend=get_backend(v);
         rev::Union{Nothing, Bool}=nothing,
         order::Base.Order.Ordering=Base.Order.Forward,
@@ -163,7 +163,7 @@ Falls back to [`merge_sort!`](@ref) for any other type or when `lt`/`by` are pro
 The temporary buffer `temp` (same type and size as `v`) can be passed to avoid
 allocating internally.  `block_size` must be a power of 2.
 """
-function radix_sort!(
+function _radix_sort!(
     v::AbstractArray{T}, backend::Backend=get_backend(v);
     lt=isless,
     by=identity,
@@ -225,17 +225,4 @@ function radix_sort!(
     end
 
     v
-end
-
-
-"""
-    radix_sort(v, backend=get_backend(v); kwargs...)
-
-Out-of-place radix sort; see [`radix_sort!`](@ref).
-"""
-function radix_sort(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    radix_sort!(copy(v), backend; kwargs...)
 end
