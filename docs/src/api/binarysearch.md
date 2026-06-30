@@ -13,7 +13,7 @@ using Metal
 
 # Sorted array
 v = MtlArray(rand(Float32, 100_000))
-AK.merge_sort!(v)
+AK.sort!(v; alg=AK.MergeSort())
 
 # Elements `x` to place within `v` at indices `ix`
 x = MtlArray(rand(Float32, 10_000))
