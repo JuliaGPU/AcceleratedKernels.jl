@@ -149,6 +149,20 @@ function merge_sort!(
 )
     # Simple sanity checks
     @argcheck block_size > 0
+
+    # Hoist `by` transform: broadcast it once to produce a key array, then sort
+    # (key, value) pairs. Without hoisting, by(elem) fires inside every binary-search
+    # comparison in the O(n log²n) merge hot-path — once per element per merge step.
+    if by !== identity
+        keys = by.(v)
+        merge_sort_by_key!(
+            keys, v, backend;
+            lt, rev, order, block_size,
+            temp_values=temp,   # temp was for v swap buffer; maps to temp_values here
+        )
+        return v
+    end
+
     if !isnothing(temp)
         @argcheck length(temp) == length(v)
         @argcheck eltype(temp) === eltype(v)
