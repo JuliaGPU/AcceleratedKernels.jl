@@ -33,7 +33,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         @test all(yh .== 0:length(yh) - 1)
     end
 
-    # Non-uniform data exposes ScanPrefixes block-carry bugs that all-ones data masks.
+    # Non-uniform data exposes block-carry bugs that all-ones data masks.
     for _ in 1:200
         num_elems = rand(513:100_000)
         block_size = rand([16, 32, 64, 128, 256])
