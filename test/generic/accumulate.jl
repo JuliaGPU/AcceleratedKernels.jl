@@ -33,6 +33,17 @@ ALGS = AK.AccumulateAlgorithm[AK.ScanPrefixes()]
         @test all(yh .== 0:length(yh) - 1)
     end
 
+    # Non-uniform data exposes ScanPrefixes block-carry bugs that all-ones data masks.
+    for _ in 1:200
+        num_elems = rand(513:100_000)
+        block_size = rand([16, 32, 64, 128, 256])
+        init = rand(Int32(-100):Int32(100))
+        xh = rand(Int32(-9):Int32(9), num_elems)
+        y = array_from_host(xh)
+        AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size, alg)
+        @test Array(y) == (cumsum(xh) .- xh) .+ init
+    end
+
     # Large inclusive scan
     for _ in 1:1000
         num_elems = rand(1:100_000)

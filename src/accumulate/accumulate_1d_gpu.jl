@@ -100,8 +100,10 @@ end
         d = d << 0x1
     end
 
-    # Later blocks should always be inclusively-scanned
-    if inclusive || iblock != 0x0
+    # For exclusive ScanPrefixes scans, the local exclusive output is already correct.
+    # DecoupledLookback still shifts non-first blocks because _accumulate_previous!
+    # expects each block's last value to be globally inclusive.
+    if inclusive || (iblock != 0x0 && !isnothing(flags))
         # To compute an inclusive scan, shift elements left...
         @synchronize()
         t1 = temp[ai + bank_offset_a + 0x1]
@@ -130,7 +132,16 @@ end
 
         # Known at compile-time; used in the first pass of the ScanPrefixes algorithm
         if !isnothing(prefixes)
-            prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
+            if isnothing(flags) && !inclusive
+                last_global = block_offset + bi
+                if last_global < len
+                    prefixes[iblock + 0x1] = op(temp[bi + bank_offset_b + 0x1], v[last_global + 0x1])
+                else
+                    prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
+                end
+            else
+                prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
+            end
         end
 
         # Known at compile-time; used only in the DecoupledLookback algorithm
