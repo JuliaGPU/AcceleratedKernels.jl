@@ -34,19 +34,14 @@ ALGS = AK.AccumulateAlgorithm[AK.ScanPrefixes()]
     end
 
     # Non-uniform data exposes ScanPrefixes block-carry bugs that all-ones data masks.
-    # NOTE: DecoupledLookback() is excluded here: its exclusive multi-block carries are still
-    # incorrect on non-uniform data (the all-ones exclusive tests above mask that bug). Fixing it
-    # requires a coherent cross-block aggregate publish that is tracked separately.
-    if alg isa AK.ScanPrefixes
-        for _ in 1:200
-            num_elems = rand(513:100_000)
-            block_size = rand([16, 32, 64, 128, 256])
-            init = rand(Int32(-100):Int32(100))
-            xh = rand(Int32(-9):Int32(9), num_elems)
-            y = array_from_host(xh)
-            AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size, alg)
-            @test Array(y) == (cumsum(xh) .- xh) .+ init
-        end
+    for _ in 1:200
+        num_elems = rand(513:100_000)
+        block_size = rand([16, 32, 64, 128, 256])
+        init = rand(Int32(-100):Int32(100))
+        xh = rand(Int32(-9):Int32(9), num_elems)
+        y = array_from_host(xh)
+        AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size, alg)
+        @test Array(y) == (cumsum(xh) .- xh) .+ init
     end
 
     # Large inclusive scan
