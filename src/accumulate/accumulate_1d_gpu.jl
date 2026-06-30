@@ -174,6 +174,25 @@ end
     block_offset = iblock * block_size * 0x2                # Processing two elements per thread
 
     # Each block looks back to find running prefix sum
+    #
+    # KNOWN BUG / TODO: this decoupled-lookback publish/consume protocol is not yet memory-coherent
+    # across blocks, and fails ~40% of the time on smaller GPUs (e.g. A100 MIG 1g.5gb, sm_80, ~14
+    # SMs) for both inclusive and exclusive scans. Two problems:
+    #
+    #   1. Coherence. `aggregates[i]` below is read with an ordinary (L1-cacheable) load while the
+    #      companion `flags[i]` is read atomically. A consumer can observe a fresh `flags[i] ==
+    #      ACC_FLAG_A` yet read a stale L1 copy of `aggregates[i]`. The aggregate must be accessed
+    #      with an L1-bypassing (relaxed/monotonic atomic) load and store instead, like the flag.
+    #
+    #   2. Ordering. We need the producer's aggregate store to be globally visible *before* its flag
+    #      store, and the consumer's aggregate load to happen *after* its flag load. That is a
+    #      device-scope acquire/release ordering. `UnsafeAtomics.fence` (system scope) and
+    #      acquire/release atomic load/store both FAIL TO COMPILE on recent toolchains: the NVPTX
+    #      backend (LLVM 18, sm_80) cannot select scoped fences nor ordered atomics — only
+    #      `monotonic` selects. The portable fix is a native device threadfence (`membar.gl` /
+    #      `CUDA.threadfence()`), which we do not yet have as a backend-agnostic primitive in
+    #      KernelAbstractions. It would need to be exposed here (e.g. an overridable `_decoupled_fence()`
+    #      provided per-backend via `@device_override` in CUDA/AMDGPU package extensions).
     running_prefix = prefixes[iblock - 0x1 + 0x1]
     inspected_block = signed(typeof(iblock))(iblock) - 0x2
     while inspected_block >= 0x0
