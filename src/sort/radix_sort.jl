@@ -353,6 +353,11 @@ function _radix_sort!(
     # zero-initializes its own shared-memory histogram and writes directly here.
     hist = similar(v, UInt32, Int(_RS_SIZE) * num_blocks)
 
+    # Reusable scratch for accumulate!'s per-block prefixes (ScanPrefixes uses a
+    # 256-thread, 2-elems-per-thread grid → 512 elements per block), so the
+    # exclusive prefix sum does not re-allocate on every pass.
+    acc_temp = similar(v, UInt32, cld(length(hist), 512))
+
     p1 = v
     p2 = if !isnothing(temp)
         @argcheck length(temp) >= n && eltype(temp) === T
@@ -394,7 +399,7 @@ function _radix_sort!(
         hist_kern!(hist, p1, shift32, descending; ndrange)
         KernelAbstractions.synchronize(backend)
 
-        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false)
+        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
         KernelAbstractions.synchronize(backend)
 
         scat_kern!(p2, p1, hist, shift32, descending; ndrange)
