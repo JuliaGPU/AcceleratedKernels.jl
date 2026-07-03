@@ -396,14 +396,11 @@ function _radix_sort!(
         (min_key >> shift) == (max_key >> shift) && continue
 
         shift32 = UInt32(shift)
+        # The three kernels run in order on a single backend stream, so no host
+        # synchronization is needed between them.
         hist_kern!(hist, p1, shift32, descending; ndrange)
-        KernelAbstractions.synchronize(backend)
-
         accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
-        KernelAbstractions.synchronize(backend)
-
         scat_kern!(p2, p1, hist, shift32, descending; ndrange)
-        KernelAbstractions.synchronize(backend)
 
         p1, p2 = p2, p1
         n_actual += 1
@@ -413,6 +410,9 @@ function _radix_sort!(
     if isodd(n_actual)
         copyto!(v, p1)
     end
+
+    # Block once so the sort is complete on return; the passes only enqueue work.
+    KernelAbstractions.synchronize(backend)
 
     v
 end
