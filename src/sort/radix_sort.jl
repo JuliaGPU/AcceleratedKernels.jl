@@ -23,7 +23,7 @@
 # Supported element types: UInt32/64, Int32/64, Float32/64.
 # Custom lt/by → falls back to merge_sort!.
 
-import KernelAbstractions.KernelIntrinsics as KI
+import KernelAbstractions.KernelInterface as KI
 
 const _RS_BITS = UInt32(8)
 const _RS_SIZE = UInt32(256)   # 2^_RS_BITS
