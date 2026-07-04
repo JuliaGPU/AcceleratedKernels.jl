@@ -150,7 +150,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     )
     AK.reduce(
         (x, y) -> x + 1,
-        rand(Int32, 10_000);
+        array_from_host(rand(Int32, 10_000));
         prefer_threads,
         init=Int32(0),
         neutral=Int64(0),
@@ -339,7 +339,7 @@ end
 @testset "mapreduce_1d" begin
     Random.seed!(0)
 
-    function minbox(s)
+    function minbox(s; prefer_threads)
         # Extract coordinates into tuple and reduce to find dimensionwise minima
         AK.mapreduce(
             p -> (p.x, p.y),
@@ -365,10 +365,10 @@ end
     for _ in 1:1000
         num_elems = rand(1:100_000)
         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:num_elems])
-        mgpu = minbox(v)
+        mgpu = minbox(v; prefer_threads)
 
         vh = Array(v)
-        mcpu = minbox(vh)
+        mcpu = minbox(vh; prefer_threads=true)
         mbase = minbox_base(vh)
 
         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
@@ -383,10 +383,10 @@ end
         n3 = rand(1:100)
 
         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
-        mgpu = minbox(v)
+        mgpu = minbox(v; prefer_threads)
 
         vh = Array(v)
-        mcpu = minbox(vh)
+        mcpu = minbox(vh; prefer_threads=true)
         mbase = minbox_base(vh)
 
         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
@@ -552,7 +552,7 @@ end
         end
     end
 
-    function minbox(s, dims)
+    function minbox(s, dims; prefer_threads)
         # Extract coordinates into tuple and reduce to find dimensionwise minima
         AK.mapreduce(
             p -> (p.x, p.y),
@@ -583,10 +583,10 @@ end
             n2 = rand(1:100)
             n3 = rand(1:100)
             v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
-            mgpu = minbox(v, dims)
+            mgpu = minbox(v, dims; prefer_threads)
 
             vh = Array(v)
-            mcpu = minbox(vh, dims)
+            mcpu = minbox(vh, dims; prefer_threads=true)
             mbase = minbox_base(vh, dims)
 
             @test eltype(mgpu) === eltype(mcpu) === eltype(mbase)

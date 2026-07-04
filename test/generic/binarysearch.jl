@@ -15,7 +15,7 @@
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh; prefer_threads)
+        ixh = AK.searchsortedfirst(vh, xh; prefer_threads=true)
         ixh_base = [searchsortedfirst(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -28,7 +28,7 @@
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh; prefer_threads)
+        ixh = AK.searchsortedfirst(vh, xh; prefer_threads=true)
         ixh_base = [searchsortedfirst(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -47,7 +47,7 @@
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh; prefer_threads)
+        ixh = AK.searchsortedlast(vh, xh; prefer_threads=true)
         ixh_base = [searchsortedlast(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -60,7 +60,7 @@
 
         vh = Array(v)
         xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh; prefer_threads)
+        ixh = AK.searchsortedlast(vh, xh; prefer_threads=true)
         ixh_base = [searchsortedlast(vh, e) for e in xh]
 
         @test all(Array(ix) .== ixh .== ixh_base)
@@ -80,14 +80,14 @@
     xh = Array(x)
     ixh = similar(xh, Int32)
 
-    AK.searchsortedfirst!(ixh, vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedfirst(vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast!(ixh, vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast(vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedfirst!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedfirst(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedlast!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
+    AK.searchsortedlast(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.searchsortedfirst!(ixh, vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedfirst(vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast!(ixh, vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast(vh, xh; prefer_threads, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedfirst!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedfirst(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedlast!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    @test_throws MethodError AK.searchsortedlast(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
 end
