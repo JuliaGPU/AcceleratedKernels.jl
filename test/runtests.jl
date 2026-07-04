@@ -31,7 +31,6 @@ const _array_from_host_code = quote
         copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
         d_arr
     end
-
 end
 
 # Build list of active backends, each with setup code
