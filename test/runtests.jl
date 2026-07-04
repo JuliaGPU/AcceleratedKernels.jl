@@ -47,7 +47,7 @@ if args.custom["cuda"] !== nothing
         using CUDACore
         global BACKEND = CUDABackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(true)
+        global TEST_DL = true
         $_array_from_host_code
     end)
 end
@@ -61,7 +61,7 @@ if args.custom["amdgpu"] !== nothing
         using AMDGPU
         global BACKEND = ROCBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(true)
+        global TEST_DL = true
         $_array_from_host_code
     end)
 end
@@ -74,7 +74,7 @@ if args.custom["metal"] !== nothing
         using Metal
         global BACKEND = MetalBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(false)
+        global TEST_DL = false
         $_array_from_host_code
     end)
 end
@@ -87,7 +87,7 @@ if args.custom["oneapi"] !== nothing
         using oneAPI
         global BACKEND = oneAPIBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(false)
+        global TEST_DL = false
         $_array_from_host_code
     end)
 end
@@ -101,7 +101,7 @@ if args.custom["opencl"] !== nothing
         using OpenCL
         global BACKEND = OpenCLBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(false)
+        global TEST_DL = false
         $_array_from_host_code
     end)
 end
@@ -111,7 +111,7 @@ if args.custom["cpu-ka"] !== nothing
     push!(backends, "cpu-ka" => quote
         global BACKEND = get_backend([])
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(false)
+        global TEST_DL = false
         $_array_from_host_code
     end)
 end
@@ -121,7 +121,7 @@ if args.custom["cpu"] !== nothing || isempty(backends)
     push!(backends, "cpu" => quote
         global BACKEND = get_backend([])
         global prefer_threads = true    # Also used to determine whether to run the CPU or GPU tests
-        global TEST_DL = Ref{Bool}(false)
+        global TEST_DL = false
         $_array_from_host_code
     end)
 end
