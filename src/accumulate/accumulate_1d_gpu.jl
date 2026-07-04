@@ -22,6 +22,8 @@ end
     len = length(v)
     @uniform block_size = @groupsize()[1]
     temp = @localmem eltype(v) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
+    s_lastval = @localmem eltype(v) (1,)     # holds v[len]; captured at load time so
+                                             # the inclusive shift needn't re-read v
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -42,16 +44,21 @@ end
     bank_offset_a = conflict_free_offset(ai)
     bank_offset_b = conflict_free_offset(bi)
 
-    if block_offset + ai < len
-        temp[ai + bank_offset_a + 0x1] = v[block_offset + ai + 0x1]
-    else
-        temp[ai + bank_offset_a + 0x1] = neutral
-    end
+    # Load both elements, keeping them in registers.  Re-reading global `v` later
+    # from inside the single-thread inclusive-shift branch traps on ROCm and
+    # deadlocks on POCL (only CUDA tolerates it), so everything the shift needs is
+    # captured here: each thread's own last element (my_bi_val) and, in a shared
+    # slot, the array's final element v[len] (written by whichever thread owns it).
+    my_ai_val = (block_offset + ai < len) ? v[block_offset + ai + 0x1] : neutral
+    temp[ai + bank_offset_a + 0x1] = my_ai_val
+    my_bi_val = (block_offset + bi < len) ? v[block_offset + bi + 0x1] : neutral
+    temp[bi + bank_offset_b + 0x1] = my_bi_val
 
-    if block_offset + bi < len
-        temp[bi + bank_offset_b + 0x1] = v[block_offset + bi + 0x1]
-    else
-        temp[bi + bank_offset_b + 0x1] = neutral
+    if block_offset + ai == len - 0x1
+        s_lastval[0x1] = my_ai_val
+    end
+    if block_offset + bi == len - 0x1
+        s_lastval[0x1] = my_bi_val
     end
 
     # Build block reduction down
@@ -115,13 +122,13 @@ end
         end
         temp[bi - 0x1 + conflict_free_offset(bi - 0x1) + 0x1] = t2
 
-        # ...and accumulate the last value too
+        # ...and accumulate the last value too, without re-reading global v.  A
+        # full non-last block's last element is this thread's own my_bi_val
+        # (== v[(iblock+1)*block_size*2]); the final block instead needs the
+        # array's last element v[len], captured in s_lastval at load time.
         if bi == 0x2 * block_size - 0x1
-            if iblock < num_blocks - 0x1
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[(iblock + 0x1) * block_size * 0x2])
-            else
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[len])
-            end
+            last_val = iblock < num_blocks - 0x1 ? my_bi_val : s_lastval[0x1]
+            temp[bi + bank_offset_b + 0x1] = op(t2, last_val)
         end
     end
 
