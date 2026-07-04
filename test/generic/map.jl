@@ -2,7 +2,7 @@
     Random.seed!(0)
 
     # CPU
-    if IS_CPU_BACKEND && prefer_threads
+    if prefer_threads
         x = Array(1:1000)
         y = AK.map(x; prefer_threads) do i
             i^2

@@ -1,4 +1,4 @@
-if !IS_CPU_BACKEND || !prefer_threads
+if !prefer_threads
 @testset "merge_sort" begin
     Random.seed!(0)
 
@@ -229,7 +229,7 @@ end
         issorted(vh[ixh]; kwargs...)
     end
 
-    if !IS_CPU_BACKEND || !prefer_threads
+    if !prefer_threads
         for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
                         (UInt32, Int32, Float32, UInt64, Int64, Float64))
             v_h = rand(T, 10_000)
@@ -277,7 +277,7 @@ end
 end
 
 
-if !IS_CPU_BACKEND || !prefer_threads
+if !prefer_threads
 @testset "merge_sort_by_key" begin
     Random.seed!(0)
 
@@ -359,7 +359,7 @@ end
 end
 
 
-if !IS_CPU_BACKEND || !prefer_threads
+if !prefer_threads
 @testset "merge_sortperm" begin
     Random.seed!(0)
 
@@ -468,7 +468,7 @@ end
 end
 
 
-if !IS_CPU_BACKEND || !prefer_threads
+if !prefer_threads
 @testset "merge_sortperm_lowmem" begin
     Random.seed!(0)
 
@@ -586,7 +586,7 @@ end
 end
 
 
-if !IS_CPU_BACKEND || !prefer_threads
+if !prefer_threads
 @testset "sortperm_extended" begin
     # Helper: ix is a valid permutation of 1:n that produces a sorted order
     function is_valid_perm(vh, ixh; kwargs...)
@@ -698,7 +698,7 @@ if !IS_CPU_BACKEND || !prefer_threads
 end
 
 @testset "radix_sort_alg" begin
-    if !IS_CPU_BACKEND || !prefer_threads
+    if !prefer_threads
         Random.seed!(0)
 
         # ── Correctness: fuzzy testing across supported types ─────────────────
