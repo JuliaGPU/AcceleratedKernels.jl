@@ -12,6 +12,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+env:
+  JULIA_PKG_PRECOMPILE_AUTO: false
+
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - nthreads ${{ matrix.env.JULIA_NUM_THREADS }} - ${{ github.event_name }}
@@ -53,12 +56,12 @@ jobs:
           - os: windows-latest
             arch: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         env:
@@ -73,16 +76,16 @@ jobs:
     strategy:
       fail-fast: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: 1
           arch: x64
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
-          test_args: '--OpenCL'
+          test_args: '--opencl'
   # cpuKA:
   #   name: KA CPU Backend
   #   runs-on: ubuntu-latest
@@ -93,21 +96,21 @@ jobs:
   #   strategy:
   #     fail-fast: true
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v7
   #     - uses: julia-actions/setup-julia@v3
   #       with:
   #         version: 1
   #         arch: x64
-  #     - uses: julia-actions/cache@v2
+  #     - uses: julia-actions/cache@v3
   #     - uses: julia-actions/julia-buildpkg@v1
   #     - uses: julia-actions/julia-runtest@v1
   #       with:
-  #         test_args: '--cpuKA'
+  #         test_args: '--cpu-ka'
   docs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: julia-actions/julia-buildpkg@latest
       - uses: julia-actions/julia-docdeploy@latest
         env:

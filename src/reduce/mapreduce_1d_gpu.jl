@@ -47,7 +47,7 @@ end
 
 
 function mapreduce_1d_gpu(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral,
 
@@ -61,12 +61,13 @@ function mapreduce_1d_gpu(
     switch_below::Int,
 )
     @argcheck 1 <= block_size <= 1024
+    @argcheck ispow2(block_size)
     @argcheck switch_below >= 0
 
     # Degenerate cases
     len = length(src)
     len == 0 && return init
-    len == 1 && return @allowscalar f(src[1])
+    len == 1 && return op(init, @allowscalar f(src[1]))
     if len < switch_below
         h_src = Vector(src)
         return Base.mapreduce(f, op, h_src; init)
@@ -87,8 +88,8 @@ function mapreduce_1d_gpu(
         dst = KernelAbstractions.allocate(backend, dst_type, blocks * 2)
     end
 
-    # Later the kernel will be compiled for views anyways, so use same types
-    src_view = @view src[1:end]
+    # Later the kernel will be compiled for views anyways, so use same types for arrays.
+    src_view = _mapreduce_1d_src_view(src)
     dst_view = @view dst[1:blocks]
 
     kernel! = _mapreduce_block!(backend, block_size)
@@ -125,3 +126,6 @@ function mapreduce_1d_gpu(
     # The GPU kernel reduced all elements to one, but without the init value
     return op(init, @allowscalar(p1[1]))
 end
+
+_mapreduce_1d_src_view(src::AbstractArray) = @view src[1:end]
+_mapreduce_1d_src_view(src::Base.Broadcast.Broadcasted) = src

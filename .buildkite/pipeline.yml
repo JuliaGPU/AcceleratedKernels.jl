@@ -7,16 +7,12 @@ steps:
           version: "1.10"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("CUDA")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--CUDA"])'
+                Pkg.test("AcceleratedKernels", test_args=["--cuda"])'
     agents:
-      queue: "juliagpu"
-      cuda: "*"
+      queue: "cuda"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -26,16 +22,12 @@ steps:
           version: "1.11"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("CUDA")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--CUDA"])'
+                Pkg.test("AcceleratedKernels", test_args=["--cuda"])'
     agents:
-      queue: "juliagpu"
-      cuda: "*"
+      queue: "cuda"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -47,16 +39,12 @@ steps:
           version: "1.10"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("AMDGPU")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--AMDGPU"])'
+                Pkg.test("AcceleratedKernels", test_args=["--amdgpu"])'
     agents:
-      queue: "juliagpu"
-      rocm: "*"
+      queue: "rocm"
       rocmgpu: "*"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
@@ -67,16 +55,12 @@ steps:
           version: "1.11"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("AMDGPU")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--AMDGPU"])'
+                Pkg.test("AcceleratedKernels", test_args=["--amdgpu"])'
     agents:
-      queue: "juliagpu"
-      rocm: "*"
+      queue: "rocm"
       rocmgpu: "*"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
@@ -89,16 +73,12 @@ steps:
           version: "1.10"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("oneAPI")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
+                Pkg.test("AcceleratedKernels", test_args=["--oneapi"])'
     agents:
-      queue: "juliagpu"
-      intel: "*"
+      queue: "oneapi"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -108,16 +88,12 @@ steps:
           version: "1.11"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("oneAPI")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--oneAPI"])'
+                Pkg.test("AcceleratedKernels", test_args=["--oneapi"])'
     agents:
-      queue: "juliagpu"
-      intel: "*"
+      queue: "oneapi"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -129,17 +105,12 @@ steps:
           version: "1.10"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("Metal")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
+                Pkg.test("AcceleratedKernels", test_args=["--metal"])'
     agents:
-      queue: "juliaecosystem"
-      os: "macos"
-      arch: "aarch64"
+      queue: "metal"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
 
@@ -149,16 +120,14 @@ steps:
           version: "1.11"
     command: |
       julia -e 'using Pkg
-
                 println("--- :julia: Instantiating environment")
-                Pkg.add("Metal")
                 Pkg.develop(path=".")
-
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--Metal"])'
+                Pkg.test("AcceleratedKernels", test_args=["--metal"])'
     agents:
-      queue: "juliaecosystem"
-      os: "macos"
-      arch: "aarch64"
+      queue: "metal"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 60
+
+env:
+  JULIA_PKG_PRECOMPILE_AUTO: false

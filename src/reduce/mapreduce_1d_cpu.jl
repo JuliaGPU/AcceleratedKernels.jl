@@ -1,5 +1,5 @@
 function mapreduce_1d_cpu(
-    f, op, src::AbstractArray, backend::Backend;
+    f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral,
 
@@ -12,6 +12,10 @@ function mapreduce_1d_cpu(
     temp::Union{Nothing, AbstractArray},
     switch_below::Int,
 )
+    if src isa Base.Broadcast.Broadcasted
+        return op(init, Base.mapreduce(f, op, src; init=neutral))
+    end
+
     if max_tasks == 1
         return op(init, Base.mapreduce(f, op, src; init=neutral))
     end

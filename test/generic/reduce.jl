@@ -120,8 +120,20 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         @test s == reduce(+, vh)
     end
 
+    # Base-compatible alias: dims=: reduces all dimensions to a scalar.
+    vh_colon = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test AK.reduce(+, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
+        reduce(+, vh_colon; init=Int32(0), dims=:)
+
+    vh_one = Int32[7]
+    @test AK.reduce(+, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
+        reduce(+, vh_one; init=Int32(10))
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10)); init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
+    end
 
     # Testing different settings
     AK.reduce(
@@ -222,8 +234,77 @@ end
         end
     end
 
+    # Duplicate dims match Base semantics and are reduced once.
+    vh_dup = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test Array(AK.reduce(+, array_from_host(vh_dup); prefer_threads, init=Int32(0), dims=(2,2))) ==
+        sum(vh_dup; init=Int32(0), dims=(2,2))
+
+    # min/max with dims: tests correct neutral element in partial reduction
+    for dims in 1:3
+        n1 = rand(1:50); n2 = rand(1:50); n3 = rand(1:50)
+        vh = rand(Int32(1):Int32(100), n1, n2, n3)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(min, v; prefer_threads, init=typemax(Int32), neutral=typemax(Int32), dims)) == minimum(vh; dims)
+        @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
+    end
+
+    # Tuple dims support. Order and duplicates match Base semantics.
+    for dims in [(1,2), (1,3), (2,3), (1,2,3), (2,1), (3,1), (2,1,2)]
+        for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
+            vh = rand(Int32(1):Int32(100), n1, n2, n3)
+            v = array_from_host(vh)
+            s = AK.reduce(+, v; prefer_threads, init=Int32(0), dims)
+            sh = Array(s)
+            @test sh == sum(vh; dims)
+        end
+    end
+
+    # Base also accepts iterable dims such as vectors and ranges.
+    for dims in ([1,2], [1,3], [2,3], [1,2,3], [2,1], [2,1,2], Int[], Any[1,2], Int32[1,2], 1:2)
+        vh = rand(Int32(1):Int32(100), 3, 4, 5)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(+, v; prefer_threads, init=Int32(0), dims)) ==
+            sum(vh; init=Int32(0), dims)
+    end
+
+    @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4)); prefer_threads, init=Int32(0), dims=[1.0, 2.0])
+
+    # Tiled strided GPU path: contiguous kept dimensions, one strided reduce
+    # dimension, and dst_size == reduce_size. The 3D case also exercises a
+    # partial output tile.
+    for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
+        vh = rand(Int32(1):Int32(3), shape...)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(+, v; prefer_threads, init=Int32(0), dims)) ==
+            sum(vh; init=Int32(0), dims)
+    end
+
+    if IS_CPU_BACKEND
+        # The CPU fallback should not require strided storage.
+        vh = reshape(1:12, 1, 3, 4)
+        @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
+            sum(vh; init=0, dims=(1,2))
+    else
+        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
+        # fast path over their dense parent buffer; the offset view exercises a nonzero
+        # base offset. Broadcasted/lazy sources still take the generic fallback.
+        vh = reshape(Int32(1):Int32(40), 5, 8)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(+, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            Base.reduce(+, @view(vh[:, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.reduce(+, @view(v[2:end, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            Base.reduce(+, @view(vh[2:end, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.reduce(+, v'; prefer_threads, init=Int32(0), dims=1)) ==
+            Base.reduce(+, vh'; init=Int32(0), dims=1)
+        @test Array(AK.reduce(+, PermutedDimsArray(v, (2, 1)); prefer_threads, init=Int32(0), dims=1)) ==
+            Base.reduce(+, PermutedDimsArray(vh, (2, 1)); init=Int32(0), dims=1)
+    end
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10, 10)); prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
+    end
 
     # Testing different settings
     AK.reduce(
@@ -342,6 +423,76 @@ end
         @test s == mapreduce(abs, +, vh)
     end
 
+    # Base-compatible alias: dims=: reduces all dimensions to a scalar.
+    vh_colon = rand(Int32(-10):Int32(10), 3, 4, 5)
+    @test AK.mapreduce(abs, +, array_from_host(vh_colon); prefer_threads, init=Int32(0), dims=:) ==
+        mapreduce(abs, +, vh_colon; init=Int32(0), dims=:)
+
+    vh_one = Int32[-7]
+    @test AK.mapreduce(abs, +, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
+        mapreduce(abs, +, vh_one; init=Int32(10))
+
+    vh_typechange = rand(Int32(-10):Int32(10), 4, 5)
+    f_typechange = x -> Float32(x) / 2
+    @test AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0) ≈
+        mapreduce(f_typechange, +, vh_typechange; init=0f0)
+    @test Array(AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0, dims=2)) ≈
+        mapreduce(f_typechange, +, vh_typechange; init=0f0, dims=2)
+    f_min_typechange = x -> Float32(10_000_000_000 + x)
+    f_max_typechange = x -> Float32(-10_000_000_000 + x)
+    @test AK.mapreduce(f_min_typechange, min, array_from_host(vh_typechange); prefer_threads, init=Inf32) ≈
+        mapreduce(f_min_typechange, min, vh_typechange; init=Inf32)
+    @test AK.mapreduce(f_max_typechange, max, array_from_host(vh_typechange); prefer_threads, init=-Inf32) ≈
+        mapreduce(f_max_typechange, max, vh_typechange; init=-Inf32)
+
+    # Multi-input mapreduce lowers through a broadcasted source.
+    vh_a = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_b = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_c = rand(Int32(-10):Int32(10), 4, 5, 6)
+    v_a = array_from_host(vh_a)
+    v_b = array_from_host(vh_b)
+    v_c = array_from_host(vh_c)
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b, BACKEND; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0))
+    @test AK.mapreduce((x, y, z) -> x + y * z, +, v_a, v_b, v_c, BACKEND; prefer_threads, init=Int32(0)) ==
+        mapreduce((x, y, z) -> x + y * z, +, vh_a, vh_b, vh_c; init=Int32(0))
+    @test AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=:) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=:)
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_a, v_b; prefer_threads, init=Int32(0), dims=())) ==
+        mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=())
+    @test AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_a, v_b; prefer_threads, init=0f0) ≈
+        mapreduce((x, y) -> Float32(x - y) / 3, +, vh_a, vh_b; init=0f0)
+
+    for (shape, dims) in (((0, 3), 1), ((2, 0), 2), ((0, 0), (1, 2)), ((0, 3), ()))
+        h_empty1 = reshape(Int32[], shape...)
+        h_empty2 = fill(Int32(2), shape...)
+        @test Array(AK.mapreduce((x, y) -> x + y, +,
+                                  array_from_host(h_empty1),
+                                  array_from_host(h_empty2);
+                                  prefer_threads, init=Int32(10), dims)) ==
+            mapreduce((x, y) -> x + y, +, h_empty1, h_empty2; init=Int32(10), dims)
+    end
+
+    @test_throws DimensionMismatch AK.mapreduce(
+        (x, y) -> x + y, +,
+        array_from_host(rand(Int32, 2, 3)),
+        array_from_host(rand(Int32, 1, 3));
+        prefer_threads,
+        init=Int32(0),
+    )
+
+    if IS_CPU_BACKEND
+        bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(+, reshape(1:6, 2, 3), reshape(10:15, 2, 3)))
+        @test AK.mapreduce(identity, +, bc; prefer_threads, init=0) ==
+            mapreduce(identity, +, bc; init=0)
+        @test Array(AK.mapreduce(identity, +, bc; prefer_threads, init=0, dims=2)) ==
+            mapreduce(identity, +, bc; init=0, dims=2)
+        @test Array(AK.mapreduce(identity, +, bc; prefer_threads, init=0, dims=())) ==
+            mapreduce(identity, +, bc; init=0, dims=())
+    end
+
     # Testing different settings, enforcing change of type between f and op
     f(s, temp) = AK.mapreduce(
         p -> (p.x, p.y),
@@ -362,6 +513,9 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, v; prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
+    end
 end
 
 
@@ -458,8 +612,97 @@ end
         end
     end
 
+    # Duplicate dims match Base semantics and are reduced once.
+    vh_dup = rand(Int32(1):Int32(10), 3, 4, 5)
+    @test Array(AK.mapreduce(-, +, array_from_host(vh_dup); prefer_threads, init=Int32(0), dims=(2,2))) ==
+        mapreduce(-, +, vh_dup; init=Int32(0), dims=(2,2))
+
+    # Multi-input mapreduce with dimensional reductions.
+    vh_ma = rand(Int32(-10):Int32(10), 4, 5, 6)
+    vh_mb = rand(Int32(-10):Int32(10), 4, 5, 6)
+    v_ma = array_from_host(vh_ma)
+    v_mb = array_from_host(vh_mb)
+    for dims in (1, 2, (1, 2), (1, 3), (1, 2, 3), (2, 2))
+        @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims)
+    end
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb, BACKEND; prefer_threads, init=Int32(0), dims=(1, 2))) ==
+        mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=(1, 2))
+    @test Array(AK.mapreduce((x, y) -> x * y, +, v_ma, v_mb; prefer_threads, init=Int32(0), dims=())) ==
+        mapreduce((x, y) -> x * y, +, vh_ma, vh_mb; init=Int32(0), dims=())
+    @test Array(AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_ma, v_mb; prefer_threads, init=0f0, dims=(1, 2))) ≈
+        mapreduce((x, y) -> Float32(x - y) / 3, +, vh_ma, vh_mb; init=0f0, dims=(1, 2))
+    vh_typechange_nd = rand(Int32(-10):Int32(10), 4, 5)
+    f_min_typechange_nd = x -> Float32(10_000_000_000 + x)
+    f_max_typechange_nd = x -> Float32(-10_000_000_000 + x)
+    @test Array(AK.mapreduce(f_min_typechange_nd, min, array_from_host(vh_typechange_nd); prefer_threads, init=Inf32, dims=2)) ≈
+        mapreduce(f_min_typechange_nd, min, vh_typechange_nd; init=Inf32, dims=2)
+    @test Array(AK.mapreduce(f_max_typechange_nd, max, array_from_host(vh_typechange_nd); prefer_threads, init=-Inf32, dims=2)) ≈
+        mapreduce(f_max_typechange_nd, max, vh_typechange_nd; init=-Inf32, dims=2)
+
+    # min/max with dims: tests correct neutral element in partial reduction
+    for dims in 1:3
+        n1 = rand(1:50); n2 = rand(1:50); n3 = rand(1:50)
+        vh = rand(Int32(1):Int32(100), n1, n2, n3)
+        v = array_from_host(vh)
+        @test Array(AK.reduce(min, v; prefer_threads, init=typemax(Int32), neutral=typemax(Int32), dims)) == minimum(vh; dims)
+        @test Array(AK.reduce(max, v; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims)) == maximum(vh; dims)
+    end
+
+    # Tuple dims support. Order and duplicates match Base semantics.
+    for dims in [(1,2), (1,3), (2,3), (1,2,3), (2,1), (3,1), (2,1,2)]
+        for n1 in [1, 5, 10], n2 in [1, 5, 10], n3 in [1, 5, 10]
+            vh = rand(Int32(1):Int32(100), n1, n2, n3)
+            v = array_from_host(vh)
+            s = AK.mapreduce(-, +, v; prefer_threads, init=Int32(0), dims)
+            sh = Array(s)
+            @test sh == mapreduce(-, +, vh; init=Int32(0), dims)
+        end
+    end
+
+    # Base also accepts iterable dims such as vectors and ranges.
+    for dims in ([1,2], [1,3], [2,3], [1,2,3], [2,1], [2,1,2], Int[], Any[1,2], Int32[1,2], 1:2)
+        vh = rand(Int32(1):Int32(100), 3, 4, 5)
+        v = array_from_host(vh)
+        @test Array(AK.mapreduce(-, +, v; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce(-, +, vh; init=Int32(0), dims)
+    end
+
+    @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4)); prefer_threads, init=Int32(0), dims=[1.0, 2.0])
+
+    # Tiled strided GPU path coverage for mapreduce, including a 3D case with
+    # a partial output tile.
+    for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
+        vh = rand(Int32(1):Int32(3), shape...)
+        v = array_from_host(vh)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, v; prefer_threads, init=Int32(0), dims)) ==
+            mapreduce(x -> x - Int32(1), +, vh; init=Int32(0), dims)
+    end
+
+    if IS_CPU_BACKEND
+        # The CPU fallback should not require strided storage.
+        vh = reshape(1:12, 1, 3, 4)
+        @test Array(AK.mapreduce(x -> 2x, +, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
+            mapreduce(x -> 2x, +, vh; init=0, dims=(1,2))
+    else
+        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
+        # fast path over their dense parent buffer; the offset view exercises a nonzero
+        # base offset. Broadcasted/lazy sources still take the generic fallback.
+        vh = reshape(Int32(1):Int32(40), 5, 8)
+        v = array_from_host(vh)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[:, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            mapreduce(x -> x - Int32(1), +, @view(vh[:, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[2:end, 1:2:end]); prefer_threads, init=Int32(0), dims=2)) ==
+            mapreduce(x -> x - Int32(1), +, @view(vh[2:end, 1:2:end]); init=Int32(0), dims=2)
+        @test Array(AK.mapreduce(x -> x - Int32(1), +, PermutedDimsArray(v, (2, 1)); prefer_threads, init=Int32(0), dims=1)) ==
+            mapreduce(x -> x - Int32(1), +, PermutedDimsArray(vh, (2, 1)); init=Int32(0), dims=1)
+    end
+
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=10, bad=:kwarg)
+    if !IS_CPU_BACKEND
+        @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
+    end
 
     # Testing different settings
     AK.mapreduce(
@@ -528,6 +771,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.sum(v; prefer_threads, block_size=64)
+    @test AK.sum(v; prefer_threads, dims=:) == sum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.sum(v; prefer_threads, bad=:kwarg)
@@ -573,6 +817,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.prod(v; prefer_threads, block_size=64)
+    @test AK.prod(v; prefer_threads, dims=:) == prod(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.prod(v; prefer_threads, bad=:kwarg)
@@ -618,6 +863,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.minimum(v; prefer_threads, block_size=64)
+    @test AK.minimum(v; prefer_threads, dims=:) == minimum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.minimum(v; prefer_threads, bad=:kwarg)
@@ -663,6 +909,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.maximum(v; prefer_threads, block_size=64)
+    @test AK.maximum(v; prefer_threads, dims=:) == maximum(Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.maximum(v; prefer_threads, bad=:kwarg)
@@ -715,6 +962,7 @@ end
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
     AK.count(x->x>0, v; prefer_threads, block_size=64)
+    @test AK.count(x->x>0, v; prefer_threads, dims=:) == count(x->x>0, Array(v); dims=:)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.count(v; prefer_threads, bad=:kwarg)
