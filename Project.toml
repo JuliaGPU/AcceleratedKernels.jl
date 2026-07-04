@@ -19,7 +19,7 @@ AcceleratedKernelsoneAPIExt = "oneAPI"
 [compat]
 ArgCheck = "2"
 GPUArraysCore = "0.2.0"
-KernelAbstractions = "0.9.34"
+KernelAbstractions = "0.9.34, 0.10"
 Markdown = "1"
 UnsafeAtomics = "0.3.0"
 julia = "1.10"

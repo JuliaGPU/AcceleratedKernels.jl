@@ -23,7 +23,11 @@ const _array_from_host_code = quote
     global array_from_host
     array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
     function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
-        d_arr = KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
+        d_arr = d_arr = if IS_CPU_BACKEND && prefer_threads # Don't use KA zeros if not using KA algorithms
+            zeros(isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
+        else
+            KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
+        end
         copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
         d_arr
     end
