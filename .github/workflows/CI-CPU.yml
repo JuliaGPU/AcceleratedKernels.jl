@@ -77,8 +77,8 @@ jobs:
       fail-fast: true
       matrix:
         version:
-          - 'lts'
-          - '1'
+          - '1.10'
+          - '1.12'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
