@@ -1,6 +1,6 @@
 ALGS = AK.AccumulateAlgorithm[AK.ScanPrefixes()]
 
-@isdefined(TEST_DL) && TEST_DL[] && push!(ALGS, AK.DecoupledLookback())
+TEST_DL && push!(ALGS, AK.DecoupledLookback())
 
 @testset "accumulate_1d $(alg isa AK.DecoupledLookback ? "DL" : "SP")" for alg in ALGS
 

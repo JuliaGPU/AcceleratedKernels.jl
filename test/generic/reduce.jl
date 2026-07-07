@@ -131,7 +131,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10)); init=10, bad=:kwarg)
-    if !IS_CPU_BACKEND
+    if !prefer_threads
         @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
     end
 
@@ -150,7 +150,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     )
     AK.reduce(
         (x, y) -> x + 1,
-        rand(Int32, 10_000);
+        array_from_host(rand(Int32, 10_000));
         prefer_threads,
         init=Int32(0),
         neutral=Int64(0),
@@ -279,7 +279,7 @@ end
             sum(vh; init=Int32(0), dims)
     end
 
-    if IS_CPU_BACKEND
+    if prefer_threads
         # The CPU fallback should not require strided storage.
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
@@ -302,7 +302,7 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.reduce(+, array_from_host(rand(Int32, 10, 10)); prefer_threads, init=10, bad=:kwarg)
-    if !IS_CPU_BACKEND
+    if !prefer_threads
         @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
     end
 
@@ -339,7 +339,7 @@ end
 @testset "mapreduce_1d" begin
     Random.seed!(0)
 
-    function minbox(s)
+    function minbox(s; prefer_threads)
         # Extract coordinates into tuple and reduce to find dimensionwise minima
         AK.mapreduce(
             p -> (p.x, p.y),
@@ -365,10 +365,10 @@ end
     for _ in 1:1000
         num_elems = rand(1:100_000)
         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:num_elems])
-        mgpu = minbox(v)
+        mgpu = minbox(v; prefer_threads)
 
         vh = Array(v)
-        mcpu = minbox(vh)
+        mcpu = minbox(vh; prefer_threads=true)
         mbase = minbox_base(vh)
 
         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
@@ -383,10 +383,10 @@ end
         n3 = rand(1:100)
 
         v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
-        mgpu = minbox(v)
+        mgpu = minbox(v; prefer_threads)
 
         vh = Array(v)
-        mcpu = minbox(vh)
+        mcpu = minbox(vh; prefer_threads=true)
         mbase = minbox_base(vh)
 
         @test typeof(mgpu) === typeof(mcpu) === typeof(mbase)
@@ -483,7 +483,7 @@ end
         init=Int32(0),
     )
 
-    if IS_CPU_BACKEND
+    if prefer_threads
         bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(+, reshape(1:6, 2, 3), reshape(10:15, 2, 3)))
         @test AK.mapreduce(identity, +, bc; prefer_threads, init=0) ==
             mapreduce(identity, +, bc; init=0)
@@ -513,7 +513,7 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, v; prefer_threads, init=10, bad=:kwarg)
-    if !IS_CPU_BACKEND
+    if !prefer_threads
         @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 256)); prefer_threads, init=Int32(0), block_size=192)
     end
 end
@@ -552,7 +552,7 @@ end
         end
     end
 
-    function minbox(s, dims)
+    function minbox(s, dims; prefer_threads)
         # Extract coordinates into tuple and reduce to find dimensionwise minima
         AK.mapreduce(
             p -> (p.x, p.y),
@@ -583,10 +583,10 @@ end
             n2 = rand(1:100)
             n3 = rand(1:100)
             v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:n1, _ in 1:n2, _ in 1:n3])
-            mgpu = minbox(v, dims)
+            mgpu = minbox(v, dims; prefer_threads)
 
             vh = Array(v)
-            mcpu = minbox(vh, dims)
+            mcpu = minbox(vh, dims; prefer_threads=true)
             mbase = minbox_base(vh, dims)
 
             @test eltype(mgpu) === eltype(mcpu) === eltype(mbase)
@@ -679,7 +679,7 @@ end
             mapreduce(x -> x - Int32(1), +, vh; init=Int32(0), dims)
     end
 
-    if IS_CPU_BACKEND
+    if prefer_threads
         # The CPU fallback should not require strided storage.
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.mapreduce(x -> 2x, +, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
@@ -700,7 +700,7 @@ end
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4, 5)); prefer_threads, init=10, bad=:kwarg)
-    if !IS_CPU_BACKEND
+    if !prefer_threads
         @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 16, 16)); prefer_threads, init=Int32(0), dims=1, block_size=192)
     end
 
