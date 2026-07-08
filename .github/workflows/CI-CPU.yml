@@ -82,6 +82,7 @@ jobs:
           - '1.11'
           - '1.12'
           - '1.13-nightly'
+          - 'nightly'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
