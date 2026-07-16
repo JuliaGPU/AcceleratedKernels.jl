@@ -10,6 +10,10 @@ steps:
           - "1.12"
           - "1.13"
           - "nightly"
+      adjustments:
+        - with:
+            version: "nightly"
+          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
@@ -34,6 +38,10 @@ steps:
           - "1.12"
           - "1.13"
           - "nightly"
+      adjustments:
+        - with:
+            version: "nightly"
+          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
@@ -59,6 +67,10 @@ steps:
           - "1.12"
           - "1.13"
           - "nightly"
+      adjustments:
+        - with:
+            version: "nightly"
+          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
@@ -83,6 +95,10 @@ steps:
           - "1.12"
           - "1.13"
           - "nightly"
+      adjustments:
+        - with:
+            version: "nightly"
+          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
