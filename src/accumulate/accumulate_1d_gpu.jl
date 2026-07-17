@@ -100,10 +100,7 @@ end
         d = d << 0x1
     end
 
-    # For exclusive ScanPrefixes scans, the local exclusive output is already correct.
-    # DecoupledLookback still shifts non-first blocks because _accumulate_previous!
-    # expects each block's last value to be globally inclusive.
-    if inclusive || (iblock != 0x0 && !isnothing(flags))
+    if inclusive
         # To compute an inclusive scan, shift elements left...
         @synchronize()
         t1 = temp[ai + bank_offset_a + 0x1]
@@ -132,7 +129,7 @@ end
 
         # Known at compile-time; used in the first pass of the ScanPrefixes algorithm
         if !isnothing(prefixes)
-            if isnothing(flags) && !inclusive
+            if !inclusive
                 last_global = block_offset + bi
                 if last_global < len
                     prefixes[iblock + 0x1] = op(temp[bi + bank_offset_b + 0x1], v[last_global + 0x1])
@@ -160,7 +157,7 @@ end
 
 
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous!(
-    op, v, flags, @Const(prefixes),
+    op, v, flags, @Const(prefixes), aggregates,
 )
 
     len = length(v)
@@ -177,14 +174,32 @@ end
     block_offset = iblock * block_size * 0x2                # Processing two elements per thread
 
     # Each block looks back to find running prefix sum
+    #
+    # KNOWN BUG / TODO: this decoupled-lookback publish/consume protocol is not yet memory-coherent
+    # across blocks, and fails ~40% of the time on smaller GPUs (e.g. A100 MIG 1g.5gb, sm_80, ~14
+    # SMs) for both inclusive and exclusive scans. Two problems:
+    #
+    #   1. Coherence. `aggregates[i]` below is read with an ordinary (L1-cacheable) load while the
+    #      companion `flags[i]` is read atomically. A consumer can observe a fresh `flags[i] ==
+    #      ACC_FLAG_A` yet read a stale L1 copy of `aggregates[i]`. The aggregate must be accessed
+    #      with an L1-bypassing (relaxed/monotonic atomic) load and store instead, like the flag.
+    #
+    #   2. Ordering. We need the producer's aggregate store to be globally visible *before* its flag
+    #      store, and the consumer's aggregate load to happen *after* its flag load. That is a
+    #      device-scope acquire/release ordering. `UnsafeAtomics.fence` (system scope) and
+    #      acquire/release atomic load/store both FAIL TO COMPILE on recent toolchains: the NVPTX
+    #      backend (LLVM 18, sm_80) cannot select scoped fences nor ordered atomics — only
+    #      `monotonic` selects. The portable fix is a native device threadfence (`membar.gl` /
+    #      `CUDA.threadfence()`), which we do not yet have as a backend-agnostic primitive in
+    #      KernelAbstractions. It would need to be exposed here (e.g. an overridable `_decoupled_fence()`
+    #      provided per-backend via `@device_override` in CUDA/AMDGPU package extensions).
     running_prefix = prefixes[iblock - 0x1 + 0x1]
     inspected_block = signed(typeof(iblock))(iblock) - 0x2
     while inspected_block >= 0x0
         # Opportunistic: a previous block finished everything
         if UnsafeAtomics.load(pointer(flags, inspected_block + 0x1), UnsafeAtomics.monotonic) == ACC_FLAG_A
-            UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from v)
-            # Previous blocks (except last) always have filled values in v, so index is inbounds
-            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * 0x2])
+            UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from aggregates)
+            running_prefix = op(running_prefix, aggregates[inspected_block + 0x1])
             break
         else
             running_prefix = op(running_prefix, prefixes[inspected_block + 0x1])
@@ -204,12 +219,17 @@ end
         v[block_offset + bi + 0x1] = op(running_prefix, v[block_offset + bi + 0x1])
     end
 
+    if ithread == 0x0
+        aggregates[iblock + 0x1] = op(running_prefix, prefixes[iblock + 0x1])
+    end
+
     # Set flag for "aggregate of all prefixes up to this block finished"
     # There are two synchronization concerns here:
-    # 1. Withing a group we want to ensure that all writed to `v` have occured before setting the flag.
-    # 2. Between groups we need to use a fence and atomic load/store to ensure that memory operations are not re-ordered
+    # 1. Within a group we want to ensure that all writes to `v` have occurred before setting the flag.
+    # 2. Between groups we need to use a fence and atomic load/store to ensure that memory operations are not re-ordered.
     @synchronize() # within-block
-    # Note: This fence is needed to ensure that the flag is not set before copying into v.
+    # Note: This fence is needed to ensure that the flag is not set before copying into v
+    #       and publishing the aggregate prefix.
     #       See https://doc.rust-lang.org/std/sync/atomic/fn.fence.html
     #       for more details.
     #       We use the happens-before relation between stores to `v` and the store to `flags`.
@@ -295,10 +315,16 @@ function accumulate_1d_gpu!(
 
     if isnothing(temp)
         prefixes = similar(v, eltype(v), num_blocks)
+        aggregates = nothing
     else
         @argcheck eltype(temp) === eltype(v)
         @argcheck length(temp) >= num_blocks
-        prefixes = temp
+        prefixes = @view temp[1:num_blocks]
+        if length(temp) >= 2 * num_blocks
+            aggregates = @view temp[(num_blocks + 1):(2 * num_blocks)]
+        else
+            aggregates = nothing
+        end
     end
 
     if isnothing(temp_flags)
@@ -314,8 +340,11 @@ function accumulate_1d_gpu!(
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
+        if isnothing(aggregates)
+            aggregates = similar(v, eltype(v), num_blocks)
+        end
         kernel2! = _accumulate_previous!(backend, block_size)
-        kernel2!(op, v, flags, prefixes,
+        kernel2!(op, v, flags, prefixes, aggregates,
                  ndrange=(num_blocks - 1) * block_size)
     end
 
