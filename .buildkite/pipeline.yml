@@ -79,6 +79,7 @@ steps:
                 println("--- :julia: Instantiating environment")
                 Pkg.develop(path=".")
                 println("+++ :julia: Running tests")
+                Pkg.add(url="https://github.com/christiangnrd/oneAPI.jl", rev="usefree")
                 Pkg.test("AcceleratedKernels", test_args=["--oneapi"])'
     agents:
       queue: "oneapi"
