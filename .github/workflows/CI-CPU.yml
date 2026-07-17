@@ -27,9 +27,10 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 'lts'
-          - '1'
-          - 'pre'
+          - '1.10'
+          - '1.11'
+          - '1.12'
+          - '1.13-nightly'
         os:
           - ubuntu-latest
           - macOS-latest
@@ -67,19 +68,26 @@ jobs:
         env:
           JULIA_NUM_THREADS: ${{ matrix.env.JULIA_NUM_THREADS }}
   OpenCL:
-    name: OpenCL
+    name: OpenCL - Julia ${{ matrix.version }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
       actions: write
       contents: read
     strategy:
-      fail-fast: true
+      fail-fast: false
+      matrix:
+        version:
+          - '1.10'
+          - '1.11'
+          - '1.12'
+          - '1.13-nightly'
+          - 'nightly'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: 1
+          version: ${{ matrix.version }}
           arch: x64
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1

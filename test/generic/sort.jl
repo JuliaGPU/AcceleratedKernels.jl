@@ -641,17 +641,18 @@ if !prefer_threads
     n = 10_000
     Random.seed!(789)
 
-    for (kw, check_kw) in (
-        ((rev=true,),          (rev=true,)),
-        ((by=abs,),            (by=abs,)),
-        ((by=abs, rev=true),   (by=abs, rev=true)),
-        ((lt=(>),),            (lt=(>),)),
+    for kw in (
+        (rev=true,),
+        (by=abs,),
+        (by=abs, rev=true),
+        (lt=(>),)
     )
         v  = array_from_host(randn(Float32, n))
         ix = array_from_host(zeros(Int, n))
         AK.sortperm!(ix, v; kw...)
         vh, ixh = Array(v), Array(ix)
-        @test is_valid_perm(vh, ixh; check_kw...)
+        res = is_valid_perm(vh, ixh; kw...)
+        @test res
     end
 
     # ── temp kwarg: buffer reuse gives identical result ───────────────────────
