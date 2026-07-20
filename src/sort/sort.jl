@@ -66,7 +66,7 @@ arguments are the same as for `Base.sort`.
 
 ## CPU
 CPU settings: use at most `max_tasks` threads to sort the array such that at least `min_elems`
-elements are sorted by each thread. A parallel [`sample_sort!`](@ref) is used, processing
+elements are sorted by each thread. A parallel sample sort is used, processing
 independent slices of the array and deferring to `Base.sort!` for the final local sorts.
 
 Note that the Base Julia `sort!` is mainly memory-bound, so multithreaded sorting only becomes
@@ -76,15 +76,14 @@ faster if it is a more compute-heavy operation to hide memory latency - that inc
 - Less cache-predictable data movement, e.g. `sortperm`.
 
 ## GPU
-GPU settings: use `block_size` threads per block to sort the array. A parallel [`merge_sort!`](@ref)
-is used.
+GPU settings: use `block_size` threads per block to sort the array. A parallel merge sort is used.
 
 ## Algorithm choice
-By default, `sort!` uses [`sample_sort!`](@ref) on CPU backends and [`merge_sort!`](@ref) on GPU
+By default, `sort!` uses sample sort on CPU backends and merge sort on GPU
 backends. Pass `alg=SampleSort()` for the CPU path, `alg=MergeSort()` for the GPU merge-sort path,
 or `alg=RadixSort()` to opt into GPU radix sorting. `RadixSort()` supports 32-bit and 64-bit
 integers and floats; unsupported element types or custom `lt`/`by` settings fall back to
-[`merge_sort!`](@ref).
+merge sort.
 
 For both CPU and GPU backends, the `temp` argument can be used to reuse a temporary buffer of the
 same size as `v` to store the sorted output.
@@ -239,8 +238,8 @@ Save into `ix` the index permutation of `v` such that `v[ix]` is sorted. The `lt
 [`sort!`](@ref) with custom by-index comparators.
 
 ## Algorithm choice
-By default, `sortperm!` uses [`sample_sortperm!`](@ref) on CPU backends and [`merge_sortperm!`](@ref)
-on GPU backends. Pass `alg=MergeSort(lowmem=true)` to use the lower-memory GPU permutation path.
+By default, `sortperm!` uses sample sort on CPU backends and merge sort on GPU
+backends. Pass `alg=MergeSort(lowmem=true)` to use the lower-memory GPU permutation path.
 `RadixSort()` does not provide a permutation path.
 """
 function sortperm!(
