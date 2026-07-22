@@ -20,6 +20,8 @@
 #   • Items-per-thread tiling: the fast kernels process items_per_thread elements
 #     per thread, shrinking the per-(digit, block) histogram — and the exclusive
 #     scan over it — by the same factor.
+#   • Single-block fast path: arrays that fit one tile (2 * block_size elements)
+#     are sorted entirely in shared memory by one kernel launch.
 #   • Skip-pass via min/max keys: if min and max share the whole byte-suffix from byte k
 #     up, every element does too, so the whole pass is skipped (e.g. UInt32 in [0, 255]
 #     sorts in a single pass).
@@ -289,6 +291,140 @@ end
 end
 
 
+
+# ─── Whole-array single-block sort (small arrays) ────────────────────────────
+# For arrays that fit in one tile (2 * block_size elements) the entire multi-pass
+# sort runs inside a single work-group: keys ping-pong between two shared-memory
+# buffers, with the same chunked stable rank as the scatter above, and global
+# memory is touched exactly twice (load + store).  One kernel launch replaces the
+# hist/scan/scatter pipeline's 3 launches per pass, which dominate at this size.
+#
+# The pass loop has a compile-time trip count (NPASS from the element type) and
+# the source/destination buffers are chosen with a data select, never a branch,
+# so every @synchronize below executes unconditionally on all backends.
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _radix_sort_block!(
+    v, rev::Bool, ::Val{NPASS},
+) where NPASS
+    @uniform NI   = Int(@groupsize()[1])
+    @uniform TILE = Int(@groupsize()[1]) * 2
+    @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ _RS_CHUNK
+    s_a     = @localmem eltype(v) (TILE,)
+    s_b     = @localmem eltype(v) (TILE,)
+    s_digit = @localmem UInt32    (TILE,)
+    s_chist = @localmem UInt32    (256 * NCH,)
+    s_loff  = @localmem UInt32    (256,)       # per-digit start offsets in the tile
+
+    it = Int(@index(Local, Linear)) - 1
+    n  = Int(length(v))
+
+    m = 0
+    while m < 2
+        p = it + m * NI
+        if p < n
+            s_a[p + 1] = v[p + 1]
+        end
+        m += 1
+    end
+    @synchronize()
+
+    pass = 0
+    while pass < NPASS
+        sh = UInt32(pass) * _RS_BITS
+        # Uniform data select between the ping-pong buffers; keeps the barriers
+        # below outside any conditional.
+        src = iseven(pass) ? s_a : s_b
+        dst = iseven(pass) ? s_b : s_a
+
+        j = it
+        while j < 256 * NCH
+            s_chist[j + 1] = UInt32(0)
+            j += NI
+        end
+        j = it
+        while j < 256
+            s_loff[j + 1] = UInt32(0)
+            j += NI
+        end
+        @synchronize()
+
+        m = 0
+        while m < 2
+            p = it + m * NI
+            if p < n
+                d = _rs_digit(src[p + 1], sh, rev)
+                s_digit[p + 1] = d
+                Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+            end
+            m += 1
+        end
+        @synchronize()
+
+        # cross-chunk exclusive prefix per digit; digit totals land in s_loff
+        d = it
+        while d < 256
+            acc = UInt32(0)
+            c = 0
+            while c < NCH
+                cnt = s_chist[c * 256 + d + 1]
+                s_chist[c * 256 + d + 1] = acc
+                acc += cnt
+                c += 1
+            end
+            s_loff[d + 1] = acc
+            d += NI
+        end
+        @synchronize()
+
+        # exclusive scan of the 256 digit totals (serial by thread 0: 256 adds,
+        # negligible next to the tile's rank work)
+        if it == 0
+            run = UInt32(0)
+            dd = 0
+            while dd < 256
+                t = s_loff[dd + 1]
+                s_loff[dd + 1] = run
+                run += t
+                dd += 1
+            end
+        end
+        @synchronize()
+
+        # stable rank (cross-chunk base + intra-chunk same-digit count) -> place
+        m = 0
+        while m < 2
+            p = it + m * NI
+            if p < n
+                d = s_digit[p + 1]
+                chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+                cnt = UInt32(0)
+                q = chunk_start
+                while q < p
+                    cnt += UInt32(s_digit[q + 1] == d)
+                    q += 1
+                end
+                rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+                dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
+            end
+            m += 1
+        end
+        @synchronize()
+
+        pass += 1
+    end
+
+    res = iseven(NPASS) ? s_a : s_b
+    m = 0
+    while m < 2
+        p = it + m * NI
+        if p < n
+            v[p + 1] = res[p + 1]
+        end
+        m += 1
+    end
+end
+
+
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 _rs_supported(::Type{T}) where T =
@@ -362,8 +498,23 @@ function _radix_sort!(
     use_fast    = has_atomics && block_size % _RS_CHUNK == 0
     items       = use_fast ? items_per_thread : 1
 
+    n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)   # 4 for 32-bit, 8 for 64-bit
+
+    # Whole-array single-block fast path: the full sort runs in shared memory in
+    # one launch, skipping the hist/scan/scatter pipeline and its allocations.
+    # The kernel's shared footprint scales with the tile, so it is only taken up
+    # to block_size 256 (worst case, 64-bit keys at tile 512: ~27 KiB), which
+    # fits every backend's budget — Metal caps threadgroup memory at 32 KiB and
+    # CUDA static shared memory at 48 KiB; block_size 512 with 64-bit keys would
+    # need ~53 KiB and fail to launch.
+    if use_fast && block_size <= 256 && n <= 2 * block_size
+        _radix_sort_block!(backend, block_size)(
+            v, descending, Val(n_passes); ndrange=block_size)
+        KernelAbstractions.synchronize(backend)
+        return v
+    end
+
     num_blocks = cld(n, block_size * items)
-    n_passes   = sizeof(T) * 8 ÷ Int(_RS_BITS)   # 4 for 32-bit, 8 for 64-bit
 
     # Single histogram buffer; no need to zero before each pass — _radix_hist!
     # zero-initializes its own shared-memory histogram and writes directly here.
