@@ -105,7 +105,9 @@ The temporaries are only used for the 1D case (`dims=nothing`): `temp` stores pe
 `temp_flags` is only used for the `DecoupledLookback()` algorithm for flagging if blocks are ready;
 they should both have at least `(length(v) + 2 * block_size - 1) ÷ (2 * block_size)` elements; also,
 `eltype(v) === eltype(temp)` is required; the elements in `temp_flags` can be any integers, but
-`UInt8` is used by default to reduce memory usage.
+`UInt8` is used by default to reduce memory usage. `DecoupledLookback()` also needs cumulative
+per-block aggregates; if `temp` has at least twice as many elements, its second half is used for them,
+otherwise they are allocated internally.
 
 # Examples
 Example computing an inclusive prefix sum (the typical GPU "scan"):
@@ -231,4 +233,3 @@ function accumulate(
     )
     vcopy
 end
-
