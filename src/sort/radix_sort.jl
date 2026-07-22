@@ -17,6 +17,9 @@
 # Key optimizations:
 #   • Fused min/max range (_rs_key_range): one reduction over the sort keys instead of
 #     separate minimum + maximum.
+#   • Items-per-thread tiling: the fast kernels process items_per_thread elements
+#     per thread, shrinking the per-(digit, block) histogram — and the exclusive
+#     scan over it — by the same factor.
 #   • Skip-pass via min/max keys: if min and max share the whole byte-suffix from byte k
 #     up, every element does too, so the whole pass is skipped (e.g. UInt32 in [0, 255]
 #     sorts in a single pass).
@@ -61,8 +64,10 @@ end
 # of its assigned buckets (bucket t, t+NI, t+2*NI, …).  Uses no shared-memory
 # atomics, so it is the portable fallback that runs on every backend.
 
+# The trailing Val is always Val(1) on this path; accepted only so the driver can
+# call every histogram/scatter kernel with one uniform signature.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist!(
-    hist, @Const(v), shift::UInt32, rev::Bool,
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val,
 )
     @uniform NI = Int(@groupsize()[1])
     s_digit = @localmem UInt32 (NI,)
@@ -92,12 +97,15 @@ end
 
 # ─── Phase 1b: histogram — shared-atomic (backends with shared-mem atomics) ──
 # Same per-block 256-bin output, but O(1)/element via a shared-memory atomic
-# increment instead of the O(256)/element per-bucket scan above.  Selected by
-# the driver only where the backend reports atomics support.
+# increment instead of the O(256)/element per-bucket scan above.  Each thread
+# processes ITEMS elements (block-strided, so global reads stay coalesced) and a
+# block covers block_size*ITEMS elements — shrinking the per-(digit, block)
+# histogram, and the exclusive scan over it, by ITEMS×.  Selected by the driver
+# only where the backend reports atomics support.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist_atomic!(
-    hist, @Const(v), shift::UInt32, rev::Bool,
-)
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS},
+) where ITEMS
     @uniform NI = Int(@groupsize()[1])
     s_hist = @localmem UInt32 (Int(_RS_SIZE),)
 
@@ -105,6 +113,7 @@ end
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v))
     num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    base = iblock * NI * ITEMS
 
     j = ithread
     while j < Int(_RS_SIZE)
@@ -113,10 +122,14 @@ end
     end
     @synchronize()
 
-    i = iblock * NI + ithread
-    if i < len
-        d = Int(_rs_digit(v[i + 1], shift, rev))
-        Atomix.@atomic s_hist[d + 1] += UInt32(1)
+    m = 0
+    while m < ITEMS
+        i = base + ithread + m * NI
+        if i < len
+            d = Int(_rs_digit(v[i + 1], shift, rev))
+            Atomix.@atomic s_hist[d + 1] += UInt32(1)
+        end
+        m += 1
     end
     @synchronize()
 
@@ -132,8 +145,10 @@ end
 # `hist` is already the exclusive-prefix-summed per-block offsets;
 # `hist[k * num_blocks + b]` = global start for bucket k, block b (1-indexed).
 
+# The trailing Val is always Val(1) on this path; accepted only so the driver can
+# call every histogram/scatter kernel with one uniform signature.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool,
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val,
 )
     @uniform N   = @groupsize()[1]
     @uniform NI  = Int(@groupsize()[1])
@@ -173,21 +188,25 @@ end
 
 
 # ─── Phase 3b: scatter — chunked stable rank (O(chunk) per thread) ───────────
-# The broadcast scatter's rank is O(block_size)/element.  Split the block into
+# The broadcast scatter's rank is O(block_size)/element.  Split the tile into
 # 32-wide chunks: per-chunk digit counts (built with shared-memory atomics —
 # order doesn't matter for counts) give each chunk's stable base via a cross-chunk
 # exclusive prefix, and each element only scans its own chunk (≤32) for the
 # intra-chunk part.  Rank = cross-chunk-base[digit] + intra-chunk same-digit
 # count — still fully stable, but O(32) instead of O(block_size).
+#
+# Each thread processes ITEMS tile positions (block-strided, coalesced loads);
+# the tile covers block_size*ITEMS elements and must match the histogram's
+# block coverage so the per-(digit, block) offsets line up.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter_chunked!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool,
-)
-    @uniform N   = @groupsize()[1]
-    @uniform NI  = Int(@groupsize()[1])
-    @uniform NCH = Int(@groupsize()[1]) ÷ _RS_CHUNK   # number of chunks
-    s_elem  = @localmem eltype(v_in) (N,)
-    s_digit = @localmem UInt32       (N,)
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS},
+) where ITEMS
+    @uniform NI   = Int(@groupsize()[1])
+    @uniform TILE = Int(@groupsize()[1]) * ITEMS
+    @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ _RS_CHUNK   # number of chunks
+    s_elem  = @localmem eltype(v_in) (TILE,)
+    s_digit = @localmem UInt32       (TILE,)
     s_gbase = @localmem UInt32       (256,)
     s_chist = @localmem UInt32       (256 * NCH,)      # per-chunk digit counts → bases
 
@@ -195,10 +214,23 @@ end
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v_in))
     num_blocks = Int(length(hist)) ÷ 256
+    base = iblock * TILE
 
-    i = iblock * NI + ithread
-    if i < len
-        s_elem[ithread + 1] = v_in[i + 1]
+    # Load the tile: keys + digits, in tile-position order (== input order, which
+    # the stable rank below relies on).  0xffffffff marks out-of-range positions;
+    # it matches no valid digit, so they count and scatter nothing.
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        i = base + p
+        if i < len
+            k = v_in[i + 1]
+            s_elem[p + 1]  = k
+            s_digit[p + 1] = _rs_digit(k, shift, rev)
+        else
+            s_digit[p + 1] = 0xffffffff
+        end
+        m += 1
     end
     j = ithread
     while j < 256
@@ -212,11 +244,14 @@ end
     end
     @synchronize()
 
-    mychunk  = ithread ÷ _RS_CHUNK
-    my_digit = UInt32(i < len ? _rs_digit(s_elem[ithread + 1], shift, rev) : 0)
-    s_digit[ithread + 1] = my_digit
-    if i < len
-        Atomix.@atomic s_chist[mychunk * 256 + Int(my_digit) + 1] += UInt32(1)
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        d = s_digit[p + 1]
+        if d != 0xffffffff
+            Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+        end
+        m += 1
     end
     @synchronize()
 
@@ -233,15 +268,23 @@ end
     end
     @synchronize()
 
-    if i < len
-        chunk_start = mychunk * _RS_CHUNK
-        cnt = UInt32(0)
-        for jj in chunk_start:(ithread - 1)
-            cnt += UInt32(s_digit[jj + 1] == my_digit)
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        d = s_digit[p + 1]
+        if d != 0xffffffff
+            chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+            cnt = UInt32(0)
+            q = chunk_start
+            while q < p
+                cnt += UInt32(s_digit[q + 1] == d)
+                q += 1
+            end
+            rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+            gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
+            v_out[gpos + 1] = s_elem[p + 1]
         end
-        rank = s_chist[mychunk * 256 + Int(my_digit) + 1] + cnt
-        gpos = Int(s_gbase[my_digit + 1]) + Int(rank)
-        v_out[gpos + 1] = s_elem[ithread + 1]
+        m += 1
     end
 end
 
@@ -293,6 +336,7 @@ function _radix_sort!(
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Forward,
     block_size::Int=256,
+    items_per_thread::Int=2,
     temp::Union{Nothing, AbstractArray}=nothing,
 ) where T
 
@@ -304,10 +348,21 @@ function _radix_sort!(
     n <= 1 && return v
 
     @argcheck ispow2(block_size) && block_size >= 1
+    @argcheck items_per_thread >= 1
 
     descending = (rev === true) || order === Base.Order.Reverse
 
-    num_blocks = cld(n, block_size)
+    # Processing several items per thread shrinks the per-(digit, block) histogram
+    # (and its exclusive scan) by the same factor.  Only the fast atomic kernels
+    # support it; the portable scan/broadcast fallbacks stay at one item per
+    # thread.  The default of 2 keeps the chunked scatter's shared memory within
+    # every backend's budget (Metal caps threadgroup memory at 32 KiB); discrete
+    # NVIDIA/AMD GPUs are measurably faster still at 4.
+    has_atomics = KernelAbstractions.supports_atomics(backend)
+    use_fast    = has_atomics && block_size % _RS_CHUNK == 0
+    items       = use_fast ? items_per_thread : 1
+
+    num_blocks = cld(n, block_size * items)
     n_passes   = sizeof(T) * 8 ÷ Int(_RS_BITS)   # 4 for 32-bit, 8 for 64-bit
 
     # Single histogram buffer; no need to zero before each pass — _radix_hist!
@@ -337,12 +392,13 @@ function _radix_sort!(
     # (per-chunk sub-histograms) both use shared-memory atomics; select them
     # where the backend reports atomics support and fall back to the portable
     # scan/broadcast kernels otherwise.  The chunked scatter additionally needs
-    # block_size to be a multiple of its 32-wide chunk.
-    has_atomics = KernelAbstractions.supports_atomics(backend)
+    # block_size to be a multiple of its 32-wide chunk.  Both fast kernels must
+    # agree on the tile size (block_size*items), so they share the same Val.
+    vitems = Val(items)
     hist_kern! = has_atomics ?
         _radix_hist_atomic!(backend, block_size) :
         _radix_hist!(backend, block_size)
-    scat_kern! = (has_atomics && block_size % _RS_CHUNK == 0) ?
+    scat_kern! = use_fast ?
         _radix_scatter_chunked!(backend, block_size) :
         _radix_scatter!(backend, block_size)
 
@@ -360,9 +416,9 @@ function _radix_sort!(
         shift32 = UInt32(shift)
         # The three kernels run in order on a single backend stream, so no host
         # synchronization is needed between them.
-        hist_kern!(hist, p1, shift32, descending; ndrange)
+        hist_kern!(hist, p1, shift32, descending, vitems; ndrange)
         accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
-        scat_kern!(p2, p1, hist, shift32, descending; ndrange)
+        scat_kern!(p2, p1, hist, shift32, descending, vitems; ndrange)
 
         p1, p2 = p2, p1
         n_actual += 1
