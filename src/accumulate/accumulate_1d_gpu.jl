@@ -109,14 +109,21 @@ end
 
     # For exclusive ScanPrefixes scans, the local exclusive output is already correct.
     # DecoupledLookback still shifts non-first blocks because _accumulate_previous!
-    # expects each block's last value to be globally inclusive.
-    if inclusive || (iblock != 0x0 && !isnothing(flags))
-        # To compute an inclusive scan, shift elements left...
-        @synchronize()
-        t1 = temp[ai + bank_offset_a + 0x1]
-        t2 = temp[bi + bank_offset_b + 0x1]
-        @synchronize()
+    # expects each block's last value to be globally inclusive.  The condition is
+    # uniform across the group, but it is a runtime value: the @synchronize() barriers
+    # of the shift must stay OUTSIDE the branch.  A barrier inside a conditional the
+    # compiler cannot prove uniform deadlocks POCL/SPIR-V (its work-item loop does not
+    # see the barrier reached on every path), so only the shared-memory writes are
+    # guarded while the barriers always execute.
+    do_shift = inclusive || (iblock != 0x0 && !isnothing(flags))
 
+    # To compute an inclusive scan, shift elements left...
+    @synchronize()
+    t1 = temp[ai + bank_offset_a + 0x1]
+    t2 = temp[bi + bank_offset_b + 0x1]
+    @synchronize()
+
+    if do_shift
         if ai > 0x0
             temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
         end
