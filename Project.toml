@@ -5,6 +5,7 @@ version = "0.4.3"
 
 [deps]
 ArgCheck = "dce04be8-c92d-5529-be00-80e4d2c0e197"
+Atomix = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Markdown = "d6f4376e-aef5-505a-96c1-9c027394607a"
@@ -18,6 +19,7 @@ AcceleratedKernelsoneAPIExt = "oneAPI"
 
 [compat]
 ArgCheck = "2"
+Atomix = "0.1, 1"
 GPUArraysCore = "0.2.0"
 KernelAbstractions = "0.9.34, 0.10"
 Markdown = "1"

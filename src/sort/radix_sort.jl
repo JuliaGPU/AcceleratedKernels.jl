@@ -1,24 +1,39 @@
 # LSD radix sort (8-bit, 256 buckets).  Stable, GPU-only.
 #
-# Algorithm per pass (P = 4 passes for 32-bit, 8 for 64-bit):
-#   1. _radix_hist!   — each block counts its contiguous chunk into
-#                       hist[digit * num_blocks + block]; all 256 threads run
-#                       in parallel, each owning one bucket and counting via a
-#                       broadcast-read loop over precomputed shared-mem digits.
-#   2. accumulate!    — exclusive prefix-sum over the flat hist array gives
-#                       scatter offsets:  hist[k*B+b] = # elements with
-#                       digit < k (all blocks) + # elements with digit k in
-#                       blocks 0..b-1
-#   3. _radix_scatter! — each thread stores its digit into shared mem; then
-#                        counts preceding same-digit entries via a broadcast
-#                        read loop (stable, no atomics); all threads scatter
-#                        in parallel using hist[k*B+b] + intra-block rank.
+# Backend-portable: no dependency on sub-group / warp intrinsics.  Where a
+# backend reports shared-memory atomics support, faster atomic-based histogram
+# and scatter kernels are used; otherwise a scan-based path runs anywhere.
+#
+# Algorithm (per non-trivial pass over byte k):
+#   1. histogram — count, per block, how many elements have each byte-digit.
+#                  Layout: hist[k * B + b] = count of digit k in block b; B = num_blocks.
+#                  Shared-atomic where supported (_radix_hist_atomic!), portable
+#                  per-bucket scan otherwise (_radix_hist!).
+#   2. accumulate! — exclusive prefix sum over hist → global per-(digit, block) offsets.
+#   3. scatter — stable scatter to the offsets.  Chunked O(32)-rank where shared-memory
+#                atomics are available (_radix_scatter_chunked!), O(block_size)-rank
+#                broadcast scan otherwise (_radix_scatter!).
+#
+# Key optimizations:
+#   • Fused min/max range (_rs_key_range): one reduction over the sort keys instead of
+#     separate minimum + maximum.
+#   • Items-per-thread tiling: the fast kernels process items_per_thread elements
+#     per thread, shrinking the per-(digit, block) histogram — and the exclusive
+#     scan over it — by the same factor.
+#   • Single-block fast path: arrays that fit one tile (2 * block_size elements)
+#     are sorted entirely in shared memory by one kernel launch.
+#   • Skip-pass via min/max keys: if min and max share the whole byte-suffix from byte k
+#     up, every element does too, so the whole pass is skipped (e.g. UInt32 in [0, 255]
+#     sorts in a single pass).
 #
 # Supported element types: UInt32/64, Int32/64, Float32/64.
-# For custom lt/by → falls back to merge_sort!.
+# Custom lt/by → falls back to merge_sort!.
 
-const _RS_BITS = UInt32(8)
-const _RS_SIZE = UInt32(256)   # 2^_RS_BITS
+import Atomix
+
+const _RS_BITS  = UInt32(8)
+const _RS_SIZE  = UInt32(256)   # 2^_RS_BITS
+const _RS_CHUNK = 32            # chunked-scatter chunk width (smaller = cheaper rank; 32 best measured)
 
 
 # ─── Make any supported scalar type sortable as an unsigned integer ───────────
@@ -44,61 +59,98 @@ end
     ((rev ? ~_to_sort_key(x) : _to_sort_key(x)) >> shift) & (_RS_SIZE - 0x1)
 
 
-# ─── Phase 1: block-level histogram (parallel, one thread per bucket) ─────────
-# Elements are staged in s_elem then each element's digit is precomputed once
-# into s_digit (avoids calling _to_sort_key repeatedly — for Float64 it involves
-# a 64-bit multiply).  Each thread then tallies only its own bucket by scanning
-# s_digit: all threads read the same s_digit[jj] each iteration → hardware
-# broadcast with zero bank conflicts, no atomics, one global write per thread.
+# ─── Phase 1: per-pass histogram — generic scan (all backends) ───────────────
+# hist[k * num_blocks + b] = count of elements with digit k in block b.
+#
+# Each thread loads its element's digit into s_digit, then scans s_digit for each
+# of its assigned buckets (bucket t, t+NI, t+2*NI, …).  Uses no shared-memory
+# atomics, so it is the portable fallback that runs on every backend.
 
+# The trailing Val is always Val(1) on this path; accepted only so the driver can
+# call every histogram/scatter kernel with one uniform signature.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist!(
-    hist, @Const(v), shift::UInt32, rev::Bool,
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val,
 )
-    @uniform N  = @groupsize()[1]
     @uniform NI = Int(@groupsize()[1])
-    s_elem  = @localmem eltype(v) (N,)
-    s_digit = @localmem UInt32   (N,)
+    s_digit = @localmem UInt32 (NI,)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v))
-    num_blocks = Int(length(hist)) ÷ 256
+    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
 
+    # 0xffffffff doesn't match any valid bucket (0–255); OOB elements are neutral.
     i = iblock * NI + ithread
-    if i < len
-        s_elem[ithread + 1] = v[i + 1]
-    end
+    s_digit[ithread + 1] = UInt32(i < len ? _rs_digit(v[i + 1], shift, rev) : 0xffffffff)
     @synchronize()
 
-    block_len = min(NI, len - iblock * NI)
-    if ithread < block_len
-        s_digit[ithread + 1] = _rs_digit(s_elem[ithread + 1], shift, rev)
-    end
-    @synchronize()
-
-    j = ithread
-    while j < 256
-        my_bucket = UInt32(j)
-        count = UInt32(0)
-        for jj in 1:block_len
-            count += UInt32(s_digit[jj] == my_bucket)
+    # Thread t handles buckets t, t+NI, t+2*NI, … (covers all 256 when NI ≤ 256).
+    bucket = ithread
+    while bucket < Int(_RS_SIZE)
+        cnt = UInt32(0)
+        for jj in 1:NI
+            cnt += UInt32(s_digit[jj] == UInt32(bucket))
         end
-        hist[j * num_blocks + iblock + 1] = count
-        j += NI
+        hist[bucket * num_blocks + iblock + 1] = cnt
+        bucket += NI
     end
 end
 
 
-# ─── Phase 3: stable scatter (parallel rank via broadcast read) ───────────────
-# Each thread stores its digit in s_digit and reads all 256 block offsets from
-# the prefix-summed hist into s_gbase — both before the single @synchronize.
-# After the barrier each thread counts preceding elements with the same digit via
-# a broadcast-read loop (all threads read the same s_digit[jj] each iteration →
-# hardware broadcast, zero bank conflicts).  Scatter is then one shared-mem read
-# (s_gbase) plus one global write (v_out).
+# ─── Phase 1b: histogram — shared-atomic (backends with shared-mem atomics) ──
+# Same per-block 256-bin output, but O(1)/element via a shared-memory atomic
+# increment instead of the O(256)/element per-bucket scan above.  Each thread
+# processes ITEMS elements (block-strided, so global reads stay coalesced) and a
+# block covers block_size*ITEMS elements — shrinking the per-(digit, block)
+# histogram, and the exclusive scan over it, by ITEMS×.  Selected by the driver
+# only where the backend reports atomics support.
 
+@kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist_atomic!(
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS},
+) where ITEMS
+    @uniform NI = Int(@groupsize()[1])
+    s_hist = @localmem UInt32 (Int(_RS_SIZE),)
+
+    iblock  = Int(@index(Group, Linear)) - 1
+    ithread = Int(@index(Local, Linear)) - 1
+    len        = Int(length(v))
+    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    base = iblock * NI * ITEMS
+
+    j = ithread
+    while j < Int(_RS_SIZE)
+        s_hist[j + 1] = UInt32(0)
+        j += NI
+    end
+    @synchronize()
+
+    m = 0
+    while m < ITEMS
+        i = base + ithread + m * NI
+        if i < len
+            d = Int(_rs_digit(v[i + 1], shift, rev))
+            Atomix.@atomic s_hist[d + 1] += UInt32(1)
+        end
+        m += 1
+    end
+    @synchronize()
+
+    bucket = ithread
+    while bucket < Int(_RS_SIZE)
+        hist[bucket * num_blocks + iblock + 1] = s_hist[bucket + 1]
+        bucket += NI
+    end
+end
+
+
+# ─── Phase 3: scatter — broadcast-read rank (O(N) per thread) ───────────────
+# `hist` is already the exclusive-prefix-summed per-block offsets;
+# `hist[k * num_blocks + b]` = global start for bucket k, block b (1-indexed).
+
+# The trailing Val is always Val(1) on this path; accepted only so the driver can
+# call every histogram/scatter kernel with one uniform signature.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool,
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val,
 )
     @uniform N   = @groupsize()[1]
     @uniform NI  = Int(@groupsize()[1])
@@ -111,8 +163,6 @@ end
     len        = Int(length(v_in))
     num_blocks = Int(length(hist)) ÷ 256
 
-    # Coissue the v_in load and the strided hist reads; both hit global memory
-    # simultaneously while the GPU pipelines them.
     i = iblock * NI + ithread
     if i < len
         s_elem[ithread + 1] = v_in[i + 1]
@@ -139,6 +189,242 @@ end
 end
 
 
+# ─── Phase 3b: scatter — chunked stable rank (O(chunk) per thread) ───────────
+# The broadcast scatter's rank is O(block_size)/element.  Split the tile into
+# 32-wide chunks: per-chunk digit counts (built with shared-memory atomics —
+# order doesn't matter for counts) give each chunk's stable base via a cross-chunk
+# exclusive prefix, and each element only scans its own chunk (≤32) for the
+# intra-chunk part.  Rank = cross-chunk-base[digit] + intra-chunk same-digit
+# count — still fully stable, but O(32) instead of O(block_size).
+#
+# Each thread processes ITEMS tile positions (block-strided, coalesced loads);
+# the tile covers block_size*ITEMS elements and must match the histogram's
+# block coverage so the per-(digit, block) offsets line up.
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter_chunked!(
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS},
+) where ITEMS
+    @uniform NI   = Int(@groupsize()[1])
+    @uniform TILE = Int(@groupsize()[1]) * ITEMS
+    @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ _RS_CHUNK   # number of chunks
+    s_elem  = @localmem eltype(v_in) (TILE,)
+    s_digit = @localmem UInt32       (TILE,)
+    s_gbase = @localmem UInt32       (256,)
+    s_chist = @localmem UInt32       (256 * NCH,)      # per-chunk digit counts → bases
+
+    iblock  = Int(@index(Group, Linear)) - 1
+    ithread = Int(@index(Local, Linear)) - 1
+    len        = Int(length(v_in))
+    num_blocks = Int(length(hist)) ÷ 256
+    base = iblock * TILE
+
+    # Load the tile: keys + digits, in tile-position order (== input order, which
+    # the stable rank below relies on).  0xffffffff marks out-of-range positions;
+    # it matches no valid digit, so they count and scatter nothing.
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        i = base + p
+        if i < len
+            k = v_in[i + 1]
+            s_elem[p + 1]  = k
+            s_digit[p + 1] = _rs_digit(k, shift, rev)
+        else
+            s_digit[p + 1] = 0xffffffff
+        end
+        m += 1
+    end
+    j = ithread
+    while j < 256
+        s_gbase[j + 1] = hist[j * num_blocks + iblock + 1]
+        j += NI
+    end
+    j = ithread
+    while j < 256 * NCH
+        s_chist[j + 1] = UInt32(0)
+        j += NI
+    end
+    @synchronize()
+
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        d = s_digit[p + 1]
+        if d != 0xffffffff
+            Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+        end
+        m += 1
+    end
+    @synchronize()
+
+    # cross-chunk exclusive prefix per digit (thread d owns digit d, d+NI, …)
+    d = ithread
+    while d < 256
+        acc = UInt32(0)
+        for c in 0:NCH-1
+            cnt = s_chist[c * 256 + d + 1]
+            s_chist[c * 256 + d + 1] = acc
+            acc += cnt
+        end
+        d += NI
+    end
+    @synchronize()
+
+    m = 0
+    while m < ITEMS
+        p = ithread + m * NI
+        d = s_digit[p + 1]
+        if d != 0xffffffff
+            chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+            cnt = UInt32(0)
+            q = chunk_start
+            while q < p
+                cnt += UInt32(s_digit[q + 1] == d)
+                q += 1
+            end
+            rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+            gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
+            v_out[gpos + 1] = s_elem[p + 1]
+        end
+        m += 1
+    end
+end
+
+
+
+# ─── Whole-array single-block sort (small arrays) ────────────────────────────
+# For arrays that fit in one tile (2 * block_size elements) the entire multi-pass
+# sort runs inside a single work-group: keys ping-pong between two shared-memory
+# buffers, with the same chunked stable rank as the scatter above, and global
+# memory is touched exactly twice (load + store).  One kernel launch replaces the
+# hist/scan/scatter pipeline's 3 launches per pass, which dominate at this size.
+#
+# The pass loop has a compile-time trip count (NPASS from the element type) and
+# the source/destination buffers are chosen with a data select, never a branch,
+# so every @synchronize below executes unconditionally on all backends.
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _radix_sort_block!(
+    v, rev::Bool, ::Val{NPASS},
+) where NPASS
+    @uniform NI   = Int(@groupsize()[1])
+    @uniform TILE = Int(@groupsize()[1]) * 2
+    @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ _RS_CHUNK
+    s_a     = @localmem eltype(v) (TILE,)
+    s_b     = @localmem eltype(v) (TILE,)
+    s_digit = @localmem UInt32    (TILE,)
+    s_chist = @localmem UInt32    (256 * NCH,)
+    s_loff  = @localmem UInt32    (256,)       # per-digit start offsets in the tile
+
+    it = Int(@index(Local, Linear)) - 1
+    n  = Int(length(v))
+
+    m = 0
+    while m < 2
+        p = it + m * NI
+        if p < n
+            s_a[p + 1] = v[p + 1]
+        end
+        m += 1
+    end
+    @synchronize()
+
+    pass = 0
+    while pass < NPASS
+        sh = UInt32(pass) * _RS_BITS
+        # Uniform data select between the ping-pong buffers; keeps the barriers
+        # below outside any conditional.
+        src = iseven(pass) ? s_a : s_b
+        dst = iseven(pass) ? s_b : s_a
+
+        j = it
+        while j < 256 * NCH
+            s_chist[j + 1] = UInt32(0)
+            j += NI
+        end
+        j = it
+        while j < 256
+            s_loff[j + 1] = UInt32(0)
+            j += NI
+        end
+        @synchronize()
+
+        m = 0
+        while m < 2
+            p = it + m * NI
+            if p < n
+                d = _rs_digit(src[p + 1], sh, rev)
+                s_digit[p + 1] = d
+                Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+            end
+            m += 1
+        end
+        @synchronize()
+
+        # cross-chunk exclusive prefix per digit; digit totals land in s_loff
+        d = it
+        while d < 256
+            acc = UInt32(0)
+            c = 0
+            while c < NCH
+                cnt = s_chist[c * 256 + d + 1]
+                s_chist[c * 256 + d + 1] = acc
+                acc += cnt
+                c += 1
+            end
+            s_loff[d + 1] = acc
+            d += NI
+        end
+        @synchronize()
+
+        # exclusive scan of the 256 digit totals (serial by thread 0: 256 adds,
+        # negligible next to the tile's rank work)
+        if it == 0
+            run = UInt32(0)
+            dd = 0
+            while dd < 256
+                t = s_loff[dd + 1]
+                s_loff[dd + 1] = run
+                run += t
+                dd += 1
+            end
+        end
+        @synchronize()
+
+        # stable rank (cross-chunk base + intra-chunk same-digit count) -> place
+        m = 0
+        while m < 2
+            p = it + m * NI
+            if p < n
+                d = s_digit[p + 1]
+                chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+                cnt = UInt32(0)
+                q = chunk_start
+                while q < p
+                    cnt += UInt32(s_digit[q + 1] == d)
+                    q += 1
+                end
+                rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+                dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
+            end
+            m += 1
+        end
+        @synchronize()
+
+        pass += 1
+    end
+
+    res = iseven(NPASS) ? s_a : s_b
+    m = 0
+    while m < 2
+        p = it + m * NI
+        if p < n
+            v[p + 1] = res[p + 1]
+        end
+        m += 1
+    end
+end
+
+
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 _rs_supported(::Type{T}) where T =
@@ -146,22 +432,38 @@ _rs_supported(::Type{T}) where T =
     T === UInt64 || T === Int64 || T === Float64
 
 
-"""
-    _radix_sort!(
-        v::AbstractArray, backend::Backend=get_backend(v);
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
+# Return (min_sort_key, max_sort_key) as UInt64, accounting for descending order.
+# Used to detect passes where all elements share the same byte-digit (trivial pass).
+#
+# Single fused reduction: map each element to its (order-preserving) unsigned sort
+# key and reduce to (min_key, max_key) in one pass, instead of two separate full
+# reductions over the array (minimum + maximum).  ~halves the range-finding cost.
+function _rs_key_range(v::AbstractArray{T}, descending::Bool) where T
+    K = typeof(_to_sort_key(zero(T)))   # UInt32 for 32-bit types, UInt64 for 64-bit
+    ident = (typemax(K), typemin(K))   # identity for (min, max) over keys
+    min_k, max_k = mapreduce(
+        x -> (k = _to_sort_key(x); (k, k)),
+        (a, b) -> (min(a[1], b[1]), max(a[2], b[2])),
+        v;
+        init=ident,
+        neutral=ident,
     )
+    if descending
+        # rev=true flips all bits: digit = (~key >> shift) & 0xFF
+        # Maximum value → minimum key after negation; swap accordingly.
+        UInt64(~max_k), UInt64(~min_k)
+    else
+        UInt64(min_k), UInt64(max_k)
+    end
+end
 
-Sort `v` in-place using a GPU LSD radix sort (8-bit, 256 buckets per pass).
 
-Supported element types: `UInt32`, `Int32`, `Float32`, `UInt64`, `Int64`, `Float64`.
-Falls back to [`merge_sort!`](@ref) for any other type or when `lt`/`by` are provided.
+"""
+    _radix_sort!(v, backend; lt, by, rev, order, block_size, temp)
 
-The temporary buffer `temp` (same type and size as `v`) can be passed to avoid
-allocating internally.  `block_size` must be a power of 2.
+In-place GPU LSD radix sort (8-bit, 256 buckets per pass).  Supported types:
+`UInt32`, `Int32`, `Float32`, `UInt64`, `Int64`, `Float64`.  Falls back to
+[`merge_sort!`](@ref) for any other type or when `lt`/`by` are non-default.
 """
 function _radix_sort!(
     v::AbstractArray{T}, backend::Backend=get_backend(v);
@@ -170,10 +472,10 @@ function _radix_sort!(
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Forward,
     block_size::Int=256,
+    items_per_thread::Int=2,
     temp::Union{Nothing, AbstractArray}=nothing,
 ) where T
 
-    # Fall back for unsupported types or custom comparators
     if !_rs_supported(T) || lt !== isless || by !== identity
         return merge_sort!(v, backend; lt, by, rev, order, block_size, temp)
     end
@@ -182,12 +484,46 @@ function _radix_sort!(
     n <= 1 && return v
 
     @argcheck ispow2(block_size) && block_size >= 1
+    @argcheck items_per_thread >= 1
 
     descending = (rev === true) || order === Base.Order.Reverse
 
-    num_blocks = cld(n, block_size)
-    # hist[k * num_blocks + b] = count of elements with digit k in block b
+    # Processing several items per thread shrinks the per-(digit, block) histogram
+    # (and its exclusive scan) by the same factor.  Only the fast atomic kernels
+    # support it; the portable scan/broadcast fallbacks stay at one item per
+    # thread.  The default of 2 keeps the chunked scatter's shared memory within
+    # every backend's budget (Metal caps threadgroup memory at 32 KiB); discrete
+    # NVIDIA/AMD GPUs are measurably faster still at 4.
+    has_atomics = KernelAbstractions.supports_atomics(backend)
+    use_fast    = has_atomics && block_size % _RS_CHUNK == 0
+    items       = use_fast ? items_per_thread : 1
+
+    n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)   # 4 for 32-bit, 8 for 64-bit
+
+    # Whole-array single-block fast path: the full sort runs in shared memory in
+    # one launch, skipping the hist/scan/scatter pipeline and its allocations.
+    # The kernel's shared footprint scales with the tile, so it is only taken up
+    # to block_size 256 (worst case, 64-bit keys at tile 512: ~27 KiB), which
+    # fits every backend's budget — Metal caps threadgroup memory at 32 KiB and
+    # CUDA static shared memory at 48 KiB; block_size 512 with 64-bit keys would
+    # need ~53 KiB and fail to launch.
+    if use_fast && block_size <= 256 && n <= 2 * block_size
+        _radix_sort_block!(backend, block_size)(
+            v, descending, Val(n_passes); ndrange=block_size)
+        KernelAbstractions.synchronize(backend)
+        return v
+    end
+
+    num_blocks = cld(n, block_size * items)
+
+    # Single histogram buffer; no need to zero before each pass — _radix_hist!
+    # zero-initializes its own shared-memory histogram and writes directly here.
     hist = similar(v, UInt32, Int(_RS_SIZE) * num_blocks)
+
+    # Reusable scratch for accumulate!'s per-block prefixes (ScanPrefixes uses a
+    # 256-thread, 2-elems-per-thread grid → 512 elements per block), so the
+    # exclusive prefix sum does not re-allocate on every pass.
+    acc_temp = similar(v, UInt32, cld(length(hist), 512))
 
     p1 = v
     p2 = if !isnothing(temp)
@@ -197,32 +533,55 @@ function _radix_sort!(
         similar(v)
     end
 
-    n_passes   = sizeof(T) * 8 ÷ Int(_RS_BITS)   # 4 for 32-bit, 8 for 64-bit
-    hist_kern! = _radix_hist!(backend, block_size)
-    scat_kern! = _radix_scatter!(backend, block_size)
-    ndrange    = (block_size * num_blocks,)
+    ndrange = (block_size * num_blocks,)
+
+    # Compute (min, max) sort-key to detect passes where all elements share the
+    # same digit → skip the full hist+scan+scatter for that byte position.
+    min_key, max_key = _rs_key_range(p1, descending)
+
+    # The fast histogram (O(1)/element atomic counting) and the chunked scatter
+    # (per-chunk sub-histograms) both use shared-memory atomics; select them
+    # where the backend reports atomics support and fall back to the portable
+    # scan/broadcast kernels otherwise.  The chunked scatter additionally needs
+    # block_size to be a multiple of its 32-wide chunk.  Both fast kernels must
+    # agree on the tile size (block_size*items), so they share the same Val.
+    vitems = Val(items)
+    hist_kern! = has_atomics ?
+        _radix_hist_atomic!(backend, block_size) :
+        _radix_hist!(backend, block_size)
+    scat_kern! = use_fast ?
+        _radix_scatter_chunked!(backend, block_size) :
+        _radix_scatter!(backend, block_size)
+
+    n_actual = 0
 
     for pass in 0:n_passes - 1
-        shift = UInt32(pass) * _RS_BITS
+        shift = UInt64(pass) * UInt64(_RS_BITS)
 
-        fill!(hist, 0x0)
-        hist_kern!(hist, p1, shift, descending; ndrange)
-        KernelAbstractions.synchronize(backend)
+        # Trivial pass: all elements share the same byte k AND all higher bytes
+        # are also identical (so no element can have a different byte k).
+        # Sufficient condition: (min_key >> shift) == (max_key >> shift).
+        # Checking just the single byte is WRONG when higher bytes differ.
+        (min_key >> shift) == (max_key >> shift) && continue
 
-        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false)
-        KernelAbstractions.synchronize(backend)
-
-        scat_kern!(p2, p1, hist, shift, descending; ndrange)
-        KernelAbstractions.synchronize(backend)
+        shift32 = UInt32(shift)
+        # The three kernels run in order on a single backend stream, so no host
+        # synchronization is needed between them.
+        hist_kern!(hist, p1, shift32, descending, vitems; ndrange)
+        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
+        scat_kern!(p2, p1, hist, shift32, descending, vitems; ndrange)
 
         p1, p2 = p2, p1
+        n_actual += 1
     end
 
-    # After an even number of passes p1 === v (result already in v).
-    # After an odd number, p1 is the temp buffer; copy back.
-    if isodd(n_passes)
+    # p1 holds the result; copy back only if it's in the temp buffer.
+    if isodd(n_actual)
         copyto!(v, p1)
     end
+
+    # Block once so the sort is complete on return; the passes only enqueue work.
+    KernelAbstractions.synchronize(backend)
 
     v
 end
