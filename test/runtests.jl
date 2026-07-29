@@ -9,6 +9,10 @@ const init_code = quote
     using KernelAbstractions
     using Test
     using Random
+
+    # Multi-block scan (accumulate!, RadixSort) works everywhere except POCL under
+    # --check-bounds=auto; the opencl setup overrides this to false.
+    global TEST_SCAN = true
 end
 
 # Discover root-level tests (aqua.jl, partition.jl) and generic tests
@@ -102,6 +106,7 @@ if args.custom["opencl"] !== nothing
         global BACKEND = OpenCLBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
+        global TEST_SCAN = false        # POCL scan is broken under --check-bounds=auto
         $_array_from_host_code
     end)
 end
@@ -134,6 +139,11 @@ for (backend_name, setup_code) in backends
             $test_body
         end
     end
+end
+
+# accumulate is scan-only, which POCL miscompiles under --check-bounds=auto; skip it on opencl.
+if args.custom["opencl"] !== nothing
+    delete!(testsuite, "opencl/accumulate")
 end
 
 # Filter tests by user-specified positional args; remove bare generic/ entries if no filter was specified
