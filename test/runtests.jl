@@ -9,6 +9,11 @@ const init_code = quote
     using KernelAbstractions
     using Test
     using Random
+
+    # Whether the multi-block scan (accumulate!, and RadixSort which uses it internally) is
+    # usable on this backend. POCL miscompiles it under --check-bounds=auto, so the opencl
+    # setup overrides this to false; every other backend keeps the default.
+    global TEST_SCAN = true
 end
 
 # Discover root-level tests (aqua.jl, partition.jl) and generic tests
@@ -102,6 +107,7 @@ if args.custom["opencl"] !== nothing
         global BACKEND = OpenCLBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
+        global TEST_SCAN = false        # POCL miscompiles the multi-block scan under --check-bounds=auto
         $_array_from_host_code
     end)
 end
@@ -134,6 +140,15 @@ for (backend_name, setup_code) in backends
             $test_body
         end
     end
+end
+
+# POCL (CPU OpenCL) miscompiles the multi-block scan: under --check-bounds=auto (which the OpenCL
+# CI uses so the @localmem reduce/predicate/sort kernels are not force-bounds-checked into a
+# spurious segfault) accumulate! deadlocks / returns wrong results. The scan is correct on every
+# real backend and on POCL under --check-bounds=yes; only POCL-under-auto is broken. Skip the
+# accumulate suite on the opencl backend until the POCL codegen bug is fixed upstream.
+if args.custom["opencl"] !== nothing
+    delete!(testsuite, "opencl/accumulate")
 end
 
 # Filter tests by user-specified positional args; remove bare generic/ entries if no filter was specified

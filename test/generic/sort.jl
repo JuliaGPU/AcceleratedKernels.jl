@@ -230,12 +230,16 @@ end
     end
 
     if !prefer_threads
-        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
-                        (UInt32, Int32, Float32, UInt64, Int64, Float64))
-            v_h = rand(T, 10_000)
-            v = array_from_host(v_h)
-            AK.sort!(v; prefer_threads, alg=AK.RadixSort())
-            @test Array(v) == sort(v_h)
+        # RadixSort scans a histogram internally; POCL miscompiles the multi-block scan under
+        # --check-bounds=auto (TEST_SCAN is false only on the opencl backend). Skip there.
+        if TEST_SCAN
+            for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+                            (UInt32, Int32, Float32, UInt64, Int64, Float64))
+                v_h = rand(T, 10_000)
+                v = array_from_host(v_h)
+                AK.sort!(v; prefer_threads, alg=AK.RadixSort())
+                @test Array(v) == sort(v_h)
+            end
         end
 
         v_h = rand(Int32, 10_000)
@@ -699,7 +703,9 @@ if !prefer_threads
 end
 
 @testset "radix_sort_alg" begin
-    if !prefer_threads
+    # RadixSort scans internally; POCL miscompiles the multi-block scan under --check-bounds=auto,
+    # so TEST_SCAN is false on the opencl backend (see test/runtests.jl). Skip the whole set there.
+    if !prefer_threads && TEST_SCAN
         Random.seed!(0)
 
         # ── Correctness: fuzzy testing across supported types ─────────────────

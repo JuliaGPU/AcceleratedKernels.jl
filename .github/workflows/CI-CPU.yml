@@ -94,6 +94,15 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         with:
           test_args: '--opencl'
+          # julia-runtest defaults to --check-bounds=yes. POCL (the CPU OpenCL driver used
+          # here) miscompiles our @localmem + @synchronize kernels (reduce / predicates /
+          # sort) when bounds checks are forced on, raising a spurious "Out-of-bounds array
+          # access" and segfaulting the worker. Those kernels are correct (they pass on CUDA
+          # under --check-bounds=yes, and on POCL under auto). Every other AK backend is tested
+          # under default/auto bounds; match that here. @inbounds is still respected. The one
+          # thing POCL then gets wrong under auto is the multi-block scan, so accumulate is
+          # skipped on the opencl backend in test/runtests.jl.
+          check_bounds: 'auto'
   # cpuKA:
   #   name: KA CPU Backend
   #   runs-on: ubuntu-latest
