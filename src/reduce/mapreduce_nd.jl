@@ -227,6 +227,18 @@ function mapreduce_nd(
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
+
+    # A stride-1 by_block reduction over a 4- or 8-byte primitive whose rows all start
+    # 16-byte aligned can use a single 128-bit vector load per W = 16÷sizeof(T) elements
+    # (see _mapreduce_nd_by_block_contiguous!). Rows start at base_offset + Σ coordᵈ·strideᵈ,
+    # so 16-byte alignment holds for every output iff base_offset and all outer strides are
+    # multiples of W elements. Otherwise fall through to the scalar by_block kernel.
+    Telt = eltype(buffer)
+    vec_width = isprimitivetype(Telt) && (sizeof(Telt) == 4 || sizeof(Telt) == 8) ?
+                16 ÷ sizeof(Telt) : 0
+    vectorize_contiguous =
+        use_by_block && reduce_strides == (1,) && vec_width != 0 &&
+        base_offset % vec_width == 0 && Base.all(s -> s % vec_width == 0, outer_strides)
     use_tiled_strided =
         dst_size == reduce_size && reduce_size >= block_size &&
         length(outer_sizes) == 1 && outer_strides == (1,) &&
@@ -264,13 +276,23 @@ function mapreduce_nd(
         # grid-strides across remaining outputs if fewer blocks than outputs were
         # launched.
         launch_blocks = min(dst_size, TARGET_BLOCKS)
-        kernel! = _mapreduce_nd_by_block!(backend, block_size)
-        kernel!(
-            buffer, dst, f, op, init, neutral,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, launch_blocks,
-            ndrange=(block_size * launch_blocks,),
-        )
+        if vectorize_contiguous
+            kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
+            kernel!(
+                buffer, dst, f, op, init, neutral,
+                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                dst_size, reduce_size, launch_blocks, Val(vec_width),
+                ndrange=(block_size * launch_blocks,),
+            )
+        else
+            kernel! = _mapreduce_nd_by_block!(backend, block_size)
+            kernel!(
+                buffer, dst, f, op, init, neutral,
+                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+                dst_size, reduce_size, launch_blocks,
+                ndrange=(block_size * launch_blocks,),
+            )
+        end
     elseif dst_size == 1 || dst_size < GS_DST_CUTOFF
         # Very few outputs, large reduction: split each output's reduction across
         # `reduce_groups` blocks (multigroup), combine partials in a second pass.
@@ -631,6 +653,78 @@ end
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
             acc = op(acc, f(src[input_base + off + 0x1]))
             j  += N
+        end
+
+        sdata[ithread + 0x1] = acc
+        @synchronize()
+
+        @inline reduce_group!(@context, op, sdata, N, ithread)
+
+        if ithread == 0x0
+            dst[iout + 0x1] = op(init, sdata[0x1])
+        end
+
+        next_iout = iout + num_blocks
+        next_iout >= output_size && break
+
+        @synchronize()
+        iout = next_iout
+    end
+end
+
+# Fold f over the W lanes of a SIMD vector into acc, unrolled at compile time (W is a type
+# parameter of Vec, so the ntuple/foldl is fully specialised — no runtime loop).
+@inline _acc_lanes(f, op, acc, v::Vec{W}) where {W} =
+    foldl(op, ntuple(k -> f(@inbounds v[k]), Val(W)); init = acc)
+
+# _unval turns the Val{W} kernel argument back into a compile-time width (KA @kernel cannot
+# bind a bare ::Val{W} type parameter, so W is passed as a value argument instead).
+@inline _unval(::Val{V}) where {V} = V
+
+# GPU kernel: by_block for a stride-1 (contiguous) reduction, vectorised. Identical to
+# _mapreduce_nd_by_block! except each thread pulls W = 16÷sizeof(T) contiguous source
+# elements per step through a single 128-bit aligned load (SIMD.vloada -> <W x T>, lowered
+# to ld.global.v4/v2 on CUDA and global_load_dwordx4 on AMDGPU); W is 4 for 4-byte types
+# and 2 for 8-byte. Threads own disjoint [W·t + m·W·N, +W) chunks so the access stays
+# warp-coalesced; the scalar tail mops up each thread's own < W leftover elements. `src`
+# is NOT @Const: vloada needs the raw global pointer, while @Const routes indexing through
+# read-only-cache (ldg) intrinsics. The host dispatches here only when the reduction is
+# stride-1, T is a 4- or 8-byte primitive, and every row starts 16-byte aligned (base_offset
+# and all outer strides multiples of W), so vloada's alignment is safe.
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block_contiguous!(
+    src, dst,
+    f, op, init, neutral,
+    base_offset,
+    outer_strides, outer_sizes,
+    reduce_strides, reduce_sizes,      # unused: stride-1 assumed (off == j), kept for a drop-in call
+    output_size, reduce_size, num_blocks,
+    valW,                              # Val{W}: SIMD width (4 for 4-byte T, 2 for 8-byte T)
+)
+    @uniform N = @groupsize()[1]
+    @uniform T = eltype(src)
+    @uniform W = _unval(valW)
+    sdata = @localmem eltype(dst) (N,)
+
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+    iout = iblock
+    while true
+        input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
+
+        acc     = neutral
+        rs      = UInt32(reduce_size)
+        jw      = UInt32(ithread) * UInt32(W)
+        stridew = UInt32(N) * UInt32(W)
+        # each thread pulls W contiguous elements through one 128-bit aligned vector load
+        while jw + UInt32(W - 1) < rs
+            v = vloada(Vec{W, T}, pointer(src, input_base + jw + 0x1))
+            acc = _acc_lanes(f, op, acc, v)
+            jw += stridew
+        end
+        # scalar tail: this thread's own < W leftover elements
+        while jw < rs
+            acc = op(acc, f(src[input_base + jw + 0x1]))
+            jw += UInt32(1)
         end
 
         sdata[ithread + 0x1] = acc
