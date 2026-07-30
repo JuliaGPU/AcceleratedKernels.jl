@@ -15,7 +15,7 @@
 #                        in parallel using hist[k*B+b] + intra-block rank.
 #
 # Supported element types: UInt32/64, Int32/64, Float32/64.
-# For custom lt/by → falls back to merge_sort!.
+# Custom lt/by are not supported
 
 const _RS_BITS = UInt32(8)
 const _RS_SIZE = UInt32(256)   # 2^_RS_BITS
@@ -158,26 +158,17 @@ _rs_supported(::Type{T}) where T =
 Sort `v` in-place using a GPU LSD radix sort (8-bit, 256 buckets per pass).
 
 Supported element types: `UInt32`, `Int32`, `Float32`, `UInt64`, `Int64`, `Float64`.
-Falls back to [`merge_sort!`](@ref) for any other type or when `lt`/`by` are provided.
 
 The temporary buffer `temp` (same type and size as `v`) can be passed to avoid
 allocating internally.  `block_size` must be a power of 2.
 """
 function _radix_sort!(
     v::AbstractArray{T}, backend::Backend=get_backend(v);
-    lt=isless,
-    by=identity,
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Forward,
     block_size::Int=256,
     temp::Union{Nothing, AbstractArray}=nothing,
 ) where T
-
-    # Fall back for unsupported types or custom comparators
-    if !_rs_supported(T) || lt !== isless || by !== identity
-        return merge_sort!(v, backend; lt, by, rev, order, block_size, temp)
-    end
-
     n = length(v)
     n <= 1 && return v
 
