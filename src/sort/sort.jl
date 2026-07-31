@@ -22,7 +22,9 @@ end
 """
     RadixSort()
 
-Use GPU radix sort for `sort!` and `sort`. This algorithm does not support `sortperm!`.
+Use GPU radix sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
+`Int64`, `Float64` with default `lt=isless`, `by=identity`. This algorithm does not support
+`sortperm!`.
 """
 struct RadixSort <: SortAlgorithm end
 
@@ -83,8 +85,7 @@ is used.
 By default, `sort!` uses [`sample_sort!`](@ref) on CPU backends and [`merge_sort!`](@ref) on GPU
 backends. Pass `alg=SampleSort()` for the CPU path, `alg=MergeSort()` for the GPU merge-sort path,
 or `alg=RadixSort()` to opt into GPU radix sorting. `RadixSort()` supports 32-bit and 64-bit
-integers and floats; unsupported element types or custom `lt`/`by` settings fall back to
-[`merge_sort!`](@ref).
+integers and floats with default `lt`/`by`.
 
 For both CPU and GPU backends, the `temp` argument can be used to reuse a temporary buffer of the
 same size as `v` to store the sorted output.
@@ -147,9 +148,11 @@ function _sort_impl!(
                 temp,
             )
         elseif alg isa RadixSort
+            _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
+            (lt === isless && by === identity) || throw(ArgumentError("RadixSort only supports `lt=isless` and `by=identity`"))
             _radix_sort!(
                 v, backend;
-                lt, by, rev, order,
+                rev, order,
                 block_size,
                 temp,
             )

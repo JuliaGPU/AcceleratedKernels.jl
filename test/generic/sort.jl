@@ -775,6 +775,20 @@ end
         v   = array_from_host(v_h)
         AK.sort!(v; prefer_threads, alg=AK.RadixSort(), block_size=128)
         @test Array(v) == sort(v_h)
+
+        # ── Rejected: custom by/lt, unsupported element type ────────────────────
+        n   = 10
+        v_h = rand(Int32, n)
+        v   = array_from_host(v_h)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort(), by=abs)
+
+        v_h = rand(Int32, n)
+        v   = array_from_host(v_h)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort(), lt=(>))
+
+        v_h = rand(Int16, n)
+        v   = array_from_host(v_h)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort())
     end
 end
 end
