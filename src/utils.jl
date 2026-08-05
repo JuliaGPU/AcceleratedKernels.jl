@@ -8,6 +8,11 @@ const CPU_BACKEND = get_backend([])
     return backend != CPU_BACKEND || !prefer_threads
 end
 
+# Items each thread processes in block-strided (coalesced) loads. >1 amortises launch/indexing
+# overhead on discrete GPUs; the default 1 keeps today's behavior. Backends opt into more by
+# overriding this in an extension (like the oneAPI ext), e.g. `_default_items_per_thread(::CUDABackend)=4`.
+@inline _default_items_per_thread(backend) = 1
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()
