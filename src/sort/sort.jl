@@ -57,7 +57,7 @@ struct SampleSort <: SortAlgorithm end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -78,8 +78,9 @@ faster if it is a more compute-heavy operation to hide memory latency - that inc
 - Less cache-predictable data movement, e.g. `sortperm`.
 
 ## GPU
-GPU settings: use `block_size` threads per block to sort the array. A parallel [`merge_sort!`](@ref)
-is used.
+GPU settings: use `block_size` threads per block to sort the array. When `block_size` is left as
+`nothing` (the default), each GPU algorithm picks its own tuned value (256 for merge sort, 512 for
+radix sort); pass an explicit `block_size` to override.
 
 ## Algorithm choice
 By default, `sort!` uses [`sample_sort!`](@ref) on CPU backends and [`merge_sort!`](@ref) on GPU
@@ -132,8 +133,8 @@ function _sort_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
-    # GPU settings
-    block_size::Int=256,
+    # GPU settings; nothing => each GPU algorithm picks its own tuned default
+    block_size::Union{Nothing, Int}=nothing,
 
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
@@ -144,7 +145,7 @@ function _sort_impl!(
             merge_sort!(
                 v, backend;
                 lt, by, rev, order,
-                block_size,
+                block_size=isnothing(block_size) ? 256 : block_size,
                 temp,
             )
         elseif alg isa RadixSort
@@ -153,7 +154,7 @@ function _sort_impl!(
             _radix_sort!(
                 v, backend;
                 rev, order,
-                block_size,
+                block_size=isnothing(block_size) ? 256 : block_size,
                 temp,
             )
         else
@@ -192,7 +193,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -231,7 +232,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -275,20 +276,21 @@ function _sortperm_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
-    # GPU settings
-    block_size::Int=256,
+    # GPU settings; nothing => merge sort's tuned default (sortperm is merge-only)
+    block_size::Union{Nothing, Int}=nothing,
 
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
     if use_gpu_algorithm(backend, prefer_threads)
         alg = isnothing(alg) ? MergeSort() : alg
+        bs = isnothing(block_size) ? 256 : block_size
         if alg isa MergeSort
             if alg.lowmem
                 merge_sortperm_lowmem!(
                     ix, v, backend;
                     lt, by, rev, order,
-                    block_size,
+                    block_size=bs,
                     temp,
                 )
             else
@@ -299,7 +301,7 @@ function _sortperm_impl!(
                 merge_sortperm!(
                     ix, v, backend;
                     lt, by, rev, order,
-                    block_size,
+                    block_size=bs,
                     temp_ix=temp,   # old `temp` was the index buffer; maps directly to temp_ix
                 )
             end
@@ -343,7 +345,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
