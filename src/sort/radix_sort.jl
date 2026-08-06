@@ -115,7 +115,8 @@ end
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v))
     num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
-    base = iblock * NI * ITEMS
+    # This block's tile; translate_offset maps a local position to its global index.
+    tile = translate_base(Tile((i = NI * ITEMS,)), (i = iblock * NI * ITEMS,))
 
     j = ithread
     while j < Int(_RS_SIZE)
@@ -126,7 +127,7 @@ end
 
     m = 0
     while m < ITEMS
-        i = base + ithread + m * NI
+        i = translate_offset(tile, (i = ithread + m * NI,)).index.i
         if i < len
             d = Int(_rs_digit(v[i + 1], shift, rev))
             Atomix.@atomic s_hist[d + 1] += UInt32(1)
@@ -216,7 +217,8 @@ end
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v_in))
     num_blocks = Int(length(hist)) ÷ 256
-    base = iblock * TILE
+    # This block's tile; translate_offset maps a tile-position p to its global index.
+    tile = translate_base(Tile((i = TILE,)), (i = iblock * TILE,))
 
     # Load the tile: keys + digits, in tile-position order (== input order, which
     # the stable rank below relies on).  0xffffffff marks out-of-range positions;
@@ -224,7 +226,7 @@ end
     m = 0
     while m < ITEMS
         p = ithread + m * NI
-        i = base + p
+        i = translate_offset(tile, (i = p,)).index.i
         if i < len
             k = v_in[i + 1]
             s_elem[p + 1]  = k
