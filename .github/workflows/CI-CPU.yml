@@ -91,9 +91,9 @@ jobs:
           arch: x64
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
+      - name: Promote OpenCL to test dependency
+        run: julia test/promote.jl opencl
       - uses: julia-actions/julia-runtest@v1
-        with:
-          test_args: '--opencl'
   # cpuKA:
   #   name: KA CPU Backend
   #   runs-on: ubuntu-latest
