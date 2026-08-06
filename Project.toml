@@ -11,13 +11,16 @@ Markdown = "d6f4376e-aef5-505a-96c1-9c027394607a"
 UnsafeAtomics = "013be700-e6cd-48c3-b4a1-df204f14c38f"
 
 [weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 
 [extensions]
+AcceleratedKernelsCUDAExt = "CUDA"
 AcceleratedKernelsoneAPIExt = "oneAPI"
 
 [compat]
 ArgCheck = "2"
+CUDA = "5, 6"
 GPUArraysCore = "0.2.0"
 KernelAbstractions = "0.9.34, 0.10"
 Markdown = "1"
