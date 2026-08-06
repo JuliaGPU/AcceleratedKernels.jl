@@ -163,6 +163,7 @@ function _accumulate_impl!(
 
     # GPU settings
     block_size::Int=256,
+    items_per_thread::Int=_scan_items_per_thread(backend),
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
@@ -172,7 +173,7 @@ function _accumulate_impl!(
                 op, v, backend, alg;
                 init, neutral, inclusive,
                 max_tasks, min_elems,
-                block_size, temp, temp_flags,
+                block_size, items_per_thread, temp, temp_flags,
             )
         else
             accumulate_1d_cpu!(
