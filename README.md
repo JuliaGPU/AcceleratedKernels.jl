@@ -324,17 +324,18 @@ Note that we did not have to explicitly type the function arguments in `compute_
 
 
 ## 7. Testing
-If it ain't tested, it's broken. The `test/runtests.jl` suite does randomised correctness testing on all algorithms in the library. To test locally, execute:
+If it ain't tested, it's broken. The `test/runtests.jl` suite does randomised correctness testing on all algorithms in the library. GPU backends are only weak dependencies of the test suite (so that their requirements cannot conflict), and whichever backend is present in the test environment gets tested. To test one locally, first add it to the test environment:
 ```bash
-$> julia -e 'import Pkg; Pkg.develop(path="path/to/AcceleratedKernels.jl"); Pkg.add("oneAPI")'
-$> julia -e 'import Pkg; Pkg.test("AcceleratedKernels.jl", test_args=["--oneAPI"])'
+$> cd path/to/AcceleratedKernels.jl
+$> julia test/promote.jl oneapi
+$> julia -e 'import Pkg; Pkg.develop(path="."); Pkg.test("AcceleratedKernels")'
 ```
 
-Replace the `"--oneAPI"` with `"--CUDA"`, `"--AMDGPU"` or `"--Metal"` to test different backends, as available on your machine.
+Replace `oneapi` with `cuda`, `amdgpu`, `metal` or `opencl` to test different backends, as available on your machine. Note that `test/promote.jl` rewrites `test/Project.toml`; restore it with `git checkout test/Project.toml` afterwards.
 
-Leave out to test the CPU backend:
+With no backend in the test environment, the CPU backend is tested, which needs no extra packages:
 ```bash
-$> julia -e 'import Pkg; Pkg.test("AcceleratedKernels.jl")'
+$> julia -e 'import Pkg; Pkg.test("AcceleratedKernels")'
 ```
 
 Start Julia with multiple threads to run the tests on a multithreaded CPU backend:

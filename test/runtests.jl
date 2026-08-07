@@ -13,10 +13,14 @@ end
 
 # Discover root-level tests (aqua.jl, partition.jl) and generic tests
 const testsuite = find_tests(@__DIR__)
+delete!(testsuite, "promote")
 const generic_tests = find_tests(joinpath(@__DIR__, "generic"))
 
-# Parse args with lowercase hyphenated backend flags
-args = parse_args(ARGS; custom=["cuda", "amdgpu", "metal", "oneapi", "opencl", "cpu-ka", "cpu"])
+args = parse_args(ARGS; custom=["cpu-ka", "cpu"])
+
+# GPU back-ends are tested when present in the test environment, which requires having
+# explicitly promoted them from weak to regular dependencies (see test/promote.jl).
+in_test_env(pkg) = Base.identify_package(pkg) !== nothing
 
 # Common helper code appended to every backend setup
 const _array_from_host_code = quote
@@ -36,10 +40,8 @@ end
 # Build list of active backends, each with setup code
 backends = Pair{String, Expr}[]
 
-# GPU backends are only tested when explicitly requested via a CLI flag, in which case
-# they are expected to be functional: load or initialization failures propagate.
 
-if args.custom["cuda"] !== nothing
+if in_test_env("CUDACore")
     using CUDACore, CUDATools
     @assert CUDACore.functional()
     @info "CUDACore information:\n" * sprint(CUDATools.versioninfo)
@@ -52,7 +54,7 @@ if args.custom["cuda"] !== nothing
     end)
 end
 
-if args.custom["amdgpu"] !== nothing
+if in_test_env("AMDGPU")
     using AMDGPU
     @assert AMDGPU.functional()
     println("AMDGPU information:")
@@ -66,7 +68,7 @@ if args.custom["amdgpu"] !== nothing
     end)
 end
 
-if args.custom["metal"] !== nothing
+if in_test_env("Metal")
     using Metal
     @assert Metal.functional()
     @info "Metal information:\n" * sprint(Metal.versioninfo)
@@ -79,7 +81,7 @@ if args.custom["metal"] !== nothing
     end)
 end
 
-if args.custom["oneapi"] !== nothing
+if in_test_env("oneAPI")
     using oneAPI
     @assert oneAPI.functional()
     @info "oneAPI information:\n" * sprint(oneAPI.versioninfo)
@@ -92,7 +94,7 @@ if args.custom["oneapi"] !== nothing
     end)
 end
 
-if args.custom["opencl"] !== nothing
+if in_test_env("OpenCL")
     using pocl_jll, OpenCL
     @assert !isempty(OpenCL.cl.platforms())
     @info "OpenCL information:\n" * sprint(OpenCL.versioninfo)

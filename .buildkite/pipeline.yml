@@ -9,20 +9,16 @@ steps:
           - "1.11"
           - "1.12"
           - "1.13"
-          - "nightly"
-      adjustments:
-        - with:
-            version: "nightly"
-          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
     command: |
+      julia test/promote.jl cuda
       julia -e 'using Pkg
                 println("--- :julia: Instantiating environment")
                 Pkg.develop(path=".")
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--cuda"])'
+                Pkg.test("AcceleratedKernels")'
     agents:
       queue: "cuda"
     if: build.message !~ /\[skip tests\]/
@@ -37,20 +33,16 @@ steps:
           - "1.11"
           - "1.12"
           - "1.13"
-          - "nightly"
-      adjustments:
-        - with:
-            version: "nightly"
-          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
     command: |
+      julia test/promote.jl amdgpu
       julia -e 'using Pkg
                 println("--- :julia: Instantiating environment")
                 Pkg.develop(path=".")
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--amdgpu"])'
+                Pkg.test("AcceleratedKernels")'
     agents:
       queue: "rocm"
       rocmgpu: "*"
@@ -66,20 +58,16 @@ steps:
           - "1.11"
           - "1.12"
           - "1.13"
-          - "nightly"
-      adjustments:
-        - with:
-            version: "nightly"
-          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
     command: |
+      julia test/promote.jl oneapi
       julia -e 'using Pkg
                 println("--- :julia: Instantiating environment")
                 Pkg.develop(path=".")
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--oneapi"])'
+                Pkg.test("AcceleratedKernels")'
     agents:
       queue: "oneapi"
     if: build.message !~ /\[skip tests\]/
@@ -94,20 +82,16 @@ steps:
           - "1.11"
           - "1.12"
           - "1.13"
-          - "nightly"
-      adjustments:
-        - with:
-            version: "nightly"
-          soft_fail: true
     plugins:
       - JuliaCI/julia#v1:
           version: "{{matrix.version}}"
     command: |
+      julia test/promote.jl metal
       julia -e 'using Pkg
                 println("--- :julia: Instantiating environment")
                 Pkg.develop(path=".")
                 println("+++ :julia: Running tests")
-                Pkg.test("AcceleratedKernels", test_args=["--metal"])'
+                Pkg.test("AcceleratedKernels")'
     agents:
       queue: "metal"
     if: build.message !~ /\[skip tests\]/
