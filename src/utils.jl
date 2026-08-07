@@ -8,6 +8,12 @@ const CPU_BACKEND = get_backend([])
     return backend != CPU_BACKEND || !prefer_threads
 end
 
+# Elements each thread scans in the GPU prefix-scan block kernel.  The default 2
+# matches the historical coverage; discrete GPUs are measurably faster at 4 (fewer
+# blocks, same tree depth) and can opt in by overriding this in an extension, e.g.
+# `AK._scan_items_per_thread(::CUDABackend) = 4`.
+@inline _scan_items_per_thread(backend) = 2
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()
