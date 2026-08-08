@@ -91,6 +91,9 @@ For non-memory-bound operations, reductions scale almost linearly with the numbe
 ## GPU settings
 The `block_size` parameter controls the number of threads per block and must be a power of two.
 
+The `items_per_thread` parameter (GPU-only, `>= 2`) sets how many elements each thread reduces in a
+block-strided pass; larger values can improve throughput on discrete GPUs.
+
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
 block_size)` is required. For reduction along dimensions (`dims` is an integer or a collection of
@@ -180,6 +183,9 @@ faster for `max_tasks >= 4`; all other cases are scaling linearly with the numbe
 
 ## GPU settings
 The `block_size` parameter controls the number of threads per block and must be a power of two.
+
+The `items_per_thread` parameter (GPU-only, `>= 2`) sets how many elements each thread reduces in a
+block-strided pass; larger values can improve throughput on discrete GPUs.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * (length(src) + 2 * block_size - 1) ÷ (2 *
@@ -290,6 +296,8 @@ function _mapreduce_impl(
 
     # GPU settings
     block_size::Int=256,
+    # Elements per thread (>= 2, reduce's historical minimum); backends raise it via the trait.
+    items_per_thread::Int=max(2, _default_items_per_thread(backend)),
     temp::Union{Nothing, AbstractArray}=nothing,
     switch_below::Int=0,
 )
@@ -306,7 +314,7 @@ function _mapreduce_impl(
                 f, op, src, backend;
                 init, neutral,
                 max_tasks, min_elems,
-                block_size, temp,
+                block_size, items_per_thread, temp,
                 switch_below
             )
         else
