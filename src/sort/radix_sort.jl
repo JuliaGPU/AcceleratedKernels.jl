@@ -278,11 +278,15 @@ end
         d = s_digit[p + 1]
         if d != 0xffffffff
             chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+            # Intra-chunk same-digit count over [chunk_start, p).  Written as a
+            # fixed _RS_CHUNK-trip loop with the (q < p) bound as a branchless
+            # mask (rather than `while q < p`): the whole chunk is in-bounds, and
+            # a variable-trip inner loop trips POCL's loopvec work-group generator
+            # ("Could not find a dominating alternative variable") on LLVM ≥ 18.
             cnt = UInt32(0)
-            q = chunk_start
-            while q < p
-                cnt += UInt32(s_digit[q + 1] == d)
-                q += 1
+            for r in 0:_RS_CHUNK - 1
+                q = chunk_start + r
+                cnt += UInt32((q < p) & (s_digit[q + 1] == d))
             end
             rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
             gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
@@ -399,11 +403,12 @@ end
             if p < n
                 d = s_digit[p + 1]
                 chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+                # Fixed-trip masked scan; see _radix_scatter_chunked! for why the
+                # `while q < p` form is avoided (POCL loopvec crash on LLVM ≥ 18).
                 cnt = UInt32(0)
-                q = chunk_start
-                while q < p
-                    cnt += UInt32(s_digit[q + 1] == d)
-                    q += 1
+                for r in 0:_RS_CHUNK - 1
+                    q = chunk_start + r
+                    cnt += UInt32((q < p) & (s_digit[q + 1] == d))
                 end
                 rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
                 dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
