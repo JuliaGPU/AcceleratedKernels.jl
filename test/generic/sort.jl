@@ -733,12 +733,38 @@ end
         end
 
         # ── rev=true ──────────────────────────────────────────────────────────
-        for T in (UInt32, Int32, Float32)
+        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+                        (UInt32, Int32, Float32, UInt64, Int64, Float64))
             n   = 10_000
             v_h = rand(T, n)
             v   = array_from_host(v_h)
             AK.sort!(v; prefer_threads, alg=AK.RadixSort(), rev=true)
             @test Array(v) == sort(v_h; rev=true)
+        end
+
+        # ── Floating-point ordering ───────────────────────────────────────────
+        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+                        (Float32, Float64))
+            specials = T[1, -0.0, 0.0, NaN, -NaN, Inf, -Inf, 2.5, -2.5,
+                         prevfloat(zero(T)), nextfloat(zero(T))]
+            v_h = shuffle!(vcat(specials, randn(T, 10_000)))
+
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.RadixSort())
+            @test isequal(Array(v), sort(v_h))
+
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.RadixSort(), rev=true)
+            @test isequal(Array(v), sort(v_h; rev=true))
+        end
+
+        # ── Ordering composition ──────────────────────────────────────────────
+        v_h = rand(Int32, 10_000)
+        for (rev, order) in ((nothing, Base.Order.Reverse), (true, Base.Order.Forward),
+                             (true, Base.Order.Reverse))
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.RadixSort(), rev, order)
+            @test Array(v) == sort(v_h; rev, order)
         end
 
         # ── Stability: equal keys → result matches sort (radix is stable) ───
@@ -769,12 +795,21 @@ end
         @test Array(w) == sort(v_h)
         @test Array(v) == v_h   # input unchanged
 
-        # ── Non-default block size ─────────────────────────────────────────────
-        n   = 10_000
-        v_h = rand(UInt32, n)
-        v   = array_from_host(v_h)
-        AK.sort!(v; prefer_threads, alg=AK.RadixSort(), block_size=128)
-        @test Array(v) == sort(v_h)
+        # ── Tuning parameters and single-block boundaries ──────────────────────
+        v_h = rand(UInt32, 20_000)
+        for block_size in (128, 256, 512), items_per_thread in (1, 2, 4)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads,
+                     alg=AK.RadixSort(; block_size, items_per_thread))
+            @test Array(v) == sort(v_h)
+        end
+
+        for n in (255, 256, 257)
+            v_h = rand(UInt32, n)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.RadixSort(block_size=128))
+            @test Array(v) == sort(v_h)
+        end
 
         # ── Rejected: custom by/lt, unsupported element type ────────────────────
         n   = 10
@@ -785,6 +820,11 @@ end
         v_h = rand(Int32, n)
         v   = array_from_host(v_h)
         @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort(), lt=(>))
+
+        v_h = rand(Int32, n)
+        v = array_from_host(v_h)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort(),
+                                             order=Base.Order.By(abs, Base.Order.Forward))
 
         v_h = rand(Int16, n)
         v   = array_from_host(v_h)
