@@ -25,8 +25,6 @@ const get_backend = KernelAbstractions.get_backend
 
 # Include code from other files
 include("utils.jl")
-include("tile.jl")
-using .Tiling
 include("task_partitioner.jl")
 include("foreachindex.jl")
 include("map.jl")

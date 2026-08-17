@@ -20,13 +20,18 @@ Base.@kwdef struct MergeSort <: SortAlgorithm
 end
 
 """
-    RadixSort()
+    RadixSort(; block_size=nothing, items_per_thread=nothing)
 
 Use GPU radix sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
 `Int64`, and `Float64` with forward or reverse ordering. This algorithm does not support
 `sortperm!`.
 """
-struct RadixSort <: SortAlgorithm end
+Base.@kwdef struct RadixSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
+end
+
+_radix_defaults(::Backend) = (block_size=256, items_per_thread=2)
 
 """
     SampleSort()
@@ -78,9 +83,9 @@ faster if it is a more compute-heavy operation to hide memory latency - that inc
 - Less cache-predictable data movement, e.g. `sortperm`.
 
 ## GPU
-GPU settings: use `block_size` threads per block to sort the array. When `block_size` is left as
-`nothing` (the default), each GPU algorithm picks its own tuned value (256 for merge sort, 512 for
-radix sort); pass an explicit `block_size` to override.
+GPU settings: `block_size` sets the number of threads per block. For `RadixSort`, fields on the
+algorithm take precedence over this keyword, then backend defaults. `items_per_thread` is set on
+`RadixSort` and defaults to 2.
 
 ## Algorithm choice
 By default, `sort!` uses [`sample_sort!`](@ref) on CPU backends and [`merge_sort!`](@ref) on GPU
@@ -153,10 +158,16 @@ function _sort_impl!(
             ordering = Base.Order.ord(lt, by, rev, order)
             ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
                 throw(ArgumentError("RadixSort only supports forward or reverse ordering"))
+            defaults = _radix_defaults(backend)
+            radix_block_size = isnothing(alg.block_size) ?
+                               (isnothing(block_size) ? defaults.block_size : block_size) : alg.block_size
+            radix_items = isnothing(alg.items_per_thread) ?
+                          defaults.items_per_thread : alg.items_per_thread
             _radix_sort!(
                 v, backend;
                 descending=ordering === Base.Order.Reverse,
-                block_size=isnothing(block_size) ? 256 : block_size,
+                block_size=radix_block_size,
+                items_per_thread=radix_items,
                 temp,
             )
         else
