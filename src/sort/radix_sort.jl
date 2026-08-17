@@ -46,13 +46,13 @@ const _RS_CHUNK = 32            # chunked-scatter chunk width (smaller = cheaper
 @inline function _to_sort_key(x::Float32)
     u = reinterpret(UInt32, x)
     mask = ((u >> 31) * 0xFFFFFFFF) | 0x80000000
-    u ⊻ mask
+    ifelse(isnan(x), typemax(UInt32), u ⊻ mask)
 end
 
 @inline function _to_sort_key(x::Float64)
     u = reinterpret(UInt64, x)
     mask = ((u >> 63) * 0xFFFFFFFFFFFFFFFF) | 0x8000000000000000
-    u ⊻ mask
+    ifelse(isnan(x), typemax(UInt64), u ⊻ mask)
 end
 
 @inline _rs_digit(x, shift::UInt32, rev::Bool) =
@@ -466,7 +466,7 @@ end
 
 
 """
-    _radix_sort!(v, backend; rev, order, block_size, temp)
+    _radix_sort!(v, backend; descending, block_size, temp)
 
 In-place GPU LSD radix sort (8-bit, 256 buckets per pass).  Supported types:
 `UInt32`, `Int32`, `Float32`, `UInt64`, `Int64`, `Float64`.  Custom `lt`/`by`
@@ -474,8 +474,7 @@ are not supported.
 """
 function _radix_sort!(
     v::AbstractArray{T}, backend::Backend=get_backend(v);
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Forward,
+    descending::Bool=false,
     block_size::Int=256,
     items_per_thread::Int=2,
     temp::Union{Nothing, AbstractArray}=nothing,
@@ -485,8 +484,6 @@ function _radix_sort!(
 
     @argcheck ispow2(block_size) && block_size >= 1
     @argcheck items_per_thread >= 1
-
-    descending = (rev === true) || order === Base.Order.Reverse
 
     # Processing several items per thread shrinks the per-(digit, block) histogram
     # (and its exclusive scan) by the same factor.  Only the fast atomic kernels

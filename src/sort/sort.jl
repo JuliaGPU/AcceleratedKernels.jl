@@ -23,7 +23,7 @@ end
     RadixSort()
 
 Use GPU radix sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
-`Int64`, `Float64` with default `lt=isless`, `by=identity`. This algorithm does not support
+`Int64`, and `Float64` with forward or reverse ordering. This algorithm does not support
 `sortperm!`.
 """
 struct RadixSort <: SortAlgorithm end
@@ -150,10 +150,12 @@ function _sort_impl!(
             )
         elseif alg isa RadixSort
             _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
-            (lt === isless && by === identity) || throw(ArgumentError("RadixSort only supports `lt=isless` and `by=identity`"))
+            ordering = Base.Order.ord(lt, by, rev, order)
+            ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
+                throw(ArgumentError("RadixSort only supports forward or reverse ordering"))
             _radix_sort!(
                 v, backend;
-                rev, order,
+                descending=ordering === Base.Order.Reverse,
                 block_size=isnothing(block_size) ? 256 : block_size,
                 temp,
             )
