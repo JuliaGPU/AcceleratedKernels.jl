@@ -742,7 +742,7 @@ end
             @test Array(v) == sort(v_h; rev=true)
         end
 
-        # ── Floating-point ordering ───────────────────────────────────────────
+        # Floating-point ordering
         for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
                         (Float32, Float64))
             specials = T[1, -0.0, 0.0, NaN, -NaN, Inf, -Inf, 2.5, -2.5,
@@ -758,7 +758,7 @@ end
             @test isequal(Array(v), sort(v_h; rev=true))
         end
 
-        # ── Ordering composition ──────────────────────────────────────────────
+        # Ordering composition
         v_h = rand(Int32, 10_000)
         for (rev, order) in ((nothing, Base.Order.Reverse), (true, Base.Order.Forward),
                              (true, Base.Order.Reverse))
@@ -795,7 +795,7 @@ end
         @test Array(w) == sort(v_h)
         @test Array(v) == v_h   # input unchanged
 
-        # ── Tuning parameters and single-block boundaries ──────────────────────
+        # Tuning parameters and single-block boundaries
         v_h = rand(UInt32, 20_000)
         for block_size in (128, 256, 512), items_per_thread in (1, 2, 4)
             v = array_from_host(v_h)
