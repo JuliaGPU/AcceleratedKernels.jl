@@ -106,19 +106,19 @@ end
     @uniform NI  = Int(@groupsize()[1])
     s_elem  = @localmem eltype(v_in) (N,)
     s_digit = @localmem UInt32       (N,)
-    s_gbase = @localmem UInt32       (256,)
+    s_gbase = @localmem UInt32       (Int(_RS_SIZE),)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v_in))
-    num_blocks = Int(length(hist)) ÷ 256
+    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
 
     i = iblock * NI + ithread
     if i < len
         s_elem[ithread + 1] = v_in[i + 1]
     end
     j = ithread
-    while j < 256
+    while j < Int(_RS_SIZE)
         s_gbase[j + 1] = hist[j * num_blocks + iblock + 1]
         j += NI
     end
@@ -149,13 +149,13 @@ end
     @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ _RS_CHUNK
     s_elem  = @localmem eltype(v_in) (TILE,)
     s_digit = @localmem UInt32       (TILE,)
-    s_gbase = @localmem UInt32       (256,)
-    s_chist = @localmem UInt32       (256 * NCH,)
+    s_gbase = @localmem UInt32       (Int(_RS_SIZE),)
+    s_chist = @localmem UInt32       (Int(_RS_SIZE) * NCH,)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
     len        = Int(length(v_in))
-    num_blocks = Int(length(hist)) ÷ 256
+    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
     m = 0
     while m < ITEMS
         p = ithread + m * NI
@@ -170,12 +170,12 @@ end
         m += 1
     end
     j = ithread
-    while j < 256
+    while j < Int(_RS_SIZE)
         s_gbase[j + 1] = hist[j * num_blocks + iblock + 1]
         j += NI
     end
     j = ithread
-    while j < 256 * NCH
+    while j < Int(_RS_SIZE) * NCH
         s_chist[j + 1] = UInt32(0)
         j += NI
     end
@@ -186,18 +186,18 @@ end
         p = ithread + m * NI
         d = s_digit[p + 1]
         if d != 0xffffffff
-            Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+            Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
         end
         m += 1
     end
     @synchronize()
 
     d = ithread
-    while d < 256
+    while d < Int(_RS_SIZE)
         acc = UInt32(0)
         for c in 0:NCH-1
-            cnt = s_chist[c * 256 + d + 1]
-            s_chist[c * 256 + d + 1] = acc
+            cnt = s_chist[c * Int(_RS_SIZE) + d + 1]
+            s_chist[c * Int(_RS_SIZE) + d + 1] = acc
             acc += cnt
         end
         d += NI
@@ -216,7 +216,7 @@ end
                 q = chunk_start + r
                 cnt += UInt32((q < p) & (s_digit[q + 1] == d))
             end
-            rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+            rank = s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] + cnt
             gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
             v_out[gpos + 1] = s_elem[p + 1]
         end
@@ -237,8 +237,8 @@ end
     s_a     = @localmem eltype(v) (TILE,)
     s_b     = @localmem eltype(v) (TILE,)
     s_digit = @localmem UInt32    (TILE,)
-    s_chist = @localmem UInt32    (256 * NCH,)
-    s_loff  = @localmem UInt32    (256,)
+    s_chist = @localmem UInt32    (Int(_RS_SIZE) * NCH,)
+    s_loff  = @localmem UInt32    (Int(_RS_SIZE),)
 
     it = Int(@index(Local, Linear)) - 1
     n  = Int(length(v))
@@ -260,12 +260,12 @@ end
         dst = iseven(pass) ? s_b : s_a
 
         j = it
-        while j < 256 * NCH
+        while j < Int(_RS_SIZE) * NCH
             s_chist[j + 1] = UInt32(0)
             j += NI
         end
         j = it
-        while j < 256
+        while j < Int(_RS_SIZE)
             s_loff[j + 1] = UInt32(0)
             j += NI
         end
@@ -277,19 +277,19 @@ end
             if p < n
                 d = _rs_digit(src[p + 1], sh, rev)
                 s_digit[p + 1] = d
-                Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] += UInt32(1)
+                Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
             end
             m += 1
         end
         @synchronize()
 
         d = it
-        while d < 256
+        while d < Int(_RS_SIZE)
             acc = UInt32(0)
             c = 0
             while c < NCH
-                cnt = s_chist[c * 256 + d + 1]
-                s_chist[c * 256 + d + 1] = acc
+                cnt = s_chist[c * Int(_RS_SIZE) + d + 1]
+                s_chist[c * Int(_RS_SIZE) + d + 1] = acc
                 acc += cnt
                 c += 1
             end
@@ -301,7 +301,7 @@ end
         if it == 0
             run = UInt32(0)
             dd = 0
-            while dd < 256
+            while dd < Int(_RS_SIZE)
                 t = s_loff[dd + 1]
                 s_loff[dd + 1] = run
                 run += t
@@ -321,7 +321,7 @@ end
                     q = chunk_start + r
                     cnt += UInt32((q < p) & (s_digit[q + 1] == d))
                 end
-                rank = s_chist[(p ÷ _RS_CHUNK) * 256 + Int(d) + 1] + cnt
+                rank = s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] + cnt
                 dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
             end
             m += 1
