@@ -7,7 +7,7 @@
     edge_sizes = [0, 1, 2, 3, 4, 5, 255, 256, 257, 511, 512, 513]
 
     # For backends that don't support Float64.
-    test_types = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+    test_types = valid_backend_eltypes(BACKEND,
                         (Int8, UInt32, Int64, Float32, Float64))
 
     @testset "reverse! in-place" begin
