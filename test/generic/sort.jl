@@ -56,7 +56,7 @@ end
     Random.seed!(42)
 
     # Exact match against Base.sort for common by= functions
-    for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND), (Float32, Float64, Int32))
+    for T in valid_backend_eltypes(BACKEND, (Float32, Float64, Int32))
         n   = 10_000
         v_h = T <: AbstractFloat ? randn(T, n) : rand(T(-100):T(100), n)
         for (kw, base_kw) in (
@@ -230,7 +230,7 @@ end
     end
 
     if !prefer_threads
-        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+        for T in valid_backend_eltypes(BACKEND,
                         (UInt32, Int32, Float32, UInt64, Int64, Float64))
             v_h = rand(T, 10_000)
             v = array_from_host(v_h)
@@ -599,7 +599,7 @@ if !prefer_threads
     # ── Element types ────────────────────────────────────────────────────────
     Random.seed!(123)
 
-    for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND), (Int16, UInt16, Int64, UInt64, Float64, UInt8))
+    for T in valid_backend_eltypes(BACKEND, (Int16, UInt16, Int64, UInt64, Float64, UInt8))
         for _ in 1:50
             n  = rand(1:50_000)
             v  = array_from_host(rand(T, n))
@@ -668,7 +668,7 @@ if !prefer_threads
     @test Array(ix1) == Array(ix2)
 
     # ── Exact match against Base.sortperm ────────────────────────────────────
-    for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND), (Int32, Float32, Float64))
+    for T in valid_backend_eltypes(BACKEND, (Int32, Float32, Float64))
         n   = 10_000
         v_h = rand(T, n)
         ref = sortperm(v_h)
@@ -712,7 +712,7 @@ end
             end
         end
 
-        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+        for T in valid_backend_eltypes(BACKEND,
                         (UInt64, Int64, Float64))
             for _ in 1:200
                 n = rand(1:100_000)
@@ -723,7 +723,7 @@ end
         end
 
         # ── Exact match against Base.sort ─────────────────────────────────────
-        for T in filter(T -> T !== Float64 || KernelAbstractions.supports_float64(BACKEND),
+        for T in valid_backend_eltypes(BACKEND,
                         (UInt32, Int32, Float32, UInt64, Int64, Float64))
             n   = 10_000
             v_h = rand(T, n)

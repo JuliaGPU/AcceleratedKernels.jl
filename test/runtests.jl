@@ -23,7 +23,7 @@ args = parse_args(ARGS; custom=["cpu-ka", "cpu"])
 in_test_env(pkg) = Base.identify_package(pkg) !== nothing
 
 # Common helper code appended to every backend setup
-const _array_from_host_code = quote
+const _testset_setup_code = quote
     global array_from_host
     array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
     function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
@@ -35,6 +35,9 @@ const _array_from_host_code = quote
         copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
         d_arr
     end
+
+    global valid_backend_eltypes
+    valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
 end
 
 # Build list of active backends, each with setup code
@@ -50,7 +53,7 @@ if in_test_env("CUDACore")
         global BACKEND = CUDABackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = true
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -64,7 +67,7 @@ if in_test_env("AMDGPU")
         global BACKEND = ROCBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = true
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -77,7 +80,7 @@ if in_test_env("Metal")
         global BACKEND = MetalBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -90,7 +93,7 @@ if in_test_env("oneAPI")
         global BACKEND = oneAPIBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -104,7 +107,7 @@ if in_test_env("OpenCL")
         global BACKEND = OpenCLBackend()
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -114,7 +117,7 @@ if args.custom["cpu-ka"] !== nothing
         global BACKEND = get_backend([])
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
@@ -124,7 +127,7 @@ if args.custom["cpu"] !== nothing || isempty(backends)
         global BACKEND = get_backend([])
         global prefer_threads = true    # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
-        $_array_from_host_code
+        $_testset_setup_code
     end)
 end
 
