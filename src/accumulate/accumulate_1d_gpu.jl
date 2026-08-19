@@ -317,8 +317,8 @@ function accumulate_1d_gpu!(
     end
 
     if shift_to_exclusive
-        _exclusive_prefixes!(backend)(prefixes, v, init, elems_per_block,
-                                      ndrange=num_blocks)
+        _exclusive_prefixes!(backend, block_size)(prefixes, v, init, elems_per_block,
+                                                  ndrange=num_blocks)
         _exclusive_shift!(backend, block_size)(v, prefixes, items,
                                                ndrange=num_blocks * block_size)
     end
