@@ -20,13 +20,18 @@ Base.@kwdef struct MergeSort <: SortAlgorithm
 end
 
 """
-    RadixSort()
+    RadixSort(; block_size=nothing, items_per_thread=nothing)
 
 Use GPU radix sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
-`Int64`, `Float64` with default `lt=isless`, `by=identity`. This algorithm does not support
+`Int64`, and `Float64` with forward or reverse ordering. This algorithm does not support
 `sortperm!`.
 """
-struct RadixSort <: SortAlgorithm end
+Base.@kwdef struct RadixSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
+end
+
+_radix_defaults(::Backend) = (block_size=256, items_per_thread=2)
 
 """
     SampleSort()
@@ -57,7 +62,7 @@ struct SampleSort <: SortAlgorithm end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -78,8 +83,9 @@ faster if it is a more compute-heavy operation to hide memory latency - that inc
 - Less cache-predictable data movement, e.g. `sortperm`.
 
 ## GPU
-GPU settings: use `block_size` threads per block to sort the array. A parallel [`merge_sort!`](@ref)
-is used.
+GPU settings: `block_size` sets the number of threads per block. For `RadixSort`, fields on the
+algorithm take precedence over this keyword, then backend defaults. `items_per_thread` is set on
+`RadixSort` and defaults to 2.
 
 ## Algorithm choice
 By default, `sort!` uses [`sample_sort!`](@ref) on CPU backends and [`merge_sort!`](@ref) on GPU
@@ -132,8 +138,8 @@ function _sort_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
-    # GPU settings
-    block_size::Int=256,
+    # GPU settings; nothing => each GPU algorithm picks its own tuned default
+    block_size::Union{Nothing, Int}=nothing,
 
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
@@ -144,16 +150,24 @@ function _sort_impl!(
             merge_sort!(
                 v, backend;
                 lt, by, rev, order,
-                block_size,
+                block_size=isnothing(block_size) ? 256 : block_size,
                 temp,
             )
         elseif alg isa RadixSort
             _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
-            (lt === isless && by === identity) || throw(ArgumentError("RadixSort only supports `lt=isless` and `by=identity`"))
+            ordering = Base.Order.ord(lt, by, rev, order)
+            ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
+                throw(ArgumentError("RadixSort only supports forward or reverse ordering"))
+            defaults = _radix_defaults(backend)
+            radix_block_size = isnothing(alg.block_size) ?
+                               (isnothing(block_size) ? defaults.block_size : block_size) : alg.block_size
+            radix_items = isnothing(alg.items_per_thread) ?
+                          defaults.items_per_thread : alg.items_per_thread
             _radix_sort!(
                 v, backend;
-                rev, order,
-                block_size,
+                descending=ordering === Base.Order.Reverse,
+                block_size=radix_block_size,
+                items_per_thread=radix_items,
                 temp,
             )
         else
@@ -192,7 +206,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -231,7 +245,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
@@ -275,20 +289,21 @@ function _sortperm_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
-    # GPU settings
-    block_size::Int=256,
+    # GPU settings; nothing => merge sort's tuned default (sortperm is merge-only)
+    block_size::Union{Nothing, Int}=nothing,
 
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
     if use_gpu_algorithm(backend, prefer_threads)
         alg = isnothing(alg) ? MergeSort() : alg
+        bs = isnothing(block_size) ? 256 : block_size
         if alg isa MergeSort
             if alg.lowmem
                 merge_sortperm_lowmem!(
                     ix, v, backend;
                     lt, by, rev, order,
-                    block_size,
+                    block_size=bs,
                     temp,
                 )
             else
@@ -299,7 +314,7 @@ function _sortperm_impl!(
                 merge_sortperm!(
                     ix, v, backend;
                     lt, by, rev, order,
-                    block_size,
+                    block_size=bs,
                     temp_ix=temp,   # old `temp` was the index buffer; maps directly to temp_ix
                 )
             end
@@ -343,7 +358,7 @@ end
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
         # GPU settings
-        block_size::Int=256,
+        block_size::Union{Nothing, Int}=nothing,
 
         # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
