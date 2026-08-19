@@ -432,6 +432,23 @@ end
     @test AK.mapreduce(abs, +, array_from_host(vh_one); prefer_threads, init=Int32(10)) ==
         mapreduce(abs, +, vh_one; init=Int32(10))
 
+    if !prefer_threads
+        for len in (65, 257, 1025), items_per_thread in (1, 2, 4)
+            vh = Int32.(mod.(1:len, 17) .- 8)
+            v = array_from_host(vh)
+            for (f, op, neutral) in ((x -> 3x - 1, +, Int32(0)),
+                                     (abs, max, typemin(Int32)),
+                                     (x -> -x, min, typemax(Int32)))
+                @test AK.mapreduce(f, op, v; prefer_threads, init=neutral, neutral,
+                                   block_size=64, items_per_thread) ==
+                    Base.mapreduce(f, op, vh; init=neutral)
+            end
+        end
+
+        @test_throws ArgumentError AK.mapreduce(identity, +, array_from_host(Int32[1, 2]);
+                                                prefer_threads, init=Int32(0), items_per_thread=0)
+    end
+
     vh_typechange = rand(Int32(-10):Int32(10), 4, 5)
     f_typechange = x -> Float32(x) / 2
     @test AK.mapreduce(f_typechange, +, array_from_host(vh_typechange); prefer_threads, init=0f0) ≈
