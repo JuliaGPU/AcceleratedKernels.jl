@@ -11,6 +11,16 @@ end
 # Backends may request more than the historical default of two items per thread.
 @inline default_items_per_thread(backend) = 1
 
+# Elements each thread scans in the GPU prefix-scan block kernel.
+@inline default_scan_items_per_thread(backend) = 8
+
+# Keep the default shared-memory use within the 32 KiB OpenCL/Metal baseline.
+@inline function default_scan_items_per_thread(backend, ::Type{T}, block_size) where T
+    block_size > 0 || return default_scan_items_per_thread(backend)
+    max_items = max(1, 32 * 1024 ÷ (block_size * max(sizeof(T), 1)) - 1)
+    min(default_scan_items_per_thread(backend), max_items)
+end
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()
