@@ -48,10 +48,12 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
     end
 
     # The default limits shared-memory use for wide element types.
-    xh = ComplexF64.(1:4097)
-    y = array_from_host(xh)
-    AK.accumulate!(+, y; prefer_threads, init=0.0 + 0.0im, alg)
-    @test Array(y) == cumsum(xh)
+    if KernelAbstractions.supports_float64(BACKEND)
+        xh = ComplexF64.(1:4097)
+        y = array_from_host(xh)
+        AK.accumulate!(+, y; prefer_threads, init=0.0 + 0.0im, alg)
+        @test Array(y) == cumsum(xh)
+    end
 
     # Large inclusive scan
     for _ in 1:1000
