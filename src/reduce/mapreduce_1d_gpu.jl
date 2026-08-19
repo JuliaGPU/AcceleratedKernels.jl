@@ -1,8 +1,9 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(@Const(src), dst, f, op, neutral)
+# NI and K are compile-time values so the local-memory size is static and the load loop unrolls.
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(
+    @Const(src), dst, f, op, neutral, ::Val{NI}, ::Val{K},
+) where {NI, K}
 
-    @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
-
+    sdata = @localmem eltype(dst) (NI,)
     len = length(src)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
@@ -14,31 +15,20 @@
     iblock = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    i = ithread + iblock * (N * 0x2)
-    if i >= len
-        sdata[ithread + 0x1] = neutral
-    elseif i + N >= len
-        sdata[ithread + 0x1] = f(src[i + 0x1])
-    else
-        sdata[ithread + 0x1] = op(f(src[i + 0x1]), f(src[i + N + 0x1]))
+    # Consecutive threads load consecutive elements, while each thread advances by NI. Starting
+    # from neutral preserves the previous `op(neutral, x) == x` bootstrap.
+    acc = neutral
+    for s in 0x0:(K - 0x1)
+        idx = iblock * (NI * K) + s * NI + ithread
+        if idx < len
+            acc = op(acc, f(src[idx + 0x1]))
+        end
     end
+    sdata[ithread + 0x1] = acc
 
     @synchronize()
 
-    @inline reduce_group!(@context, op, sdata, N, ithread)
-
-    # Code below would work on NVidia GPUs with warp size of 32, but create race conditions and
-    # return incorrect results on Intel Graphics. It would be useful to have a way to statically
-    # query the warp size at compile time
-    #
-    # if ithread < 32
-    #     N >= 64 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 32 + 1]))
-    #     N >= 32 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 16 + 1]))
-    #     N >= 16 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 8 + 1]))
-    #     N >= 8 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 4 + 1]))
-    #     N >= 4 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 2 + 1]))
-    #     N >= 2 && (sdata[ithread + 1] = op(sdata[ithread + 1], sdata[ithread + 1 + 1]))
-    # end
+    @inline reduce_group!(@context, op, sdata, NI, ithread)
 
     if ithread == 0x0
         dst[iblock + 0x1] = sdata[0x1]
@@ -57,11 +47,13 @@ function mapreduce_1d_gpu(
 
     # GPU settings
     block_size::Int,
+    items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},
     switch_below::Int,
 )
     @argcheck 1 <= block_size <= 1024
     @argcheck ispow2(block_size)
+    @argcheck items_per_thread >= 1
     @argcheck switch_below >= 0
 
     # Degenerate cases
@@ -73,8 +65,8 @@ function mapreduce_1d_gpu(
         return Base.mapreduce(f, op, h_src; init)
     end
 
-    # Each thread will handle two elements
-    num_per_block = 2 * block_size
+    # Each block handles `items_per_thread * block_size` elements.
+    num_per_block = items_per_thread * block_size
     blocks = (len + num_per_block - 1) ÷ num_per_block
 
     if !isnothing(temp)
@@ -93,7 +85,8 @@ function mapreduce_1d_gpu(
     dst_view = @view dst[1:blocks]
 
     kernel! = _mapreduce_block!(backend, block_size)
-    kernel!(src_view, dst_view, f, op, neutral, ndrange=(block_size * blocks,))
+    kernel!(src_view, dst_view, f, op, neutral, Val(block_size), Val(items_per_thread);
+            ndrange=(block_size * blocks,))
 
     # As long as we still have blocks to process, swap between the src and dst pointers at
     # the beginning of the first and second halves of dst
@@ -111,7 +104,8 @@ function mapreduce_1d_gpu(
         blocks = (len + num_per_block - 1) ÷ num_per_block
 
         # Each block produces one reduced value
-        kernel!(p1, p2, identity, op, neutral, ndrange=(block_size * blocks,))
+        kernel!(p1, p2, identity, op, neutral, Val(block_size), Val(items_per_thread);
+                ndrange=(block_size * blocks,))
         len = blocks
 
         if len < switch_below

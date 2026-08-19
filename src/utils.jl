@@ -8,6 +8,9 @@ const CPU_BACKEND = get_backend([])
     return backend != CPU_BACKEND || !prefer_threads
 end
 
+# Backends may request more than the historical default of two items per thread.
+@inline default_items_per_thread(backend) = 1
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()
