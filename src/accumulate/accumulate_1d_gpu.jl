@@ -212,7 +212,7 @@ end
 
 
 # Save the value preceding each tile before shifting the array in place.
-@kernel cpu=false inbounds=true unsafe_indices=true function _exclusive_prefixes!(
+@kernel cpu=false inbounds=true unsafe_indices=true function exclusive_prefixes_kernel!(
     prefixes, @Const(v), init, elems_per_block,
 )
     iblock = @index(Global, Linear) - 0x1
@@ -222,7 +222,7 @@ end
 end
 
 
-@kernel cpu=false inbounds=true unsafe_indices=true function _exclusive_shift!(
+@kernel cpu=false inbounds=true unsafe_indices=true function exclusive_shift_kernel!(
     v, @Const(prefixes), ::Val{ITEMS},
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
@@ -317,10 +317,10 @@ function accumulate_1d_gpu!(
     end
 
     if shift_to_exclusive
-        _exclusive_prefixes!(backend, block_size)(prefixes, v, init, elems_per_block,
-                                                  ndrange=num_blocks)
-        _exclusive_shift!(backend, block_size)(v, prefixes, items,
-                                               ndrange=num_blocks * block_size)
+        exclusive_prefixes_kernel!(backend, block_size)(prefixes, v, init, elems_per_block,
+                                                        ndrange=num_blocks)
+        exclusive_shift_kernel!(backend, block_size)(v, prefixes, items,
+                                                     ndrange=num_blocks * block_size)
     end
 
     return v
