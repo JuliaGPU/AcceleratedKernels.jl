@@ -212,13 +212,11 @@ end
 
 
 # Save the value preceding each tile before shifting the array in place.
-@kernel cpu=false inbounds=true unsafe_indices=true function exclusive_prefixes_kernel!(
+@kernel cpu=false inbounds=true function exclusive_prefixes_kernel!(
     prefixes, @Const(v), init, elems_per_block,
 )
     iblock = @index(Global, Linear) - 0x1
-    if iblock < length(prefixes)
-        prefixes[iblock + 0x1] = iblock == 0x0 ? init : v[iblock * elems_per_block]
-    end
+    prefixes[iblock + 0x1] = iblock == 0x0 ? init : v[iblock * elems_per_block]
 end
 
 
