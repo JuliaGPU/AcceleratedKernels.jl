@@ -264,12 +264,10 @@ function mapreduce_nd(
         # grid-strides across remaining outputs if fewer blocks than outputs were
         # launched.
         launch_blocks = min(dst_size, TARGET_BLOCKS)
-        kernel! = _mapreduce_nd_by_block!(backend, block_size)
-        kernel!(
-            buffer, dst, f, op, init, neutral,
+        _launch_mapreduce_nd_by_block!(
+            backend, block_size, buffer, dst, f, op, init, neutral,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
-            ndrange=(block_size * launch_blocks,),
         )
     elseif dst_size == 1 || dst_size < GS_DST_CUTOFF
         # Very few outputs, large reduction: split each output's reduction across
@@ -306,12 +304,10 @@ function mapreduce_nd(
         else
             # reduce_groups collapsed to 1 (e.g. reduce_size <= block_size): just do a
             # single-block-per-output reduction directly, no partial array needed.
-            kernel! = _mapreduce_nd_by_block!(backend, block_size)
-            kernel!(
-                buffer, dst, f, op, init, neutral,
+            _launch_mapreduce_nd_by_block!(
+                backend, block_size, buffer, dst, f, op, init, neutral,
                 base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
                 dst_size, reduce_size, dst_size,
-                ndrange=(block_size * dst_size,),
             )
         end
     else
@@ -319,12 +315,10 @@ function mapreduce_nd(
         # Cap launched blocks at TARGET_BLOCKS; each block handles
         # ceil(dst_size / launch_blocks) outputs sequentially.
         launch_blocks = min(dst_size, TARGET_BLOCKS)
-        kernel! = _mapreduce_nd_by_block!(backend, block_size)
-        kernel!(
-            buffer, dst, f, op, init, neutral,
+        _launch_mapreduce_nd_by_block!(
+            backend, block_size, buffer, dst, f, op, init, neutral,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
-            ndrange=(block_size * launch_blocks,),
         )
     end
 
@@ -392,6 +386,70 @@ function _mapreduce_wrapper_offset(src::SubArray, p)
     end
 end
 _mapreduce_wrapper_offset(src, p) = 0
+
+function _buffer_is_16byte_aligned(buffer)
+    applicable(pointer, buffer) || return false
+    ptr = try
+        pointer(buffer)
+    catch
+        return false
+    end
+    applicable(UInt, ptr) || return false
+    return UInt(ptr) % 16 == 0
+end
+
+function _contiguous_vector_width(
+    buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
+)
+    T = eltype(buffer)
+    isprimitivetype(T) && sizeof(T) in (4, 8) || return 0
+
+    W = 16 ÷ sizeof(T)
+    reduce_strides == (1,) || return 0
+    base_offset % W == 0 || return 0
+    Base.all(s -> s % W == 0, outer_strides) || return 0
+    _buffer_is_16byte_aligned(buffer) || return 0
+
+    # The vector kernel uses UInt32 indices. Leave room for the final grid-stride
+    # increment so it cannot wrap after the last vector load.
+    UInt128(reduce_size) + UInt128(block_size * W) <= typemax(UInt32) || return 0
+    return W
+end
+
+function _launch_mapreduce_nd_by_block!(
+    backend, block_size, buffer, dst, f, op, init, neutral,
+    base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+    output_size, reduce_size, num_blocks,
+)
+    W = _contiguous_vector_width(
+        buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
+    )
+    if W == 4
+        kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
+        kernel!(
+            buffer, dst, f, op, init, neutral,
+            base_offset, outer_strides, outer_sizes,
+            output_size, reduce_size, num_blocks, Val(4),
+            ndrange=(block_size * num_blocks,),
+        )
+    elseif W == 2
+        kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
+        kernel!(
+            buffer, dst, f, op, init, neutral,
+            base_offset, outer_strides, outer_sizes,
+            output_size, reduce_size, num_blocks, Val(2),
+            ndrange=(block_size * num_blocks,),
+        )
+    else
+        kernel! = _mapreduce_nd_by_block!(backend, block_size)
+        kernel!(
+            buffer, dst, f, op, init, neutral,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            output_size, reduce_size, num_blocks,
+            ndrange=(block_size * num_blocks,),
+        )
+    end
+end
 
 # The reduced-extent index space: full axes along reduced dimensions, a single
 # index (`OneTo(1)`) along kept dimensions. Combined with `max(Iother, Ireduce)`
@@ -631,6 +689,64 @@ end
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
             acc = op(acc, f(src[input_base + off + 0x1]))
             j  += N
+        end
+
+        sdata[ithread + 0x1] = acc
+        @synchronize()
+
+        @inline reduce_group!(@context, op, sdata, N, ithread)
+
+        if ithread == 0x0
+            dst[iout + 0x1] = op(init, sdata[0x1])
+        end
+
+        next_iout = iout + num_blocks
+        next_iout >= output_size && break
+
+        @synchronize()
+        iout = next_iout
+    end
+end
+
+# Fold a vector into the thread-local accumulator. `W` is known at compile time.
+@inline _acc_lanes(f, op, acc, v::Vec{W}) where {W} =
+    foldl(op, ntuple(k -> f(@inbounds v[k]), Val(W)); init = acc)
+
+@inline _unval(::Val{V}) where {V} = V
+
+# Stride-1 by-block reduction using one aligned 128-bit load per thread iteration.
+# The host launcher verifies the pointer, row alignment, and UInt32 index bound.
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block_contiguous!(
+    src, dst,
+    f, op, init, neutral,
+    base_offset,
+    outer_strides, outer_sizes,
+    output_size, reduce_size, num_blocks,
+    valW,
+)
+    @uniform N = @groupsize()[1]
+    @uniform T = eltype(src)
+    @uniform W = _unval(valW)
+    sdata = @localmem eltype(dst) (N,)
+
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+    iout = iblock
+    while true
+        input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
+
+        acc     = neutral
+        rs      = UInt32(reduce_size)
+        jw      = UInt32(ithread) * UInt32(W)
+        stridew = UInt32(N) * UInt32(W)
+        while jw + UInt32(W - 1) < rs
+            v = vloada(Vec{W, T}, pointer(src, input_base + jw + 0x1))
+            acc = _acc_lanes(f, op, acc, v)
+            jw += stridew
+        end
+        while jw < rs
+            acc = op(acc, f(src[input_base + jw + 0x1]))
+            jw += UInt32(1)
         end
 
         sdata[ithread + 0x1] = acc

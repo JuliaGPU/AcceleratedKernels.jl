@@ -279,7 +279,75 @@ end
             sum(vh; init=Int32(0), dims)
     end
 
+    if !prefer_threads
+        # Aligned stride-1 reductions use 128-bit loads for 4- and 8-byte elements.
+        for T in valid_backend_eltypes(BACKEND, (Float32, Int32, UInt32, Float64, Int64, UInt64))
+            vh = T <: AbstractFloat ? rand(T, 1024, 1024) : rand(T(1):T(100), 1024, 1024)
+            v = array_from_host(vh)
+            @test AK._contiguous_vector_width(v, 0, (1024,), (1,), 1024, 256) ==
+                16 ÷ sizeof(T)
+            r = Array(AK.reduce(+, v; prefer_threads, init=zero(T), dims=1))
+            @test T <: AbstractFloat ? r ≈ sum(vh; dims=1) : r == sum(vh; dims=1)
+
+            wh = T <: AbstractFloat ? rand(T, 256, 32, 16) : rand(T(1):T(100), 256, 32, 16)
+            w = array_from_host(wh)
+            rw = Array(AK.reduce(+, w; prefer_threads, init=zero(T), dims=1))
+            @test T <: AbstractFloat ? rw ≈ sum(wh; dims=1) : rw == sum(wh; dims=1)
+        end
+
+        # Apply the map lane-wise and preserve non-additive neutral elements.
+        fh = rand(Float32, 256, 1024)
+        fv = array_from_host(fh)
+        @test Array(AK.mapreduce(abs2, +, fv; prefer_threads, init=0.0f0, dims=1)) ≈
+            mapreduce(abs2, +, fh; dims=1)
+
+        mh = rand(Int32(1):Int32(1000), 256, 1024)
+        mv = array_from_host(mh)
+        @test Array(AK.reduce(min, mv; prefer_threads, init=typemax(Int32), neutral=typemax(Int32), dims=1)) ==
+            minimum(mh; dims=1)
+        @test Array(AK.reduce(max, mv; prefer_threads, init=typemin(Int32), neutral=typemin(Int32), dims=1)) ==
+            maximum(mh; dims=1)
+
+        # Exercise scalar tails in both by-block dispatch branches.
+        ph = rand(Float32, 1028, 2048)
+        p = array_from_host(ph)
+        for rows in (1026, 1025)
+            @test Array(AK.reduce(+, @view(p[1:rows, :]); prefer_threads, init=0.0f0, dims=1)) ≈
+                sum(@view(ph[1:rows, :]); dims=1)
+        end
+
+        gh = rand(Float32, 1028, 64)
+        g = array_from_host(gh)
+        @test Array(AK.reduce(+, @view(g[1:1025, :]); prefer_threads, init=0.0f0, dims=1)) ≈
+            sum(@view(gh[1:1025, :]); dims=1)
+
+        qh = rand(Int64(1):Int64(100), 1028, 2048)
+        q = array_from_host(qh)
+        @test Array(AK.reduce(+, @view(q[1:1027, :]); prefer_threads, init=Int64(0), dims=1)) ==
+            sum(@view(qh[1:1027, :]); dims=1)
+
+        # Misaligned rows and offsets fall back to scalar loads.
+        rh = rand(Float32, 1027, 2048)
+        r = array_from_host(rh)
+        @test AK._contiguous_vector_width(r, 0, (1027,), (1,), 1024, 256) == 0
+        @test Array(AK.reduce(+, @view(r[1:1024, :]); prefer_threads, init=0.0f0, dims=1)) ≈
+            sum(@view(rh[1:1024, :]); dims=1)
+
+        bh = rand(Int32(1):Int32(100), 260, 1024)
+        b = array_from_host(bh)
+        @test AK._contiguous_vector_width(b, 2, (260,), (1,), 258, 256) == 0
+        @test Array(AK.reduce(+, @view(b[3:end, :]); prefer_threads, init=Int32(0), dims=1)) ==
+            Base.reduce(+, @view(bh[3:end, :]); init=Int32(0), dims=1)
+    end
+
     if prefer_threads
+        storage = Vector{UInt8}(undef, 64)
+        GC.@preserve storage begin
+            offset = Int(mod(-UInt(pointer(storage)), 16)) + 4
+            misaligned = unsafe_wrap(Array, Ptr{Float32}(pointer(storage) + offset), 4)
+            @test AK._contiguous_vector_width(misaligned, 0, (4,), (1,), 4, 256) == 0
+        end
+
         # The CPU fallback should not require strided storage.
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.reduce(+, vh, BACKEND; prefer_threads, init=0, dims=(1,2))) ==
