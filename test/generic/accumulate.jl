@@ -122,6 +122,27 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
                       temp=array_from_host(zeros(Int64, 1000)),
                       temp_flags=array_from_host(zeros(Int8, 1000)))
     @test Array(y) == 0:999
+
+    # Cross-block coherence: small tiles (block_size 16-64, 1 item/thread) maximise the number of
+    # inter-block publish/consume handoffs. For DecoupledLookback each handoff relies on the
+    # device-scope fence, so many-block non-uniform scans in both directions guard against a fence
+    # that is not device scoped (the incoherent lookback would drop whole-block carries).
+    for _ in 1:100
+        num_elems = rand(5_000:200_000)
+        block_size = rand((16, 32, 64))
+        xh = rand(Int32(-9):Int32(9), num_elems)
+
+        yi = array_from_host(xh)
+        AK.accumulate!(+, yi; prefer_threads, init=Int32(0), inclusive=true,
+                       block_size, items_per_thread=1, alg)
+        @test Array(yi) == cumsum(xh)
+
+        init = rand(Int32(-50):Int32(50))
+        ye = array_from_host(xh)
+        AK.accumulate!(+, ye; prefer_threads, init, inclusive=false,
+                       block_size, items_per_thread=1, alg)
+        @test Array(ye) == (cumsum(xh) .- xh) .+ init
+    end
 end
 
 

@@ -10,6 +10,11 @@ const ACC_FLAG_P::UInt8 = 1             # Only current block's prefix available
 end
 
 
+# Device-scope memory fence for the DecoupledLookback scan. Each GPU backend overrides it with a
+# native device fence in its package extension; a plain UnsafeAtomics.fence is not device scoped.
+@inline _decoupled_fence() = nothing
+
+
 # Register-raking block scan with striped loads and stores.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
     op, v, init, neutral,
@@ -147,7 +152,7 @@ end
             UnsafeAtomics.monotonic,
         )
         if flag == ACC_FLAG_A
-            UnsafeAtomics.fence(UnsafeAtomics.acquire)
+            _decoupled_fence()          # acquire: order the `v` read after the flag load
             running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * ITEMS])
             break
         else
@@ -169,7 +174,7 @@ end
 
     # Publish writes to `v` before marking the block complete.
     @synchronize()
-    UnsafeAtomics.fence(UnsafeAtomics.release)
+    _decoupled_fence()                  # release: order the flag store after the `v` writes
     if ithread == 0x0
         UnsafeAtomics.store!(
             pointer(flags, iblock + 0x1),

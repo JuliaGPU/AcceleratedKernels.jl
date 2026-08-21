@@ -13,17 +13,29 @@ SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 UnsafeAtomics = "013be700-e6cd-48c3-b4a1-df204f14c38f"
 
 [weakdeps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
 oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 
 [extensions]
+AcceleratedKernelsAMDGPUExt = "AMDGPU"
+AcceleratedKernelsCUDAExt = "CUDA"
+AcceleratedKernelsMetalExt = "Metal"
+AcceleratedKernelsOpenCLExt = "OpenCL"
 AcceleratedKernelsoneAPIExt = "oneAPI"
 
 [compat]
+AMDGPU = "1, 2"
 ArgCheck = "2"
 Atomix = "0.1, 1"
+CUDA = "5, 6"
 GPUArraysCore = "0.2.0"
 KernelAbstractions = "0.9.34, 0.10"
 Markdown = "1"
+Metal = "1.10, 2"
+OpenCL = "0.10"
 SIMD = "3"
 UnsafeAtomics = "0.3.0"
 julia = "1.10"
