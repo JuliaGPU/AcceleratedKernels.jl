@@ -44,12 +44,13 @@ include("accumulate_nd.jl")
 
         # GPU settings
         block_size::Int=256,
+        items_per_thread::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
 
     accumulate!(
-        op, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(v);
+        op, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(dst);
         init,
         neutral=neutral_element(op, eltype(dst)),
         dims::Union{Nothing, Int}=nothing,
@@ -64,6 +65,7 @@ include("accumulate_nd.jl")
 
         # GPU settings
         block_size::Int=256,
+        items_per_thread::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
@@ -99,13 +101,18 @@ For the 1D case (`dims=nothing`), the `alg` can be one of the following:
 
 A different, unique algorithm is used for the multi-dimensional case (`dims` is an integer).
 
-The `block_size` should be a power of 2 and greater than 0.
+The `block_size` should be a power of 2 and greater than 0. `items_per_thread` controls how many
+elements each thread processes per block and does not need to be a power of 2. Its default is at
+most 8, reduced for wide element types to limit shared-memory use.
 
 The temporaries are only used for the 1D case (`dims=nothing`): `temp` stores per-block aggregates;
 `temp_flags` is only used for the `DecoupledLookback()` algorithm for flagging if blocks are ready;
-they should both have at least `(length(v) + 2 * block_size - 1) ÷ (2 * block_size)` elements; also,
-`eltype(v) === eltype(temp)` is required; the elements in `temp_flags` can be any integers, but
-`UInt8` is used by default to reduce memory usage.
+they should both have at least `cld(length(v), block_size * items_per_thread)` elements, using the
+effective default described above when `items_per_thread` is omitted.
+Also, `eltype(v) === eltype(temp)` is required; the elements in `temp_flags` can be any integers,
+but `UInt8` is used by default to reduce memory usage. Multi-block exclusive scans with
+`DecoupledLookback()` use two epilogue kernels to shift the result in place; they reuse `temp` for
+tile-boundary values and do not allocate a full-array copy.
 
 # Examples
 Example computing an inclusive prefix sum (the typical GPU "scan"):
@@ -163,16 +170,21 @@ function _accumulate_impl!(
 
     # GPU settings
     block_size::Int=256,
+    items_per_thread::Union{Nothing, Int}=nothing,
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
     if isnothing(dims)
         return if use_gpu_algorithm(backend, prefer_threads)
+            items_per_thread = something(
+                items_per_thread,
+                default_scan_items_per_thread(backend, eltype(v), block_size),
+            )
             accumulate_1d_gpu!(
                 op, v, backend, alg;
                 init, neutral, inclusive,
                 max_tasks, min_elems,
-                block_size, temp, temp_flags,
+                block_size, items_per_thread, temp, temp_flags,
             )
         else
             accumulate_1d_cpu!(
@@ -210,6 +222,7 @@ end
 
         # GPU settings
         block_size::Int=256,
+        items_per_thread::Union{Nothing, Int}=nothing,
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
@@ -231,4 +244,3 @@ function accumulate(
     )
     vcopy
 end
-

@@ -1,190 +1,154 @@
-const ACC_NUM_BANKS::UInt8 = 32
 const ACC_LOG_NUM_BANKS::UInt8 = 5
 
 const ACC_FLAG_A::UInt8 = 0             # Aggregate of all previous prefixes finished
 const ACC_FLAG_P::UInt8 = 1             # Only current block's prefix available
 
 
+# Bank-conflict-avoiding padding, used by the multi-dimensional scan (accumulate_nd.jl)
 @inline function conflict_free_offset(n)
-    # Two possible offsets
     n >> ACC_LOG_NUM_BANKS
-    # n >> ACC_NUM_BANKS + n >> (2 * ACC_LOG_NUM_BANKS)
 end
 
 
+# Register-raking block scan with striped loads and stores.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
     op, v, init, neutral,
     inclusive,
-    flags, prefixes,                # one per block
-)
-    # NOTE: shmem_size MUST be greater than 2 * block_size
-    # NOTE: block_size MUST be a power of 2
-    len = length(v)
+    flags, prefixes,
+    ::Val{ITEMS},
+) where ITEMS
+    # `block_size` is a power of two.
     @uniform block_size = @groupsize()[1]
-    temp = @localmem eltype(v) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
+    tile = @localmem eltype(v) (block_size * ITEMS,)
+    thread_totals = @localmem eltype(v) (block_size,)
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-
-    # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1
+    # Internal indices are zero-based; add one only when indexing arrays.
+    len = length(v)
+    iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
+    block_offset = iblock * block_size * ITEMS
 
-    num_blocks = @ndrange()[1] ÷ block_size
-    block_offset = iblock * block_size * 0x2            # Processing two elements per thread
-
-    # Copy two elements from the main array; offset indices to avoid bank conflicts
-    ai = ithread
-    bi = ithread + block_size
-
-    bank_offset_a = conflict_free_offset(ai)
-    bank_offset_b = conflict_free_offset(bi)
-
-    if block_offset + ai < len
-        temp[ai + bank_offset_a + 0x1] = v[block_offset + ai + 0x1]
-    else
-        temp[ai + bank_offset_a + 0x1] = neutral
+    # Load a tile in striped order.
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        gi = block_offset + p
+        tile[p + 0x1] = gi < len ? v[gi + 0x1] : neutral
+        j += 1
     end
+    @synchronize()
 
-    if block_offset + bi < len
-        temp[bi + bank_offset_b + 0x1] = v[block_offset + bi + 0x1]
-    else
-        temp[bi + bank_offset_b + 0x1] = neutral
+    # Scan each thread's blocked run.
+    run = ithread * ITEMS
+    acc = neutral
+    k = 0
+    while k < ITEMS
+        acc = op(acc, tile[run + k + 0x1])
+        tile[run + k + 0x1] = acc
+        k += 1
     end
+    thread_totals[ithread + 0x1] = acc
+    @synchronize()
 
-    # Build block reduction down
-    offset = typeof(ithread)(1)
-    next_pow2 = block_size * 0x2
-    d = next_pow2 >> 0x1
-    while d > 0x0             # TODO: unroll this like in reduce.jl ?
+    # Scan the per-thread totals. Later blocks receive their carry from the
+    # second kernel.
+    seed = iblock == 0x0 ? init : neutral
+
+    # Use index-sized counters for block sizes of 256 or more.
+    offset = one(ithread)
+    d = block_size >> 0x1
+    while d > 0x0
         @synchronize()
-
         if ithread < d
-            _ai = offset * (0x2 * ithread + 0x1) - 0x1
-            _bi = offset * (0x2 * ithread + 0x2) - 0x1
-            _ai += conflict_free_offset(_ai)
-            _bi += conflict_free_offset(_bi)
-
-            temp[_bi + 0x1] = op(temp[_bi + 0x1], temp[_ai + 0x1])
+            ai = offset * (0x2 * ithread + 0x1) - 0x1
+            bi = offset * (0x2 * ithread + 0x2) - 0x1
+            thread_totals[bi + 0x1] =
+                op(thread_totals[bi + 0x1], thread_totals[ai + 0x1])
         end
-
         offset = offset << 0x1
         d = d >> 0x1
     end
 
-    # Flush last element
+    @synchronize()
+    block_total = op(seed, thread_totals[block_size])
+    @synchronize()
     if ithread == 0x0
-        offset0 = conflict_free_offset(next_pow2 - 0x1)
-        temp[next_pow2 - 0x1 + offset0 + 0x1] = iblock == 0x0 ? init : neutral
+        thread_totals[block_size] = seed
     end
 
-    # Build block accumulation up
-    d = typeof(ithread)(1)
-    while d < next_pow2
+    # Down-sweep to an exclusive scan.
+    d = one(ithread)
+    while d < block_size
         offset = offset >> 0x1
         @synchronize()
-
         if ithread < d
-            _ai = offset * (0x2 * ithread + 0x1) - 0x1
-            _bi = offset * (0x2 * ithread + 0x2) - 0x1
-            _ai += conflict_free_offset(_ai)
-            _bi += conflict_free_offset(_bi)
-
-            t = temp[_ai + 0x1]
-            temp[_ai + 0x1] = temp[_bi + 0x1]
-            temp[_bi + 0x1] = op(temp[_bi + 0x1], t)
+            ai = offset * (0x2 * ithread + 0x1) - 0x1
+            bi = offset * (0x2 * ithread + 0x2) - 0x1
+            t = thread_totals[ai + 0x1]
+            thread_totals[ai + 0x1] = thread_totals[bi + 0x1]
+            thread_totals[bi + 0x1] = op(thread_totals[bi + 0x1], t)
         end
-
         d = d << 0x1
     end
+    @synchronize()
+    thread_prefix = thread_totals[ithread + 0x1]
 
-    # For exclusive ScanPrefixes scans, the local exclusive output is already correct.
-    # DecoupledLookback still shifts non-first blocks because _accumulate_previous!
-    # expects each block's last value to be globally inclusive.
-    if inclusive || (iblock != 0x0 && !isnothing(flags))
-        # To compute an inclusive scan, shift elements left...
-        @synchronize()
-        t1 = temp[ai + bank_offset_a + 0x1]
-        t2 = temp[bi + bank_offset_b + 0x1]
-        @synchronize()
-
-        if ai > 0x0
-            temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
-        end
-        temp[bi - 0x1 + conflict_free_offset(bi - 0x1) + 0x1] = t2
-
-        # ...and accumulate the last value too
-        if bi == 0x2 * block_size - 0x1
-            if iblock < num_blocks - 0x1
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[(iblock + 0x1) * block_size * 0x2])
-            else
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[len])
-            end
-        end
+    # DecoupledLookback keeps later blocks inclusive until the carry pass.
+    block_inclusive = inclusive || (iblock != 0x0 && !isnothing(flags))
+    prev = neutral
+    k = 0
+    while k < ITEMS
+        r = tile[run + k + 0x1]
+        tile[run + k + 0x1] =
+            block_inclusive ? op(thread_prefix, r) : op(thread_prefix, prev)
+        prev = r
+        k += 1
     end
-
     @synchronize()
 
-    # Write this block's final prefix to global array and set flag to "block prefix computed"
-    if bi == 0x2 * block_size - 0x1
-
-        # Known at compile-time; used in the first pass of the ScanPrefixes algorithm
+    if ithread == 0x0
         if !isnothing(prefixes)
-            if isnothing(flags) && !inclusive
-                last_global = block_offset + bi
-                if last_global < len
-                    prefixes[iblock + 0x1] = op(temp[bi + bank_offset_b + 0x1], v[last_global + 0x1])
-                else
-                    prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
-                end
-            else
-                prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
-            end
+            prefixes[iblock + 0x1] = block_total
         end
-
-        # Known at compile-time; used only in the DecoupledLookback algorithm
         if !isnothing(flags)
             flags[iblock + 0x1] = ACC_FLAG_P
         end
     end
 
-    if block_offset + ai < len
-        v[block_offset + ai + 0x1] = temp[ai + bank_offset_a + 0x1]
-    end
-    if block_offset + bi < len
-        v[block_offset + bi + 0x1] = temp[bi + bank_offset_b + 0x1]
+    # Store the tile in striped order.
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        gi = block_offset + p
+        if gi < len
+            v[gi + 0x1] = tile[p + 0x1]
+        end
+        j += 1
     end
 end
 
 
+# Add each block's running prefix, stopping at a completed predecessor.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous!(
-    op, v, flags, @Const(prefixes),
-)
-
+    op, v, flags, @Const(prefixes), ::Val{ITEMS},
+) where ITEMS
     len = length(v)
-    block_size = @groupsize()[1]
+    @uniform block_size = @groupsize()[1]
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-
-    # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1 + 0x1              # Skipping first block
+    iblock = @index(Group, Linear)
     ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * 0x2                # Processing two elements per thread
+    block_offset = iblock * block_size * ITEMS
 
-    # Each block looks back to find running prefix sum
-    running_prefix = prefixes[iblock - 0x1 + 0x1]
+    running_prefix = prefixes[iblock]
     inspected_block = signed(typeof(iblock))(iblock) - 0x2
     while inspected_block >= 0x0
-        # Opportunistic: a previous block finished everything
-        if UnsafeAtomics.load(pointer(flags, inspected_block + 0x1), UnsafeAtomics.monotonic) == ACC_FLAG_A
-            UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from v)
-            # Previous blocks (except last) always have filled values in v, so index is inbounds
-            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * 0x2])
+        flag = UnsafeAtomics.load(
+            pointer(flags, inspected_block + 0x1),
+            UnsafeAtomics.monotonic,
+        )
+        if flag == ACC_FLAG_A
+            UnsafeAtomics.fence(UnsafeAtomics.acquire)
+            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * ITEMS])
             break
         else
             running_prefix = op(running_prefix, prefixes[inspected_block + 0x1])
@@ -193,73 +157,99 @@ end
         inspected_block -= 0x1
     end
 
-    # Now we have aggregate prefix of all previous blocks, add it to all our elements
-    ai = ithread
-    if block_offset + ai < len
-        v[block_offset + ai + 0x1] = op(running_prefix, v[block_offset + ai + 0x1])
+    # Add the aggregate prefix of all previous blocks to each element.
+    j = 0
+    while j < ITEMS
+        gi = block_offset + j * block_size + ithread
+        if gi < len
+            v[gi + 0x1] = op(running_prefix, v[gi + 0x1])
+        end
+        j += 1
     end
 
-    bi = ithread + block_size
-    if block_offset + bi < len
-        v[block_offset + bi + 0x1] = op(running_prefix, v[block_offset + bi + 0x1])
-    end
-
-    # Set flag for "aggregate of all prefixes up to this block finished"
-    # There are two synchronization concerns here:
-    # 1. Withing a group we want to ensure that all writed to `v` have occured before setting the flag.
-    # 2. Between groups we need to use a fence and atomic load/store to ensure that memory operations are not re-ordered
-    @synchronize() # within-block
-    # Note: This fence is needed to ensure that the flag is not set before copying into v.
-    #       See https://doc.rust-lang.org/std/sync/atomic/fn.fence.html
-    #       for more details.
-    #       We use the happens-before relation between stores to `v` and the store to `flags`.
+    # Publish writes to `v` before marking the block complete.
+    @synchronize()
     UnsafeAtomics.fence(UnsafeAtomics.release)
     if ithread == 0x0
-        UnsafeAtomics.store!(pointer(flags, iblock + 0x1), convert(eltype(flags), ACC_FLAG_A), UnsafeAtomics.monotonic)
+        UnsafeAtomics.store!(
+            pointer(flags, iblock + 0x1),
+            convert(eltype(flags), ACC_FLAG_A),
+            UnsafeAtomics.monotonic,
+        )
     end
 end
 
 
+# Add pre-scanned block prefixes to each tile.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous_coupled_preblocks!(
-    op, v, prefixes,
-)
-    # No decoupled lookback
+    op, v, prefixes, ::Val{ITEMS},
+) where ITEMS
     len = length(v)
-    block_size = @groupsize()[1]
+    @uniform block_size = @groupsize()[1]
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-
-    # Group (block) and local (thread) indices
-    iblock = @index(Group, Linear) - 0x1 + 0x1              # Skipping first block
+    iblock = @index(Group, Linear)
     ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * 0x2                # Processing two elements per thread
+    block_offset = iblock * block_size * ITEMS
 
-    # Each block looks back to find running prefix sum
-    running_prefix = prefixes[iblock - 0x1 + 0x1]
+    running_prefix = prefixes[iblock]
 
-    # The prefixes were pre-accumulated, which means (for block_size=N):
-    #   - If there were N or fewer prefixes (so fewer than N*N elements in v to begin with), the
-    #     prefixes were fully accumulated and we can use them directly.
-    #   - If there were more than N prefixes, each chunk of N prefixes was accumulated, but not
-    #     along the chunks. We need to accumulate the prefixes of the previous chunks into
-    #     running_prefix.
-    num_preblocks = (iblock - 0x1) ÷ (block_size * 0x2)
+    # If there were more than `block_size*ITEMS` prefixes, each chunk was scanned
+    # internally but not across chunks; fold the earlier chunks' totals in here.
+    num_preblocks = (iblock - 0x1) ÷ (block_size * ITEMS)
     for i in 0x1:num_preblocks
-        running_prefix = op(running_prefix, prefixes[i * block_size * 0x2])
+        running_prefix = op(running_prefix, prefixes[i * block_size * ITEMS])
     end
 
-    # Now we have aggregate prefix of all previous blocks, add it to all our elements
-    ai = ithread
-    if block_offset + ai < len
-        v[block_offset + ai + 0x1] = op(running_prefix, v[block_offset + ai + 0x1])
+    j = 0
+    while j < ITEMS
+        gi = block_offset + j * block_size + ithread
+        if gi < len
+            v[gi + 0x1] = op(running_prefix, v[gi + 0x1])
+        end
+        j += 1
     end
+end
 
-    bi = ithread + block_size
-    if block_offset + bi < len
-        v[block_offset + bi + 0x1] = op(running_prefix, v[block_offset + bi + 0x1])
+
+# Save the value preceding each tile before shifting the array in place.
+@kernel cpu=false inbounds=true function exclusive_prefixes_kernel!(
+    prefixes, @Const(v), init, elems_per_block,
+)
+    iblock = @index(Global, Linear) - 0x1
+    prefixes[iblock + 0x1] = iblock == 0x0 ? init : v[iblock * elems_per_block]
+end
+
+
+@kernel cpu=false inbounds=true unsafe_indices=true function exclusive_shift_kernel!(
+    v, @Const(prefixes), ::Val{ITEMS},
+) where ITEMS
+    @uniform block_size = @groupsize()[1]
+    tile = @localmem eltype(v) (block_size * ITEMS,)
+
+    len = length(v)
+    iblock = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+    block_offset = iblock * block_size * ITEMS
+
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        gi = block_offset + p
+        if gi < len
+            tile[p + 0x1] = v[gi + 0x1]
+        end
+        j += 1
+    end
+    @synchronize()
+
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        gi = block_offset + p
+        if gi < len
+            v[gi + 0x1] = p == 0x0 ? prefixes[iblock + 0x1] : tile[p]
+        end
+        j += 1
     end
 end
 
@@ -277,28 +267,30 @@ function accumulate_1d_gpu!(
 
     # GPU settings
     block_size::Int,
+    items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )
     # Correctness checks
     @argcheck block_size > 0
     @argcheck ispow2(block_size)
+    @argcheck items_per_thread > 0
 
     # Nothing to accumulate
     if length(v) == 0
         return v
     end
 
-    # Each thread will process two elements
-    elems_per_block = block_size * 2
+    elems_per_block = block_size * items_per_thread
     num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
+    items = Val(items_per_thread)
 
     if isnothing(temp)
         prefixes = similar(v, eltype(v), num_blocks)
     else
         @argcheck eltype(temp) === eltype(v)
         @argcheck length(temp) >= num_blocks
-        prefixes = temp
+        prefixes = view(temp, 1:num_blocks)
     end
 
     if isnothing(temp_flags)
@@ -306,17 +298,27 @@ function accumulate_1d_gpu!(
     else
         @argcheck eltype(temp_flags) <: Integer
         @argcheck length(temp_flags) >= num_blocks
-        flags = temp_flags
+        flags = view(temp_flags, 1:num_blocks)
     end
 
+    shift_to_exclusive = !inclusive && num_blocks > 1
+    block_inclusive = inclusive || shift_to_exclusive
+
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, init, neutral, inclusive, flags, prefixes,
+    kernel1!(op, v, init, neutral, block_inclusive, flags, prefixes, items,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
         kernel2! = _accumulate_previous!(backend, block_size)
-        kernel2!(op, v, flags, prefixes,
+        kernel2!(op, v, flags, prefixes, items,
                  ndrange=(num_blocks - 1) * block_size)
+    end
+
+    if shift_to_exclusive
+        exclusive_prefixes_kernel!(backend, block_size)(prefixes, v, init, elems_per_block,
+                                                        ndrange=num_blocks)
+        exclusive_shift_kernel!(backend, block_size)(v, prefixes, items,
+                                                     ndrange=num_blocks * block_size)
     end
 
     return v
@@ -336,45 +338,47 @@ function accumulate_1d_gpu!(
 
     # GPU settings
     block_size::Int,
+    items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )
     # Correctness checks
     @argcheck block_size > 0
     @argcheck ispow2(block_size)
+    @argcheck items_per_thread > 0
 
     # Nothing to accumulate
     if length(v) == 0
         return v
     end
 
-    # Each thread will process two elements
-    elems_per_block = block_size * 2
+    elems_per_block = block_size * items_per_thread
     num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
+    items = Val(items_per_thread)
 
     if isnothing(temp)
         prefixes = similar(v, eltype(v), num_blocks)
     else
         @argcheck eltype(temp) === eltype(v)
         @argcheck length(temp) >= num_blocks
-        prefixes = temp
+        prefixes = view(temp, 1:num_blocks)
     end
 
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, init, neutral, inclusive, nothing, prefixes,
+    kernel1!(op, v, init, neutral, inclusive, nothing, prefixes, items,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
 
         # Accumulate prefixes of all blocks; use neutral as init here to not reinclude init
         num_blocks_prefixes = (length(prefixes) + elems_per_block - 1) ÷ elems_per_block
-        kernel1!(op, prefixes, neutral, neutral, true, nothing, nothing,
+        kernel1!(op, prefixes, neutral, neutral, true, nothing, nothing, items,
                  ndrange=num_blocks_prefixes * block_size)
 
         # Prefixes are pre-accumulated (completely accumulated if num_blocks_prefixes == 1, or
         # partially, which we will account for in the coupled lookback)
         kernel2! = _accumulate_previous_coupled_preblocks!(backend, block_size)
-        kernel2!(op, v, prefixes,
+        kernel2!(op, v, prefixes, items,
                  ndrange=(num_blocks - 1) * block_size)
     end
 

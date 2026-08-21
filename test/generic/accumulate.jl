@@ -6,7 +6,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
 
     Random.seed!(0)
 
-    # Single block exlusive scan (each block processes two elements)
+    # Single-block exclusive scan
     for num_elems in 1:256
         x = array_from_host(ones(Int32, num_elems))
         y = copy(x)
@@ -33,20 +33,26 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         @test all(yh .== 0:length(yh) - 1)
     end
 
-    # Non-uniform data exposes ScanPrefixes block-carry bugs that all-ones data masks.
-    # NOTE: DecoupledLookback() is excluded here: its exclusive multi-block carries are still
-    # incorrect on non-uniform data (the all-ones exclusive tests above mask that bug). Fixing it
-    # requires a coherent cross-block aggregate publish that is tracked separately.
-    if alg isa AK.ScanPrefixes
-        for _ in 1:200
+    # Non-uniform data exposes block-carry bugs that all-ones data masks.
+    for items_per_thread in (1, 3, 8)
+        for _ in 1:50
             num_elems = rand(513:100_000)
             block_size = rand([16, 32, 64, 128, 256])
             init = rand(Int32(-100):Int32(100))
             xh = rand(Int32(-9):Int32(9), num_elems)
             y = array_from_host(xh)
-            AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size, alg)
+            AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size,
+                           items_per_thread, alg)
             @test Array(y) == (cumsum(xh) .- xh) .+ init
         end
+    end
+
+    # The default limits shared-memory use for wide element types.
+    if KernelAbstractions.supports_float64(BACKEND)
+        xh = ComplexF64.(1:4097)
+        y = array_from_host(xh)
+        AK.accumulate!(+, y; prefer_threads, init=0.0 + 0.0im, alg)
+        @test Array(y) == cumsum(xh)
     end
 
     # Large inclusive scan
@@ -104,15 +110,18 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.accumulate(+, y; prefer_threads, init=10, dims=2, inclusive=false, bad=:kwarg)
 
-    # Testing different settings
-    AK.accumulate!(+, array_from_host(ones(Int32, 1000)); init=0, inclusive=false,
-                prefer_threads, block_size=128, alg,
-                temp=array_from_host(zeros(Int32, 1000)),
-                temp_flags=array_from_host(zeros(Int8, 1000)))
-    AK.accumulate(+, array_from_host(ones(Int32, 1000)); init=0, inclusive=false,
-                prefer_threads, block_size=128, alg,
-                temp=array_from_host(zeros(Int64, 1000)),
-                temp_flags=array_from_host(zeros(Int8, 1000)))
+    # Oversized temporaries are allowed.
+    y = array_from_host(ones(Int32, 1000))
+    AK.accumulate!(+, y; init=0, inclusive=false, prefer_threads, block_size=128, alg,
+                   temp=array_from_host(zeros(Int32, 1000)),
+                   temp_flags=array_from_host(zeros(Int8, 1000)))
+    @test Array(y) == 0:999
+
+    y = AK.accumulate(+, array_from_host(ones(Int32, 1000)); init=0, inclusive=false,
+                      prefer_threads, block_size=128, alg,
+                      temp=array_from_host(zeros(Int64, 1000)),
+                      temp_flags=array_from_host(zeros(Int8, 1000)))
+    @test Array(y) == 0:999
 end
 
 
