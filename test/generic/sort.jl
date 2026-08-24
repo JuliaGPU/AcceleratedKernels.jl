@@ -831,4 +831,101 @@ end
         @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.RadixSort())
     end
 end
+
+
+@testset "sort_dims" begin
+    Random.seed!(0)
+
+    # Fuzzy correctness against Base.sort(A; dims) for 2D and 3D arrays
+    for _ in 1:200
+        nd = rand(2:3)
+        sz = ntuple(_ -> rand(1:15), nd)
+        for T in valid_backend_eltypes(BACKEND, (Int32, Float32))
+            A_h = rand(T, sz...)
+            A   = array_from_host(A_h)
+            for dim in 1:nd, rev in (false, true)
+                @test Array(AK.sort(A; prefer_threads, dims=dim, rev=rev)) ==
+                      sort(A_h; dims=dim, rev=rev)
+            end
+        end
+    end
+
+    # by= and order= act on the values within each slice
+    A_h = rand(Float32, 17, 23)
+    A   = array_from_host(A_h)
+    @test Array(AK.sort(A; prefer_threads, dims=1, by=x->-x)) == sort(A_h; dims=1, by=x->-x)
+    @test Array(AK.sort(A; prefer_threads, dims=2,
+                        order=Base.Order.Reverse)) == sort(A_h; dims=2, order=Base.Order.Reverse)
+
+    # In-place sorts each slice, leaves the array otherwise intact
+    A_h = rand(Int32, 40, 31)
+    A   = array_from_host(A_h)
+    AK.sort!(A; prefer_threads, dims=2)
+    @test Array(A) == sort(A_h; dims=2)
+
+    # dims=1 on a vector is a full sort
+    v_h = rand(Int32, 5000)
+    v   = array_from_host(v_h)
+    @test Array(AK.sort(v; prefer_threads, dims=1)) == sort(v_h)
+
+    # Singleton slice dimension is a no-op
+    A_h = rand(Float32, 1, 64)
+    A   = array_from_host(A_h)
+    @test Array(AK.sort(A; prefer_threads, dims=1)) == A_h
+
+    # Out-of-range dimension errors
+    A = array_from_host(rand(Float32, 8, 8))
+    @test_throws ArgumentError AK.sort(A; prefer_threads, dims=3)
+    @test_throws ArgumentError AK.sort(A; prefer_threads, dims=0)
+end
+
+
+@testset "sortperm_dims" begin
+    Random.seed!(0)
+
+    # Fuzzy correctness against Base.sortperm(A; dims); small integer ranges give many ties, so
+    # matching Base's index array exactly also checks that the permutation is stable
+    for _ in 1:200
+        nd = rand(2:3)
+        sz = ntuple(_ -> rand(1:15), nd)
+        for T in valid_backend_eltypes(BACKEND, (Int32, Float32))
+            A_h = T <: Integer ? rand(T(0):T(4), sz...) : rand(T, sz...)
+            A   = array_from_host(A_h)
+            for dim in 1:nd, rev in (false, true)
+                ix = Array(AK.sortperm(A; prefer_threads, dims=dim, rev=rev))
+                @test ix == sortperm(A_h; dims=dim, rev=rev)
+                @test A_h[ix] == sort(A_h; dims=dim, rev=rev)
+            end
+        end
+    end
+
+    # by= and order= act on the values within each slice
+    A_h = rand(Float32, 17, 23)
+    A   = array_from_host(A_h)
+    @test Array(AK.sortperm(A; prefer_threads, dims=1, by=x->-x)) == sortperm(A_h; dims=1, by=x->-x)
+    @test Array(AK.sortperm(A; prefer_threads, dims=2,
+                            order=Base.Order.Reverse)) == sortperm(A_h; dims=2, order=Base.Order.Reverse)
+
+    # In-place fills ix with the same global linear indices as Base
+    A_h = rand(Int32(0):Int32(5), 40, 31)
+    A   = array_from_host(A_h)
+    ix  = array_from_host(zeros(Int, 40, 31))
+    AK.sortperm!(ix, A; prefer_threads, dims=2)
+    @test Array(ix) == sortperm(A_h; dims=2)
+
+    # dims=1 on a vector is a full sortperm
+    v_h = rand(Int32(0):Int32(9), 5000)
+    v   = array_from_host(v_h)
+    @test Array(AK.sortperm(v; prefer_threads, dims=1)) == sortperm(v_h)
+
+    # Singleton slice dimension yields the identity index array
+    A_h = rand(Float32, 1, 64)
+    A   = array_from_host(A_h)
+    @test Array(AK.sortperm(A; prefer_threads, dims=1)) == reshape(1:64, 1, 64)
+
+    # Out-of-range dimension errors
+    A = array_from_host(rand(Float32, 8, 8))
+    @test_throws ArgumentError AK.sortperm(A; prefer_threads, dims=3)
+    @test_throws ArgumentError AK.sortperm(A; prefer_threads, dims=0)
+end
 end
