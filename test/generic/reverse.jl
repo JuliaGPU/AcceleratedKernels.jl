@@ -114,8 +114,10 @@
             @test Array(dst) == reverse(h; dims=dim)
         end
 
-        # Multiple dimensions at once, plus dims=: (whole-array through the general path)
-        for shape in ([1, 2, 4, 3], [8, 8, 8]),
+        # Multiple dimensions at once, plus dims=: (dispatches to the flat whole-array path).
+        # The odd sizes of [7, 6, 5] exercise the in-place middle-plane swaps, where only the
+        # index ordering guard stops a pair from being swapped twice
+        for shape in ([1, 2, 4, 3], [8, 8, 8], [7, 6, 5]),
             dims in ((1, 2), (2, 3), (1, 3), :)
 
             h = rand(Float32, shape...)
@@ -126,6 +128,28 @@
 
             out = AK.reverse(array_from_host(h); dims=dims, prefer_threads)
             @test Array(out) == reverse(h; dims=dims)
+
+            src = array_from_host(h)
+            dst = array_from_host(zeros(Float32, shape...))
+            AK.reverse!(dst, src; dims=dims, prefer_threads)
+            @test Array(dst) == reverse(h; dims=dims)
+        end
+
+        # Any iterable of integers works, e.g. a Vector (Base only accepts tuples)
+        h = rand(Float32, 4, 5, 6)
+        out = AK.reverse(array_from_host(h); dims=[1, 3], prefer_threads)
+        @test Array(out) == reverse(h; dims=(1, 3))
+
+        # Empty arrays are returned unchanged
+        h = zeros(Float32, 0, 5)
+        for dims in (1, 2, (1, 2))
+            v = array_from_host(h)
+            @test Array(AK.reverse!(v; dims, prefer_threads)) == reverse(h; dims)
+
+            dst = array_from_host(copy(h))
+            @test Array(AK.reverse!(dst, v; dims, prefer_threads)) == reverse(h; dims)
+
+            @test Array(AK.reverse(v; dims, prefer_threads)) == reverse(h; dims)
         end
     end
 
@@ -136,5 +160,9 @@
         @test_throws ArgumentError AK.reverse!(v; dims=4, prefer_threads)
         @test_throws ArgumentError AK.reverse(v; dims=0, prefer_threads)
         @test_throws ArgumentError AK.reverse(v; dims=4, prefer_threads)
+
+        # Non-integer dims must throw rather than silently do nothing
+        @test_throws ArgumentError AK.reverse!(v; dims=1.5, prefer_threads)
+        @test_throws ArgumentError AK.reverse(v; dims=(1, 2.5), prefer_threads)
     end
 end

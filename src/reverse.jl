@@ -9,6 +9,8 @@ function _check_reverse_dims(A, dims)
     dims isa Colon && return
     applicable(iterate, dims) || throw(ArgumentError("dimension $dims is not iterable"))
     for d in dims                                       # an integer iterates once
+        d isa Integer ||
+            throw(ArgumentError("reversed dimension(s) must be integers, got $dims"))
         1 <= d <= ndims(A) ||
             throw(ArgumentError("dimension $dims is not 1 ≤ dims ≤ $(ndims(A))"))
     end
@@ -201,12 +203,7 @@ Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the alloca
 """
 function reverse(
     v::AbstractArray, backend::Backend=get_backend(v);
-    dims=:, kwargs...
+    kwargs...
 )
-    _check_reverse_dims(v, dims)
-    dst = similar(v)
-    if !(dims isa Colon)
-        return _reverse_dims!(dst, v, dims, backend; kwargs...)
-    end
-    reverse!(dst, v, backend; kwargs...)
+    reverse!(similar(v), v, backend; kwargs...)
 end
