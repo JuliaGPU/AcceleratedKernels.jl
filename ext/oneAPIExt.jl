@@ -1,4 +1,4 @@
-module AcceleratedKernelsoneAPIExt
+module oneAPIExt
 
 
 using oneAPI
@@ -44,4 +44,4 @@ function AK.all(
 end
 
 
-end   # module AcceleratedKernelsoneAPIExt
+end   # module oneAPIExt

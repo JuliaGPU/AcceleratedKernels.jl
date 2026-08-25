@@ -1,4 +1,4 @@
-module AcceleratedKernelsCUDACoreExt
+module CUDACoreExt
 
 using CUDACore
 import AcceleratedKernels as AK

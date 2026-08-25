@@ -1,4 +1,4 @@
-module AcceleratedKernelsMetalExt
+module MetalExt
 
 using Metal
 import AcceleratedKernels as AK

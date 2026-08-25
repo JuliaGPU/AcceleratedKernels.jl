@@ -1,4 +1,4 @@
-module AcceleratedKernelsOpenCLExt
+module OpenCLExt
 
 using OpenCL
 using OpenCL: method_table          # used by OpenCL.@device_override

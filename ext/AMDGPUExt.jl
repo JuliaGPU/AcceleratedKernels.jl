@@ -1,4 +1,4 @@
-module AcceleratedKernelsAMDGPUExt
+module AMDGPUExt
 
 using AMDGPU
 import UnsafeAtomics
