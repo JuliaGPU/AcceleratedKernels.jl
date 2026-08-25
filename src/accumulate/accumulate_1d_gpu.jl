@@ -12,7 +12,7 @@ end
 
 # Device-scope memory fence for the DecoupledLookback scan. Each GPU backend overrides it with a
 # native device fence in its package extension; a plain UnsafeAtomics.fence is not device scoped.
-@inline _decoupled_fence() = nothing
+function _decoupled_fence end
 
 
 # Register-raking block scan with striped loads and stores.
