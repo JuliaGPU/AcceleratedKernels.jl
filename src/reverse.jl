@@ -4,6 +4,51 @@
 #   * `dims=d` reverses only along those dimensions, via the general ND kernel below.
 
 
+# Index math for the `dims` reversal (same mapping as `Base.reverse`): maps element `i` to its
+# mirror. Layout-agnostic via LinearIndices/CartesianIndices, so reshaped/strided arrays work.
+@inline function _reverse_out_index(i, nd_idx, lin_idx, rev_dims, ref)
+    idx = Tuple(nd_idx[i])
+    idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
+    lin_idx[idx_mirror...]
+end
+
+@inline function _reverse_swap_indices(i, nd_idx, lin_idx, rev_dims, ref)
+    idx = Tuple(nd_idx[i])
+    index_in = lin_idx[idx...]
+    idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
+    index_out = lin_idx[idx_mirror...]
+    index_in, index_out
+end
+
+
+# GPU kernels for the `dims` reversal, one thread per element. The index math runs directly in the
+# kernel body, rather than through a `foreachindex` closure, so it inlines fully.
+@kernel inbounds=true cpu=false unsafe_indices=true function _reverse_oop_kernel!(
+    dst, src, nd_idx, lin_idx, rev_dims, ref, len,
+)
+    block_size = @groupsize()[1]
+    i = @index(Local, Linear) + (@index(Group, Linear) - 0x1) * block_size
+    if i <= len
+        dst[_reverse_out_index(i, nd_idx, lin_idx, rev_dims, ref)] = src[i]
+    end
+end
+
+@kernel inbounds=true cpu=false unsafe_indices=true function _reverse_inplace_kernel!(
+    v, nd_idx, lin_idx, rev_dims, ref, len,
+)
+    block_size = @groupsize()[1]
+    i = @index(Local, Linear) + (@index(Group, Linear) - 0x1) * block_size
+    if i <= len
+        index_in, index_out = _reverse_swap_indices(i, nd_idx, lin_idx, rev_dims, ref)
+        if index_in < index_out
+            temp = v[index_out]
+            v[index_out] = v[index_in]
+            v[index_in] = temp
+        end
+    end
+end
+
+
 # Validate `dims`: a `Colon`, an integer, or an iterable of integers within `1:ndims(A)`.
 function _check_reverse_dims(A, dims)
     dims isa Colon && return
@@ -22,7 +67,7 @@ end
 # thread, each swapping with its mirror.
 function _reverse_dims!(
     v::AbstractArray{T, N}, dims, backend;
-    kwargs...
+    max_tasks=Threads.nthreads(), min_elems=1, prefer_threads=true, block_size=256,
 ) where {T, N}
     rev_dims = ntuple(d -> (d in dims) && size(v, d) > 1, N)
     half_dim = findlast(rev_dims)
@@ -32,16 +77,22 @@ function _reverse_dims!(
     lin_idx = LinearIndices(v)
     reduced_size = ntuple(d -> ifelse(d == half_dim, cld(size(v, d), 2), size(v, d)), N)
     nd_idx = CartesianIndices(reduced_size)
+    len = Base.prod(reduced_size)
+    len == 0 && return v
 
-    foreachindex(1:Base.prod(reduced_size), backend; kwargs...) do i
-        idx = Tuple(nd_idx[i])
-        index_in = lin_idx[idx...]
-        idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
-        index_out = lin_idx[idx_mirror...]
-        @inbounds if index_in < index_out
-            temp = v[index_out]
-            v[index_out] = v[index_in]
-            v[index_in] = temp
+    if use_gpu_algorithm(backend, prefer_threads)
+        _reverse_inplace_kernel!(backend, block_size)(
+            v, nd_idx, lin_idx, rev_dims, ref, len,
+            ndrange = block_size * cld(len, block_size),
+        )
+    else
+        foreachindex(1:len, backend; max_tasks, min_elems, prefer_threads) do i
+            index_in, index_out = _reverse_swap_indices(i, nd_idx, lin_idx, rev_dims, ref)
+            @inbounds if index_in < index_out
+                temp = v[index_out]
+                v[index_out] = v[index_in]
+                v[index_in] = temp
+            end
         end
     end
 
@@ -52,18 +103,24 @@ end
 # Out-of-place: one thread per element copies `src[i]` to its mirror slot.
 function _reverse_dims!(
     dst::AbstractArray{T, N}, src::AbstractArray{T, N}, dims, backend;
-    kwargs...
+    max_tasks=Threads.nthreads(), min_elems=1, prefer_threads=true, block_size=256,
 ) where {T, N}
     rev_dims = ntuple(d -> (d in dims) && size(src, d) > 1, N)
     ref = size(src) .+ 1
     lin_idx = LinearIndices(src)
     nd_idx = CartesianIndices(src)
+    len = length(src)
+    len == 0 && return dst
 
-    foreachindex(src, backend; kwargs...) do i
-        idx = Tuple(nd_idx[i])
-        idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
-        index_out = lin_idx[idx_mirror...]
-        @inbounds dst[index_out] = src[i]
+    if use_gpu_algorithm(backend, prefer_threads)
+        _reverse_oop_kernel!(backend, block_size)(
+            dst, src, nd_idx, lin_idx, rev_dims, ref, len,
+            ndrange = block_size * cld(len, block_size),
+        )
+    else
+        foreachindex(src, backend; max_tasks, min_elems, prefer_threads) do i
+            @inbounds dst[_reverse_out_index(i, nd_idx, lin_idx, rev_dims, ref)] = src[i]
+        end
     end
 
     dst
