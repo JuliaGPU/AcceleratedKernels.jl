@@ -1,8 +1,15 @@
-module AcceleratedKernelsoneAPIExt
+module oneAPIExt
 
 
 using oneAPI
+using oneAPI: method_table          # used by oneAPI.@device_override
 import AcceleratedKernels as AK
+
+
+# Device-scope SPIR-V fence for the DecoupledLookback scan.
+const SPIRV = oneAPI.SPIRVIntrinsics
+oneAPI.@device_override AK._decoupled_fence() =
+    SPIRV.atomic_work_item_fence(SPIRV.GLOBAL_MEM_FENCE, SPIRV.memory_order_seq_cst, SPIRV.memory_scope_device)
 
 
 # On oneAPI, use the MapReduce algorithm by default as on some Intel GPUs ConcurrentWrite hangs
@@ -37,4 +44,4 @@ function AK.all(
 end
 
 
-end   # module AcceleratedKernelsoneAPIExt
+end   # module oneAPIExt
