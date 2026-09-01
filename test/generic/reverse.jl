@@ -92,6 +92,50 @@
         end
     end
 
+    # Contiguous linear sub-range via start/stop (Base.reverse!/reverse (v, start, stop) parity)
+    @testset "start/stop sub-range" begin
+        for T in test_types, n in (1, 2, 5, 256, 257, 1000)
+            h = rand(T, n)
+
+            # a spread of ranges: whole, prefix, suffix, interior, single, empty (start > stop)
+            ranges = [(1, n), (1, n ÷ 2 + 1), (n ÷ 2 + 1, n),
+                      (max(1, n ÷ 4), min(n, 3n ÷ 4)), (min(n, 2), min(n, 2)),
+                      (min(n, 3), min(n, 2))]
+            for (lo, hi) in ranges
+                # keep only in-bounds ranges (or empty ones, start > stop, which are no-ops)
+                lo <= hi && !(1 <= lo && hi <= n) && continue
+
+                # in-place
+                v = array_from_host(h)
+                AK.reverse!(v; start=lo, stop=hi, prefer_threads)
+                @test Array(v) == reverse!(copy(h), lo, hi)
+
+                # allocating out-of-place: source untouched, rest copied verbatim
+                src = array_from_host(h)
+                out = AK.reverse(src; start=lo, stop=hi, prefer_threads)
+                @test Array(out) == reverse(h, lo, hi)
+                @test Array(src) == h
+                @test out !== src
+
+                # out-of-place into dst
+                dst = array_from_host(zeros(T, n))
+                AK.reverse!(dst, src; start=lo, stop=hi, prefer_threads)
+                @test Array(dst) == reverse(h, lo, hi)
+                @test Array(src) == h
+            end
+        end
+
+        # start/stop and dims are mutually exclusive
+        m = array_from_host(rand(Float32, 4, 5))
+        @test_throws ArgumentError AK.reverse!(m; dims=1, start=2, prefer_threads)
+        @test_throws ArgumentError AK.reverse(m; dims=2, stop=3, prefer_threads)
+
+        # out-of-bounds sub-range throws
+        v = array_from_host(rand(Float32, 10))
+        @test_throws BoundsError AK.reverse!(v; start=0, stop=5, prefer_threads)
+        @test_throws BoundsError AK.reverse!(v; start=3, stop=11, prefer_threads)
+    end
+
     # N-dimensional reversal along a subset of dimensions (Base.reverse parity)
     @testset "dims" begin
         # Single dimension, including a degenerate size-1 dim and a large 3-D array

@@ -18,6 +18,20 @@ function _check_reverse_dims(A, dims)
 end
 
 
+# `start`/`stop` select a linear sub-range to reverse; they are only meaningful for the flat
+# (`dims=:`) path, so reject the combination with `dims`.
+_check_reverse_no_range(v, start, stop) =
+    (start == firstindex(v) && stop == lastindex(v)) ||
+        throw(ArgumentError("`start`/`stop` cannot be combined with `dims`"))
+
+# An empty sub-range (`start > stop`) is a no-op; otherwise both ends must be in bounds.
+function _check_reverse_range(v, start, stop)
+    start > stop && return
+    (firstindex(v) <= start && stop <= lastindex(v)) || throw(BoundsError(v, start:stop))
+    return
+end
+
+
 # In-place: split along the last non-singleton reversed dim so only ~half the elements need a
 # thread, each swapping with its mirror.
 function _reverse_dims!(
@@ -75,6 +89,8 @@ end
         v::AbstractArray, backend::Backend=get_backend(v);
 
         dims=:,
+        start=firstindex(v),
+        stop=lastindex(v),
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -86,13 +102,13 @@ end
 
 Reverse `v` in-place and return it. With `dims=:` (the default) the whole array is reversed; pass
 `dims=d` (an integer or an iterable of integers) to reverse only along those dimensions, matching
-`Base.reverse!`. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
+`Base.reverse!`. Alternatively, pass `start`/`stop` to reverse only the linear sub-range
+`v[start:stop]`, matching `Base.reverse!(v, start, stop)`; `start`/`stop` and `dims` are mutually
+exclusive. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 
 For the whole-array case each thread swaps one symmetric pair `v[i] <-> v[end - i + 1]`, so only
 `length(v) ÷ 2` threads are launched and no temporary array is allocated. Arrays of odd length keep
 their middle element in place.
-
-To reverse a contiguous sub-range of a vector, reverse a view: `AK.reverse!(@view v[lo:hi])`.
 
 # Examples
 ```julia
@@ -102,30 +118,31 @@ import AcceleratedKernels as AK
 v = CUDA.CuArray(1:100_000)
 AK.reverse!(v)
 
+AK.reverse!(v; start=3, stop=8)   # reverse only v[3:8] in place
+
 m = CUDA.CuArray(reshape(1:12, 3, 4))
-AK.reverse!(m; dims=2)          # reverse the columns
+AK.reverse!(m; dims=2)            # reverse the columns
 ```
 """
 function reverse!(
     v::AbstractArray, backend::Backend=get_backend(v);
-    dims=:, kwargs...
+    dims=:, start::Integer=firstindex(v), stop::Integer=lastindex(v), kwargs...
 )
     _check_reverse_dims(v, dims)
     if !(dims isa Colon)
+        _check_reverse_no_range(v, start, stop)
         return _reverse_dims!(v, dims, backend; kwargs...)
     end
 
-    len = length(v)
-    len <= 1 && return v
-
-    lo = firstindex(v)
-    hi = lastindex(v)
+    _check_reverse_range(v, start, stop)
+    n = stop - start + 1
+    n <= 1 && return v
 
     # Only the lower half needs threads, each swapping its mirrored partner too; for odd
     # lengths the middle element is its own mirror, so it is correctly left untouched
-    foreachindex(1:(len ÷ 2), backend; kwargs...) do i
-        left = lo + i - 1
-        right = hi - i + 1
+    foreachindex(1:(n ÷ 2), backend; kwargs...) do i
+        left = start + i - 1
+        right = stop - i + 1
         @inbounds begin
             temp = v[left]
             v[left] = v[right]
@@ -142,6 +159,8 @@ end
         dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
 
         dims=:,
+        start=firstindex(src),
+        stop=lastindex(src),
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -153,28 +172,36 @@ end
 
 Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
 must have the same size and must not alias. With `dims=:` (the default) the whole array is reversed;
-pass `dims=d` to reverse only along those dimensions. The CPU and GPU settings are the same as for
-[`foreachindex`](@ref).
+pass `dims=d` to reverse only along those dimensions. Alternatively, pass `start`/`stop` to reverse
+only the linear sub-range `src[start:stop]`, copying the rest of `src` into `dst` verbatim, matching
+`Base.reverse(src, start, stop)`; `start`/`stop` and `dims` are mutually exclusive. The CPU and GPU
+settings are the same as for [`foreachindex`](@ref).
 """
 function reverse!(
     dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
-    dims=:, kwargs...
+    dims=:, start::Integer=firstindex(src), stop::Integer=lastindex(src), kwargs...
 )
     _check_reverse_dims(src, dims)
     if !(dims isa Colon)
+        _check_reverse_no_range(src, start, stop)
         @argcheck size(dst) == size(src)
         length(src) == 0 && return dst
         return _reverse_dims!(dst, src, dims, backend; kwargs...)
     end
 
     @argcheck length(dst) == length(src)
-    length(src) == 0 && return dst
+    _check_reverse_range(src, start, stop)
 
-    hi_src = lastindex(src)
-    lo_dst = firstindex(dst)
+    # Elements outside `[start, stop]` are copied verbatim; only that sub-range is reversed
+    len = length(src)
+    start > 1   && copyto!(dst, 1, src, 1, start - 1)
+    stop  < len && copyto!(dst, stop + 1, src, stop + 1, len - stop)
 
-    foreachindex(src, backend; kwargs...) do i
-        @inbounds dst[lo_dst + (hi_src - i)] = src[i]
+    n = stop - start + 1
+    if n >= 1
+        foreachindex(1:n, backend; kwargs...) do k
+            @inbounds dst[start + n - k] = src[start + k - 1]
+        end
     end
 
     dst
@@ -186,6 +213,8 @@ end
         v::AbstractArray, backend::Backend=get_backend(v);
 
         dims=:,
+        start=firstindex(v),
+        stop=lastindex(v),
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -196,8 +225,10 @@ end
     )
 
 Return a reversed copy of `v`, leaving `v` unchanged. With `dims=:` (the default) the whole array is
-reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`. The CPU and
-GPU settings are the same as for [`foreachindex`](@ref).
+reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`.
+Alternatively, pass `start`/`stop` to reverse only the linear sub-range `v[start:stop]` and copy the
+rest verbatim, matching `Base.reverse(v, start, stop)`; `start`/`stop` and `dims` are mutually
+exclusive. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 
 Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the allocation.
 """
