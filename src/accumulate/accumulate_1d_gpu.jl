@@ -15,6 +15,49 @@ end
 function _decoupled_fence end
 
 
+# Exclusive scan of one value per thread in local memory. All threads in the block must call it.
+@inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
+    # Up-sweep. Use index-sized counters for block sizes of 256 or more.
+    offset = one(ithread)
+    d = block_size >> 0x1
+    while d > 0x0
+        @synchronize()
+        if ithread < d
+            ai = offset * (0x2 * ithread + 0x1) - 0x1
+            bi = offset * (0x2 * ithread + 0x2) - 0x1
+            totals[bi + 0x1] = op(totals[bi + 0x1], totals[ai + 0x1])
+        end
+        offset = offset << 0x1
+        d = d >> 0x1
+    end
+
+    @synchronize()
+    block_total = op(seed, totals[block_size])
+    @synchronize()
+    if ithread == 0x0
+        totals[block_size] = seed
+    end
+
+    # Down-sweep to an exclusive scan.
+    d = one(ithread)
+    while d < block_size
+        offset = offset >> 0x1
+        @synchronize()
+        if ithread < d
+            ai = offset * (0x2 * ithread + 0x1) - 0x1
+            bi = offset * (0x2 * ithread + 0x2) - 0x1
+            t = totals[ai + 0x1]
+            totals[ai + 0x1] = totals[bi + 0x1]
+            totals[bi + 0x1] = op(totals[bi + 0x1], t)
+        end
+        d = d << 0x1
+    end
+    @synchronize()
+
+    return totals[ithread + 0x1], block_total
+end
+
+
 # Register-raking block scan with striped loads and stores.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
     op, v, init, neutral,
@@ -53,50 +96,13 @@ function _decoupled_fence end
         k += 1
     end
     thread_totals[ithread + 0x1] = acc
-    @synchronize()
 
     # Scan the per-thread totals. Later blocks receive their carry from the
     # second kernel.
     seed = iblock == 0x0 ? init : neutral
-
-    # Use index-sized counters for block sizes of 256 or more.
-    offset = one(ithread)
-    d = block_size >> 0x1
-    while d > 0x0
-        @synchronize()
-        if ithread < d
-            ai = offset * (0x2 * ithread + 0x1) - 0x1
-            bi = offset * (0x2 * ithread + 0x2) - 0x1
-            thread_totals[bi + 0x1] =
-                op(thread_totals[bi + 0x1], thread_totals[ai + 0x1])
-        end
-        offset = offset << 0x1
-        d = d >> 0x1
-    end
-
-    @synchronize()
-    block_total = op(seed, thread_totals[block_size])
-    @synchronize()
-    if ithread == 0x0
-        thread_totals[block_size] = seed
-    end
-
-    # Down-sweep to an exclusive scan.
-    d = one(ithread)
-    while d < block_size
-        offset = offset >> 0x1
-        @synchronize()
-        if ithread < d
-            ai = offset * (0x2 * ithread + 0x1) - 0x1
-            bi = offset * (0x2 * ithread + 0x2) - 0x1
-            t = thread_totals[ai + 0x1]
-            thread_totals[ai + 0x1] = thread_totals[bi + 0x1]
-            thread_totals[bi + 0x1] = op(thread_totals[bi + 0x1], t)
-        end
-        d = d << 0x1
-    end
-    @synchronize()
-    thread_prefix = thread_totals[ithread + 0x1]
+    thread_prefix, block_total = block_exclusive_scan!(
+        @context, op, thread_totals, seed, block_size, ithread,
+    )
 
     # DecoupledLookback keeps later blocks inclusive until the carry pass.
     block_inclusive = inclusive || (iblock != 0x0 && !isnothing(flags))
