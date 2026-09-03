@@ -24,6 +24,11 @@ _check_reverse_no_range(v, start, stop) =
     (start == firstindex(v) && stop == lastindex(v)) ||
         throw(ArgumentError("`start`/`stop` cannot be combined with `dims`"))
 
+# A `start`/`stop` sub-range is only defined for vectors; the whole-array default range is allowed.
+_check_reverse_vector(v, start, stop) =
+    (v isa AbstractVector || (start == firstindex(v) && stop == lastindex(v))) ||
+        throw(ArgumentError("`start`/`stop` are only supported for vectors"))
+
 # An empty sub-range (`start > stop`) is a no-op; otherwise both ends must be in bounds.
 function _check_reverse_range(v, start, stop)
     start > stop && return
@@ -102,9 +107,10 @@ end
 
 Reverse `v` in-place and return it. With `dims=:` (the default) the whole array is reversed; pass
 `dims=d` (an integer or an iterable of integers) to reverse only along those dimensions, matching
-`Base.reverse!`. Alternatively, pass `start`/`stop` to reverse only the linear sub-range
-`v[start:stop]`, matching `Base.reverse!(v, start, stop)`; `start`/`stop` and `dims` are mutually
-exclusive. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
+`Base.reverse!`. Alternatively, for a vector, pass `start`/`stop` to reverse only the sub-range
+`v[start:stop]`, matching `Base.reverse!(v, start, stop)`; `start`/`stop` are only supported for
+vectors and are mutually exclusive with `dims`. The CPU and GPU settings are the same as for
+[`foreachindex`](@ref).
 
 For the whole-array case each thread swaps one symmetric pair `v[i] <-> v[end - i + 1]`, so only
 `length(v) ÷ 2` threads are launched and no temporary array is allocated. Arrays of odd length keep
@@ -134,6 +140,7 @@ function reverse!(
         return _reverse_dims!(v, dims, backend; kwargs...)
     end
 
+    _check_reverse_vector(v, start, stop)
     _check_reverse_range(v, start, stop)
     n = stop - start + 1
     n <= 1 && return v
@@ -172,10 +179,10 @@ end
 
 Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
 must have the same size and must not alias. With `dims=:` (the default) the whole array is reversed;
-pass `dims=d` to reverse only along those dimensions. Alternatively, pass `start`/`stop` to reverse
-only the linear sub-range `src[start:stop]`, copying the rest of `src` into `dst` verbatim, matching
-`Base.reverse(src, start, stop)`; `start`/`stop` and `dims` are mutually exclusive. The CPU and GPU
-settings are the same as for [`foreachindex`](@ref).
+pass `dims=d` to reverse only along those dimensions. Alternatively, for a vector, pass `start`/`stop`
+to reverse only the sub-range `src[start:stop]`, copying the rest of `src` into `dst` verbatim,
+matching `Base.reverse(src, start, stop)`; `start`/`stop` are only supported for vectors and are
+mutually exclusive with `dims`. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 """
 function reverse!(
     dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
@@ -190,6 +197,7 @@ function reverse!(
     end
 
     @argcheck length(dst) == length(src)
+    _check_reverse_vector(src, start, stop)
     _check_reverse_range(src, start, stop)
 
     # Elements outside `[start, stop]` are copied verbatim; only that sub-range is reversed
@@ -226,9 +234,10 @@ end
 
 Return a reversed copy of `v`, leaving `v` unchanged. With `dims=:` (the default) the whole array is
 reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`.
-Alternatively, pass `start`/`stop` to reverse only the linear sub-range `v[start:stop]` and copy the
-rest verbatim, matching `Base.reverse(v, start, stop)`; `start`/`stop` and `dims` are mutually
-exclusive. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
+Alternatively, for a vector, pass `start`/`stop` to reverse only the sub-range `v[start:stop]` and
+copy the rest verbatim, matching `Base.reverse(v, start, stop)`; `start`/`stop` are only supported
+for vectors and are mutually exclusive with `dims`. The CPU and GPU settings are the same as for
+[`foreachindex`](@ref).
 
 Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the allocation.
 """

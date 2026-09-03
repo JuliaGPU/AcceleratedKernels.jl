@@ -130,6 +130,11 @@
         @test_throws ArgumentError AK.reverse!(m; dims=1, start=2, prefer_threads)
         @test_throws ArgumentError AK.reverse(m; dims=2, stop=3, prefer_threads)
 
+        # start/stop are only defined for vectors; the whole-array default range is still allowed
+        @test_throws ArgumentError AK.reverse!(m; start=2, prefer_threads)
+        @test_throws ArgumentError AK.reverse(m; stop=3, prefer_threads)
+        @test Array(AK.reverse(m; prefer_threads)) == reverse(Array(m))
+
         # out-of-bounds sub-range throws
         v = array_from_host(rand(Float32, 10))
         @test_throws BoundsError AK.reverse!(v; start=0, stop=5, prefer_threads)
