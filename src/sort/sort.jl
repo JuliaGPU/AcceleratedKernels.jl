@@ -76,7 +76,7 @@ arguments are the same as for `Base.sort`.
 
 With the default `dims=:` the whole array is sorted as one flat vector. Pass an integer `dims` to
 sort each 1D slice along that dimension independently, matching `Base.sort(A; dims)`. The `dims`
-form always uses a comparison sort and so ignores `alg`.
+form ignores `alg`.
 
 ## CPU
 CPU settings: use at most `max_tasks` threads to sort the array such that at least `min_elems`
@@ -208,6 +208,55 @@ function _sort_impl!(
 end
 
 
+# Inverse of `_to_sort_key` for the 32-bit eltypes handled by the packed `dims` fast path below.
+# Exact for every non-NaN value; NaN floats have no bijective key and take the comparator path.
+@inline _from_sort_key(k::UInt32, ::Type{UInt32}) = k
+@inline _from_sort_key(k::UInt32, ::Type{Int32})  = reinterpret(Int32, k ⊻ 0x80000000)
+@inline function _from_sort_key(k::UInt32, ::Type{Float32})
+    mask = (k >> 31) == 0x1 ? 0x80000000 : 0xFFFFFFFF
+    reinterpret(Float32, k ⊻ mask)
+end
+
+# Eltypes whose (slice, value) pair fits in one UInt64 key: a 32-bit value key in the low half,
+# the slice id in the high half.
+_dims_packable(::Type) = false
+_dims_packable(::Type{Float32}) = true
+_dims_packable(::Type{Int32})   = true
+_dims_packable(::Type{UInt32})  = true
+
+# Packed-key fast path for `_sort_dims!`, specialised to `dim == 1`. Along the first dimension
+# the slices are contiguous in the column-major linear order, so each element's slice id is just
+# `(i - 1) ÷ slice_len` and the sorted keys land back in linear order with no scatter. We pack
+# (slice_id, value key) into one UInt64 and sort that, instead of a comparator merge over
+# (slice, value) tuples. Only valid for the default ordering; `desc` reverses within each slice.
+function _sort_dims_packed_dim1!(
+    v::AbstractArray{T}, backend::Backend, desc::Bool, slice_len::Int, len::Int;
+    max_tasks, min_elems, prefer_threads, block_size,
+) where {T}
+    vflat = reshape(v, len)
+    lin = UInt64(0):UInt64(len - 1)
+    L = UInt64(slice_len)
+
+    # Pack (slice id, value key) into one native UInt64 array via a fused broadcast. Along the first
+    # dimension the slice id of linear element i (0-based) is just `i ÷ slice_len`.
+    vk = _to_sort_key.(vflat)                                       # value key in the low 32 bits
+    desc && (vk = .~vk)                                             # descending flips the value bits
+    keys = ((lin .÷ L) .<< 32) .| UInt64.(vk)
+
+    # Sort the plain UInt64 keys ascending with no comparator, which is markedly faster than a
+    # comparator merge over (slice, value) tuples; each backend picks its own default algorithm.
+    _sort_impl!(keys, backend; max_tasks, min_elems, prefer_threads, block_size)
+
+    # Contiguous slices: sorted key at linear slot k belongs to that same slot; unpack in place.
+    low = UInt32.(keys .& 0x00000000ffffffff)
+    desc && (low = .~low)
+    vflat .= _unpack_value.(low, Val(T))        # Val avoids capturing a Type in the GPU broadcast
+    v
+end
+
+@inline _unpack_value(k::UInt32, ::Val{U}) where {U} = _from_sort_key(k, U)
+
+
 # Sort each slice along `dim` on its own, like Base.sort(A; dims).
 # We have no batched sort kernel, so tag every element with its slice, sort the whole array
 # once by (slice, value), then scatter each element back to its place. Works on any backend.
@@ -220,6 +269,19 @@ function _sort_dims!(
     1 <= dim <= N || throw(ArgumentError("dimension $dim is not 1 ≤ dims ≤ $N"))
     slice_len = size(v, dim)
     (length(v) <= 1 || slice_len <= 1) && return v     # every slice is a singleton
+
+    # Fast path: sorting along the first (contiguous) dimension under the default ordering, for a
+    # 32-bit packable eltype. Pack (slice_id, value key) into a single UInt64 and sort that, with
+    # no scatter, rather than a comparator merge over (slice, value) tuples.
+    ordering = Base.Order.ord(lt, by, rev, order)
+    if dim == 1 && _dims_packable(T) &&
+            (ordering === Base.Order.Forward || ordering === Base.Order.Reverse) &&
+            (!(T <: AbstractFloat) || !any(isnan, v, backend; prefer_threads))
+        return _sort_dims_packed_dim1!(
+            v, backend, ordering === Base.Order.Reverse, slice_len, length(v);
+            max_tasks, min_elems, prefer_threads, block_size,
+        )
+    end
 
     len = length(v)
     bs = isnothing(block_size) ? 256 : block_size

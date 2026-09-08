@@ -850,6 +850,31 @@ end
         end
     end
 
+    # Special values and extremes along dims=1: signed zeros, infinities, floatmax/min, and the
+    # NaN case (which must fall back to the comparator path and still match Base)
+    eqnan(a, b) = size(a) == size(b) && all(isequal.(a, b))
+    sv = Float32[0.0, -0.0, Inf, -Inf, 1.5, -1.5, floatmax(Float32), floatmin(Float32),
+                 -floatmax(Float32), 3.0, -3.0, 0.25]
+    Asv_h = reshape(repeat(sv, 5), length(sv), 5)
+    Asv   = array_from_host(Asv_h)
+    @test eqnan(Array(AK.sort(Asv; prefer_threads, dims=1)), sort(Asv_h; dims=1))
+    @test eqnan(Array(AK.sort(Asv; prefer_threads, dims=1, rev=true)), sort(Asv_h; dims=1, rev=true))
+
+    An_h = reshape(Float32[NaN, 1, -1, 2, NaN, 0, Inf, -Inf], 8, 1)
+    An   = array_from_host(An_h)
+    @test eqnan(Array(AK.sort(An; prefer_threads, dims=1)), sort(An_h; dims=1))
+
+    # UInt32 and Int32 with type extremes, sorting along both a contiguous and a strided dimension
+    U_h = UInt32[0 typemax(UInt32) 5; typemax(UInt32) 0 7; 3 100 typemax(UInt32) - UInt32(1)]
+    U   = array_from_host(U_h)
+    @test Array(AK.sort(U; prefer_threads, dims=1)) == sort(U_h; dims=1)
+    @test Array(AK.sort(U; prefer_threads, dims=2)) == sort(U_h; dims=2)
+
+    I_h = Int32[typemin(Int32) 0 5; typemax(Int32) -1 -5; 3 100 typemin(Int32) + Int32(1)]
+    I   = array_from_host(I_h)
+    @test Array(AK.sort(I; prefer_threads, dims=1)) == sort(I_h; dims=1)
+    @test Array(AK.sort(I; prefer_threads, dims=1, rev=true)) == sort(I_h; dims=1, rev=true)
+
     # by= and order= act on the values within each slice
     A_h = rand(Float32, 17, 23)
     A   = array_from_host(A_h)
