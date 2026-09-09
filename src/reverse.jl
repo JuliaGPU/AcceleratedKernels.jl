@@ -15,6 +15,21 @@ function check_reverse_dims(A, dims)
 end
 
 
+# Preserve the distinction between omitted bounds and an explicitly requested whole range.
+function check_reverse_range(v, dims, start::Union{Nothing,Integer}, stop::Union{Nothing,Integer})
+    isnothing(start) && isnothing(stop) && return nothing
+    dims isa Colon ||
+        throw(ArgumentError("`start`/`stop` cannot be combined with `dims`"))
+    v isa AbstractVector ||
+        throw(ArgumentError("`start`/`stop` are only supported for vectors"))
+    start = isnothing(start) ? firstindex(v) : Int(start)
+    stop = isnothing(stop) ? lastindex(v) : Int(stop)
+    # Base.reverse! skips bounds checks when no pair needs swapping.
+    stop > start && checkbounds(v, start:stop)
+    return start:stop
+end
+
+
 # Split along the last non-singleton reversed dimension. For odd extents, the middle
 # slice mirrors onto itself; the index ordering guard swaps each pair in it only once.
 function reverse_dims!(
@@ -71,6 +86,8 @@ end
         v::AbstractArray, backend::Backend=get_backend(v);
 
         dims=:,
+        start=nothing,
+        stop=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -82,12 +99,14 @@ end
 
 Reverse `v` in-place and return it. With `dims=:` (the default) the whole array is reversed; pass
 `dims=d` (an integer or an iterable of distinct integers in `1:ndims(v)`) to reverse only along
-those dimensions. `dims=()` leaves `v` unchanged. The CPU and GPU settings are the same as for
-[`foreachindex`](@ref).
+those dimensions. `dims=()` leaves `v` unchanged. For a vector, `start`/`stop` restrict the
+reversal to the sub-range `v[start:stop]`, as in `Base.reverse!(v, start, stop)`; they cannot be
+combined with `dims` other than `:`. Omitted bounds default to `firstindex(v)` and `lastindex(v)`.
+When `start >= stop`, nothing is reversed and bounds are not checked, as in Base's in-place
+method. Otherwise both bounds must lie within the vector. The CPU and GPU settings are the
+same as for [`foreachindex`](@ref).
 
 No temporary array is allocated.
-
-To reverse a contiguous sub-range of a vector, reverse a view: `AK.reverse!(@view v[lo:hi])`.
 
 # Examples
 ```julia
@@ -96,6 +115,7 @@ import AcceleratedKernels as AK
 
 v = CUDA.CuArray(1:100_000)
 AK.reverse!(v)
+AK.reverse!(v; start=10, stop=20)  # reverse only v[10:20]
 
 m = CUDA.CuArray(reshape(1:12, 3, 4))
 AK.reverse!(m; dims=2)          # reverse the columns
@@ -103,9 +123,15 @@ AK.reverse!(m; dims=2)          # reverse the columns
 """
 function reverse!(
     v::AbstractArray, backend::Backend=get_backend(v);
-    dims=:, kwargs...
+    dims=:, start=nothing, stop=nothing, kwargs...
 )
     dims = check_reverse_dims(v, dims)
+    range = check_reverse_range(v, dims, start, stop)
+    if !isnothing(range)
+        first(range) >= last(range) && return v
+        reverse!(view(v, range), backend; kwargs...)
+        return v
+    end
     if !(dims isa Colon)
         return reverse_dims!(v, dims, backend; kwargs...)
     end
@@ -136,6 +162,8 @@ end
         dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
 
         dims=:,
+        start=nothing,
+        stop=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -148,14 +176,32 @@ end
 Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
 must not alias. With `dims=:` (the default), the whole array is reversed and only the lengths
 must match. With an integer or iterable of distinct dimensions, the sizes must match. `dims=()`
-copies `src` unchanged. Elements are converted to the destination element type on assignment.
+copies `src` unchanged. For a vector `src`, `start`/`stop` reverse only `src[start:stop]` and copy
+the rest of `src` unchanged. Bounds default to `firstindex(src)` and `lastindex(src)` and cannot
+be combined with `dims` other than `:`. When `start >= stop`, this copies `src` without checking
+the bounds, following the in-place method; Base's allocating `reverse` may throw for these
+out-of-bounds ranges. Otherwise both bounds must lie within `src`.
+Elements are converted to the destination element type on assignment.
 The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 """
 function reverse!(
     dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
-    dims=:, kwargs...
+    dims=:, start=nothing, stop=nothing, kwargs...
 )
     dims = check_reverse_dims(src, dims)
+    range = check_reverse_range(src, dims, start, stop)
+    if !isnothing(range)
+        @argcheck length(dst) == length(src)
+        isempty(src) && return dst
+        # Fuse copying and reversal to avoid a second pass and synchronizing device copies.
+        lo, hi = first(range), last(range)
+        shift = firstindex(dst) - firstindex(src)
+        foreachindex(src, backend; kwargs...) do i
+            j = lo <= i <= hi ? lo + hi - i : i
+            @inbounds dst[j + shift] = src[i]
+        end
+        return dst
+    end
     if !(dims isa Colon)
         @argcheck size(dst) == size(src)
         length(src) == 0 && return dst
@@ -181,6 +227,8 @@ end
         v::AbstractArray, backend::Backend=get_backend(v);
 
         dims=:,
+        start=nothing,
+        stop=nothing,
 
         # CPU settings
         max_tasks=Threads.nthreads(),
@@ -191,8 +239,10 @@ end
     )
 
 Return a reversed copy of `v`, leaving `v` unchanged. With `dims=:` (the default) the whole array is
-reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`. The CPU and
-GPU settings are the same as for [`foreachindex`](@ref).
+reversed; pass `dims=d` to reverse only along those dimensions, or, for a vector, `start`/`stop` to
+reverse only the sub-range `v[start:stop]`. Bounds and their defaults follow [`reverse!`](@ref),
+including copying unchanged when `start >= stop` even if the bounds lie outside the vector.
+The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 
 Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the allocation.
 """

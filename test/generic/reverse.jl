@@ -92,6 +92,110 @@
         end
     end
 
+    @testset "start/stop" begin
+        for T in test_types, n in (1, 2, 5, 256, 257, 1000)
+            h = rand(T, n)
+            # whole, prefix, suffix, interior, single element, empty (start > stop)
+            ranges = [(1, n), (1, n ÷ 2 + 1), (n ÷ 2 + 1, n), (max(1, n ÷ 4), min(n, 3n ÷ 4)),
+                      (min(n, 2), min(n, 2)), (min(n, 3), min(n, 2))]
+            for (lo, hi) in ranges
+                v = array_from_host(h)
+                @test AK.reverse!(v; start=lo, stop=hi, prefer_threads) === v
+                @test Array(v) == reverse!(copy(h), lo, hi)
+
+                src = array_from_host(h)
+                out = AK.reverse(src; start=lo, stop=hi, prefer_threads)
+                @test Array(out) == reverse(h, lo, hi)
+                @test Array(src) == h
+                @test out !== src
+
+                dst = array_from_host(zeros(T, n))
+                @test AK.reverse!(dst, src; start=lo, stop=hi, prefer_threads) === dst
+                @test Array(dst) == reverse(h, lo, hi)
+                @test Array(src) == h
+            end
+        end
+
+        # Either bound may be omitted; the other defaults to the end of the vector
+        h = rand(Float32, 1000)
+        v = array_from_host(h)
+        AK.reverse!(v; start=300, prefer_threads)
+        @test Array(v) == reverse!(copy(h), 300)
+        @test Array(AK.reverse(array_from_host(h); stop=300, prefer_threads)) == reverse(h, 1, 300)
+
+        # Integer types other than Int, and a range spanning several blocks
+        v = array_from_host(h)
+        AK.reverse!(v; start=Int32(3), stop=UInt16(999), prefer_threads, block_size=64)
+        @test Array(v) == reverse!(copy(h), 3, 999)
+
+        # Destination with a different element type
+        h_int = rand(Int32(1):Int32(1000), 1000)
+        dst = array_from_host(zeros(Float32, 1000))
+        AK.reverse!(dst, array_from_host(h_int); start=10, stop=20, prefer_threads)
+        @test Array(dst) == reverse(h_int, 10, 20)
+
+        # Bounds are relative to the view; elements outside it must remain unchanged.
+        h = Float32.(1:1000)
+        parent = array_from_host(h)
+        v = view(parent, 2:2:998)
+        expected = copy(h)
+        reverse!(view(expected, 2:2:998), 3, 490)
+        @test AK.reverse!(v; start=3, stop=490, prefer_threads) === v
+        @test Array(parent) == expected
+
+        src = view(array_from_host(h), 2:2:998)
+        dst_parent = array_from_host(zeros(Float32, 1000))
+        dst = view(dst_parent, 2:2:998)
+        @test AK.reverse!(dst, src; start=3, stop=490, prefer_threads) === dst
+        expected = zeros(Float32, 1000)
+        expected[2:2:998] = reverse(h[2:2:998], 3, 490)
+        @test Array(dst_parent) == expected
+        @test Array(src) == h[2:2:998]
+
+        # As for whole-array reversal, the destination only needs a matching length.
+        src = array_from_host(h)
+        dst = array_from_host(zeros(Float32, 20, 50))
+        @test AK.reverse!(dst, src; start=3, stop=990, prefer_threads) === dst
+        @test vec(Array(dst)) == reverse(h, 3, 990)
+        @test_throws ArgumentError AK.reverse!(similar(src, 999), src; start=3, prefer_threads)
+
+        # No swaps: Base.reverse! accepts even out-of-bounds empty and singleton ranges.
+        for n in (0, 1, 10), (lo, hi) in ((1, n), (0, 0), (n+1, n+1), (20, 19), (8, 3))
+            h = Float32.(1:n)
+            lo < hi && continue
+            src = array_from_host(h)
+            @test AK.reverse!(src; start=lo, stop=hi, prefer_threads) === src
+            @test Array(src) == reverse!(copy(h), lo, hi)
+            @test Array(AK.reverse(src; start=lo, stop=hi, prefer_threads)) == h
+            dst = similar(src)
+            @test AK.reverse!(dst, src; start=lo, stop=hi, prefer_threads) === dst
+            @test Array(dst) == h
+        end
+
+        # start/stop and dims are mutually exclusive
+        m = array_from_host(rand(Float32, 4, 5))
+        v = array_from_host(rand(Float32, 10))
+        @test_throws ArgumentError AK.reverse!(v; dims=1, start=2, prefer_threads)
+        @test_throws ArgumentError AK.reverse(v; dims=(1,), stop=3, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(v; dims=1, start=1, stop=10, prefer_threads)
+        @test_throws MethodError AK.reverse!(v; start=1.0, prefer_threads)
+        @test_throws MethodError AK.reverse(v; stop=10.0, prefer_threads)
+
+        # start/stop are only defined for vectors
+        @test_throws ArgumentError AK.reverse!(m; start=2, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(m; start=1, stop=length(m), prefer_threads)
+        @test_throws ArgumentError AK.reverse(m; stop=3, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(similar(m), m; start=1, stop=2, prefer_threads)
+
+        # Out-of-bounds non-empty ranges throw; empty ranges are a no-op like in Base
+        @test_throws BoundsError AK.reverse!(v; start=0, stop=5, prefer_threads)
+        @test_throws BoundsError AK.reverse!(v; start=3, stop=11, prefer_threads)
+        @test_throws BoundsError AK.reverse(v; start=-1, prefer_threads)
+        h = Array(v)
+        @test Array(AK.reverse!(v; start=8, stop=3, prefer_threads)) == h
+        @test Array(AK.reverse(v; start=5, stop=5, prefer_threads)) == h
+    end
+
     # N-dimensional reversal along a subset of dimensions (Base.reverse parity)
     @testset "dims" begin
         # Single dimension, including a degenerate size-1 dim and a large 3-D array
