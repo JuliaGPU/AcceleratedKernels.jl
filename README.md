@@ -282,6 +282,7 @@ If you need other algorithms in your work that may be of general use, please ope
 | [Binary Search](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/binarysearch/) | `searchsortedfirst` `searchsortedfirst!`         | `std::lower_bound`                                        |
 |                                               | `searchsortedlast` `searchsortedlast!`           | `thrust::upper_bound`                                     |
 | [Find All](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/findall/) | `findall`                                        | `thrust::copy_if` `cub::DeviceSelect` `nonzero`           |
+| [Reverse](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reverse/) | `reverse` `reverse!`                             | `thrust::reverse` `std::reverse` `flip`                   |
 | [Predicates](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/predicates/) | `all` `any`                                      |                                                           |
 | [Arithmetics](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/arithmetics/) | `sum` `prod` `minimum` `maximum` `count` `cumsum` `cumprod`                                      |                                                           |
 

@@ -29,6 +29,7 @@ makedocs(;
             "Accumulate" => "api/accumulate.md",
             "Binary Search" => "api/binarysearch.md",
             "Find All" => "api/findall.md",
+            "Reverse" => "api/reverse.md",
             "Predicates" => "api/predicates.md",
             "Arithmetics" => "api/arithmetics.md",
             "Custom Structs" => "api/custom_structs.md",

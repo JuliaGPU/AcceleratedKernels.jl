@@ -6,8 +6,9 @@
     ithread = @index(Local, Linear)
     i = ithread + (iblock - 0x1) * N
 
+    # Avoid an out-of-line device call that can copy captured state to local memory.
     if i <= length(indices)
-        f(indices[i])
+        @inline f(indices[i])
     end
 end
 
