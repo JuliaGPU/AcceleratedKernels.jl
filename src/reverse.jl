@@ -1,4 +1,5 @@
-# Validate `dims`: a `Colon`, an integer, or an iterable of integers in `1:ndims(A)`.
+# Validate `dims`: a `Colon`, an integer, or an iterable of distinct integers in `1:ndims(A)`,
+# the same contract as `Base.reverse`.
 function check_reverse_dims(A, dims)
     dims isa Colon && return
     applicable(iterate, dims) ||
@@ -9,6 +10,7 @@ function check_reverse_dims(A, dims)
         1 <= d <= ndims(A) ||
             throw(ArgumentError("dimension $d is out of range 1:$(ndims(A))"))
     end
+    allunique(dims) || throw(ArgumentError("dims $dims contains duplicates"))
     return
 end
 

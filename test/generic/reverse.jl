@@ -140,6 +140,25 @@
         out = AK.reverse(array_from_host(h); dims=[1, 3], prefer_threads)
         @test Array(out) == reverse(h; dims=(1, 3))
 
+        # dims=() reverses nothing
+        v = array_from_host(h)
+        @test Array(AK.reverse!(v; dims=(), prefer_threads)) == h
+        @test Array(AK.reverse(v; dims=(), prefer_threads)) == h
+
+        # Shapes spanning many blocks, with odd extents so the in-place middle slice is
+        # non-trivial, for integer element types too
+        for T in valid_backend_eltypes(BACKEND, (Int32, Float32)), shape in ((1001, 333), (33, 65, 129))
+            h = rand(T, shape)
+            for dims in (1, 2, (1, 2)), block_size in (64, 256)
+                v = array_from_host(h)
+                AK.reverse!(v; dims, prefer_threads, block_size)
+                @test Array(v) == reverse(h; dims)
+
+                out = AK.reverse(array_from_host(h); dims, prefer_threads, block_size)
+                @test Array(out) == reverse(h; dims)
+            end
+        end
+
         # Empty arrays are returned unchanged
         h = zeros(Float32, 0, 5)
         for dims in (1, 2, (1, 2))
@@ -164,5 +183,9 @@
         # Non-integer dims must throw rather than silently do nothing
         @test_throws ArgumentError AK.reverse!(v; dims=1.5, prefer_threads)
         @test_throws ArgumentError AK.reverse(v; dims=(1, 2.5), prefer_threads)
+
+        # Duplicate dims throw, as in Base
+        @test_throws ArgumentError AK.reverse!(v; dims=(1, 1), prefer_threads)
+        @test_throws ArgumentError AK.reverse(v; dims=[2, 3, 2], prefer_threads)
     end
 end
