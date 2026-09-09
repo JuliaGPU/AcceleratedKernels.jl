@@ -1,31 +1,29 @@
-# Validate `dims`: a `Colon`, an integer, or an iterable of distinct integers in `1:ndims(A)`,
-# the same contract as `Base.reverse`.
+# Materialize iterators once so validation does not consume the dimensions used by the loop.
 function check_reverse_dims(A, dims)
-    dims isa Colon && return
+    dims isa Colon && return dims
     applicable(iterate, dims) ||
         throw(ArgumentError("dims must be an integer, an iterable of integers, or `:`, got $dims"))
-    for d in dims                                       # an integer iterates once
+    dims = Tuple(dims)
+    for d in dims
         d isa Integer ||
             throw(ArgumentError("dims must be integers, got $dims"))
         1 <= d <= ndims(A) ||
             throw(ArgumentError("dimension $d is out of range 1:$(ndims(A))"))
     end
     allunique(dims) || throw(ArgumentError("dims $dims contains duplicates"))
-    return
+    return dims
 end
 
 
-# In-place reversal along `dims`. Only half the elements need a thread, each swapping with its
-# mirror image; the array is split along the last non-singleton reversed dimension. For odd
-# sizes the middle slice mirrors onto itself and the `index_in < index_out` guard makes sure
-# each pair in it is swapped once.
+# Split along the last non-singleton reversed dimension. For odd extents, the middle
+# slice mirrors onto itself; the index ordering guard swaps each pair in it only once.
 function reverse_dims!(
     v::AbstractArray{T, N}, dims, backend;
     kwargs...
 ) where {T, N}
     rev_dims = ntuple(d -> (d in dims) && size(v, d) > 1, N)
     half_dim = findlast(rev_dims)
-    isnothing(half_dim) && return v         # all reversed dims are singletons
+    isnothing(half_dim) && return v
 
     ref = size(v) .+ 1
     lin_idx = LinearIndices(v)
@@ -48,9 +46,8 @@ function reverse_dims!(
 end
 
 
-# Out-of-place reversal along `dims`: one thread per element copies `src[i]` to its mirror slot.
 function reverse_dims!(
-    dst::AbstractArray{T, N}, src::AbstractArray{T, N}, dims, backend;
+    dst::AbstractArray, src::AbstractArray{T, N}, dims, backend;
     kwargs...
 ) where {T, N}
     rev_dims = ntuple(d -> (d in dims) && size(src, d) > 1, N)
@@ -84,12 +81,11 @@ end
     )
 
 Reverse `v` in-place and return it. With `dims=:` (the default) the whole array is reversed; pass
-`dims=d` (an integer or an iterable of integers) to reverse only along those dimensions, matching
-`Base.reverse!`. The CPU and GPU settings are the same as for [`foreachindex`](@ref).
+`dims=d` (an integer or an iterable of distinct integers in `1:ndims(v)`) to reverse only along
+those dimensions. `dims=()` leaves `v` unchanged. The CPU and GPU settings are the same as for
+[`foreachindex`](@ref).
 
-For the whole-array case each thread swaps one symmetric pair `v[i] <-> v[end - i + 1]`, so only
-`length(v) ÷ 2` threads are launched and no temporary array is allocated. Arrays of odd length keep
-their middle element in place.
+No temporary array is allocated.
 
 To reverse a contiguous sub-range of a vector, reverse a view: `AK.reverse!(@view v[lo:hi])`.
 
@@ -109,7 +105,7 @@ function reverse!(
     v::AbstractArray, backend::Backend=get_backend(v);
     dims=:, kwargs...
 )
-    check_reverse_dims(v, dims)
+    dims = check_reverse_dims(v, dims)
     if !(dims isa Colon)
         return reverse_dims!(v, dims, backend; kwargs...)
     end
@@ -120,8 +116,7 @@ function reverse!(
     lo = firstindex(v)
     hi = lastindex(v)
 
-    # Only the lower half needs threads, each swapping its mirrored partner too; for odd
-    # lengths the middle element is its own mirror, so it is correctly left untouched
+    # Swap each pair once; an odd-length array keeps its middle element.
     foreachindex(1:(len ÷ 2), backend; kwargs...) do i
         left = lo + i - 1
         right = hi - i + 1
@@ -151,15 +146,16 @@ end
     )
 
 Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
-must have the same size and must not alias. With `dims=:` (the default) the whole array is reversed;
-pass `dims=d` to reverse only along those dimensions. The CPU and GPU settings are the same as for
-[`foreachindex`](@ref).
+must not alias. With `dims=:` (the default), the whole array is reversed and only the lengths
+must match. With an integer or iterable of distinct dimensions, the sizes must match. `dims=()`
+copies `src` unchanged. Elements are converted to the destination element type on assignment.
+The CPU and GPU settings are the same as for [`foreachindex`](@ref).
 """
 function reverse!(
     dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
     dims=:, kwargs...
 )
-    check_reverse_dims(src, dims)
+    dims = check_reverse_dims(src, dims)
     if !(dims isa Colon)
         @argcheck size(dst) == size(src)
         length(src) == 0 && return dst

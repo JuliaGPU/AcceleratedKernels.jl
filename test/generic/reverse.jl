@@ -140,6 +140,28 @@
         out = AK.reverse(array_from_host(h); dims=[1, 3], prefer_threads)
         @test Array(out) == reverse(h; dims=(1, 3))
 
+        # Stateful iterators must survive validation, including duplicate detection.
+        expected = reverse(h; dims=(1, 3))
+        v = array_from_host(h)
+        @test AK.reverse!(v; dims=Iterators.Stateful([1, 3]), prefer_threads) === v
+        @test Array(v) == expected
+        src = array_from_host(h)
+        @test Array(AK.reverse(src; dims=Iterators.Stateful([1, 3]), prefer_threads)) == expected
+        dst = similar(src)
+        @test AK.reverse!(dst, src; dims=Iterators.Stateful([1, 3]), prefer_threads) === dst
+        @test Array(dst) == expected
+        @test Array(src) == h
+
+        # Destination assignment converts element types, as in the whole-array path.
+        h_int = reshape(Int32.(1:30), 5, 6)
+        src_int = array_from_host(h_int)
+        for dims in (:, (), 1, (1, 2))
+            dst_float = array_from_host(zeros(Float32, size(h_int)))
+            @test AK.reverse!(dst_float, src_int; dims, prefer_threads) === dst_float
+            @test Array(dst_float) == reverse(h_int; dims)
+        end
+        @test Array(src_int) == h_int
+
         # dims=() reverses nothing
         v = array_from_host(h)
         @test Array(AK.reverse!(v; dims=(), prefer_threads)) == h
@@ -183,6 +205,11 @@
         # Non-integer dims must throw rather than silently do nothing
         @test_throws ArgumentError AK.reverse!(v; dims=1.5, prefer_threads)
         @test_throws ArgumentError AK.reverse(v; dims=(1, 2.5), prefer_threads)
+
+        dst = similar(v)
+        @test_throws ArgumentError AK.reverse!(dst, v; dims=Iterators.Stateful([1, 1]), prefer_threads)
+        @test_throws ArgumentError AK.reverse!(v; dims=nothing, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(similar(v, 4, 3, 2), v; dims=1, prefer_threads)
 
         # Duplicate dims throw, as in Base
         @test_throws ArgumentError AK.reverse!(v; dims=(1, 1), prefer_threads)
