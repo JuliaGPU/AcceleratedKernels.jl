@@ -6,8 +6,11 @@
     ithread = @index(Local, Linear)
     i = ithread + (iblock - 0x1) * N
 
+    # Force inlining: a closure capturing several arrays or index objects is otherwise called
+    # as a separate device function, with its captured state copied to local memory first,
+    # which costs 3-6x in bandwidth-bound loops on NVPTX
     if i <= length(indices)
-        f(indices[i])
+        @inline f(indices[i])
     end
 end
 
