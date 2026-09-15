@@ -30,7 +30,7 @@ jobs:
           - '1.10'
           - '1.11'
           - '1.12'
-          - '1.13-nightly'
+          - '1.13'
         os:
           - ubuntu-latest
           - macOS-latest
@@ -81,7 +81,7 @@ jobs:
           - '1.10'
           - '1.11'
           - '1.12'
-          - '1.13-nightly'
+          - '1.13'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
