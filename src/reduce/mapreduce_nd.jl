@@ -140,8 +140,9 @@ function mapreduce_nd(
             # One block per output element
             blocks = dst_size
             kernel2! = _mapreduce_nd_by_block!(backend, block_size)
+            neutral_typed = convert(eltype(dst), neutral)
             kernel2!(
-                src, dst, f, op, init, neutral, dims,
+                src, dst, f, op, init, neutral_typed, dims,
                 ndrange=(block_size * blocks,),
             )
         end
@@ -243,10 +244,11 @@ end
         input_base_idx = typeof(ithread)(0)
         tmp = tid
         KernelAbstractions.Extras.@unroll for i in ndims:-1i16:1i16
+            stride_i = Base.unsafe_trunc(typeof(tmp), dst_strides[i])
             if i != dims
-                input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
+                input_base_idx += Base.sdiv_int(tmp, stride_i) * src_strides[i]
             end
-            tmp = tmp % dst_strides[i]
+            tmp = Base.srem_int(tmp, stride_i)
         end
 
         # Go over each element in the reduced dimension; this implementation assumes that there
@@ -255,9 +257,9 @@ end
         res = init
         for i in 0x0:reduce_size - 0x1
             src_idx = input_base_idx + i * src_strides[dims]
-            res = op(res, f(src[src_idx + 0x1]))
+            res = op(res, f(@inbounds src[src_idx + 0x1]))
         end
-        dst[tid + 0x1] = res
+        @inbounds dst[tid + 0x1] = res
     end
 end
 
@@ -312,10 +314,11 @@ end
     input_base_idx = typeof(ithread)(0)
     tmp = iblock
     KernelAbstractions.Extras.@unroll for i in ndims:-1i16:1i16
+        stride_i = Base.unsafe_trunc(typeof(tmp), dst_strides[i])
         if i != dims
-            input_base_idx += (tmp ÷ dst_strides[i]) * src_strides[i]
+            input_base_idx += Base.sdiv_int(tmp, stride_i) * src_strides[i]
         end
-        tmp = tmp % dst_strides[i]
+        tmp = Base.srem_int(tmp, stride_i)
     end
 
     # We have a block of threads to process the whole reduced dimension. First do pre-reduction
@@ -324,17 +327,17 @@ end
     i = ithread
     while i < reduce_size
         src_idx = input_base_idx + i * src_strides[dims]
-        partial = op(partial, f(src[src_idx + 0x1]))
+        partial = op(partial, f(@inbounds src[src_idx + 0x1]))
         i += N
     end
 
     # Store partial result in shared memory; now we are down to a single block to reduce within
-    sdata[ithread + 0x1] = partial
+    @inbounds sdata[ithread + 0x1] = partial
     @synchronize()
 
     @inline reduce_group!(@context, op, sdata, N, ithread)
 
     if ithread == 0x0
-        dst[iblock + 0x1] = op(init, sdata[0x1])
+        @inbounds dst[iblock + 0x1] = op(init, @inbounds sdata[0x1])
     end
 end

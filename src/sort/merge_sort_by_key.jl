@@ -18,14 +18,14 @@
 
     i = ithread + iblock * N * 0x2
     if i < len
-        s_keys[ithread + 0x1] = keys[i + 0x1]
-        s_values[ithread + 0x1] = values[i + 0x1]
+        @inbounds s_keys[ithread + 0x1] = @inbounds keys[i + 0x1]
+        @inbounds s_values[ithread + 0x1] = @inbounds values[i + 0x1]
     end
 
     i = ithread + N + iblock * N * 0x2
     if i < len
-        s_keys[ithread + N + 0x1] = keys[i + 0x1]
-        s_values[ithread + N + 0x1] = values[i + 0x1]
+        @inbounds s_keys[ithread + N + 0x1] = @inbounds keys[i + 0x1]
+        @inbounds s_values[ithread + N + 0x1] = @inbounds values[i + 0x1]
     end
 
     @synchronize()
@@ -34,47 +34,47 @@
     size_group = typeof(ithread)(2)
 
     while half_size_group <= N
-        gid = ithread ÷ half_size_group
+        gid = Base.sdiv_int(ithread, half_size_group)
 
-        local k1::eltype(keys)
-        local k2::eltype(keys)
-        local v1::eltype(values)
-        local v2::eltype(values)
+        k1 = zero(eltype(keys))
+        k2 = zero(eltype(keys))
+        v1 = zero(eltype(values))
+        v2 = zero(eltype(values))
         pos1 = typemax(I)
         pos2 = typemax(I)
 
         i = gid * size_group + half_size_group + iblock * N * 0x2
         if i < len
-            tid = gid * size_group + ithread % half_size_group
-            k1 = s_keys[tid + 0x1]
-            v1 = s_values[tid + 0x1]
+            tid = gid * size_group + Base.srem_int(ithread, half_size_group)
+            k1 = @inbounds s_keys[tid + 0x1]
+            v1 = @inbounds s_values[tid + 0x1]
 
             i = (gid + 0x1) * size_group + iblock * N * 0x2
             n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
             lo = gid * size_group + half_size_group
             hi = lo + n
-            pos1 = ithread % half_size_group + _lower_bound_s0(s_keys, k1, lo, hi, comp) - lo
+            pos1 = Base.srem_int(ithread, half_size_group) + _lower_bound_s0(s_keys, k1, lo, hi, comp) - lo
         end
 
-        tid = gid * size_group + half_size_group + ithread % half_size_group
+        tid = gid * size_group + half_size_group + Base.srem_int(ithread, half_size_group)
         i = tid + iblock * N * 0x2
         if i < len
-            k2 = s_keys[tid + 0x1]
-            v2 = s_values[tid + 0x1]
+            k2 = @inbounds s_keys[tid + 0x1]
+            v2 = @inbounds s_values[tid + 0x1]
             lo = gid * size_group
             hi = lo + half_size_group
-            pos2 = ithread % half_size_group + _upper_bound_s0(s_keys, k2, lo, hi, comp) - lo
+            pos2 = Base.srem_int(ithread, half_size_group) + _upper_bound_s0(s_keys, k2, lo, hi, comp) - lo
         end
 
         @synchronize()
 
         if pos1 != typemax(I)
-            s_keys[gid * size_group + pos1 + 0x1] = k1
-            s_values[gid * size_group + pos1 + 0x1] = v1
+            @inbounds s_keys[gid * size_group + pos1 + 0x1] = k1
+            @inbounds s_values[gid * size_group + pos1 + 0x1] = v1
         end
         if pos2 != typemax(I)
-            s_keys[gid * size_group + pos2 + 0x1] = k2
-            s_values[gid * size_group + pos2 + 0x1] = v2
+            @inbounds s_keys[gid * size_group + pos2 + 0x1] = k2
+            @inbounds s_values[gid * size_group + pos2 + 0x1] = v2
         end
 
         @synchronize()
@@ -85,14 +85,14 @@
 
     i = ithread + iblock * N * 0x2
     if i < len
-        keys[i + 0x1] = s_keys[ithread + 0x1]
-        values[i + 0x1] = s_values[ithread + 0x1]
+        @inbounds keys[i + 0x1] = @inbounds s_keys[ithread + 0x1]
+        @inbounds values[i + 0x1] = @inbounds s_values[ithread + 0x1]
     end
 
     i = ithread + N + iblock * N * 0x2
     if i < len
-        keys[i + 0x1] = s_keys[ithread + N + 0x1]
-        values[i + 0x1] = s_values[ithread + N + 0x1]
+        @inbounds keys[i + 0x1] = @inbounds s_keys[ithread + N + 0x1]
+        @inbounds values[i + 0x1] = @inbounds s_values[ithread + N + 0x1]
     end
 end
 
@@ -116,38 +116,40 @@ end
     ithread = @index(Local, Linear) - 0x1
 
     idx = ithread + iblock * N
-    size_group = half_size_group * 0x2
-    gid = idx ÷ half_size_group
+    half_size_group = typeof(idx)(half_size_group)
+    size_group = half_size_group * typeof(half_size_group)(0x2)
+    # Use unchecked division: half_size_group is always a positive power of 2.
+    gid = Base.sdiv_int(idx, half_size_group)
 
     # Left half
-    pos_in = gid * size_group + idx % half_size_group
+    pos_in = gid * size_group + Base.srem_int(idx, half_size_group)
     lo = gid * size_group + half_size_group
 
     if lo >= len
         # Incomplete left half, nothing to swap on the right, simply copy elements to be sorted
         # in next iteration
         if pos_in < len
-            keys_out[pos_in + 0x1] = keys_in[pos_in + 0x1]
-            values_out[pos_in + 0x1] = values_in[pos_in + 0x1]
+            @inbounds keys_out[pos_in + 0x1] = @inbounds keys_in[pos_in + 0x1]
+            @inbounds values_out[pos_in + 0x1] = @inbounds values_in[pos_in + 0x1]
         end
     else
 
         hi = (gid + 0x1) * size_group
         hi > len && (hi = len)
 
-        pos_out = pos_in + _lower_bound_s0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
-        keys_out[pos_out + 0x1] = keys_in[pos_in + 0x1]
-        values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
+        pos_out = pos_in + _lower_bound_s0(keys_in, @inbounds(keys_in[pos_in + 0x1]), lo, hi, comp) - lo
+        @inbounds keys_out[pos_out + 0x1] = @inbounds keys_in[pos_in + 0x1]
+        @inbounds values_out[pos_out + 0x1] = @inbounds values_in[pos_in + 0x1]
 
         # Right half
-        pos_in = gid * size_group + half_size_group + idx % half_size_group
+        pos_in = gid * size_group + half_size_group + Base.srem_int(idx, half_size_group)
 
         if pos_in < len
             lo = gid * size_group
             hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + _upper_bound_s0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
-            keys_out[pos_out + 0x1] = keys_in[pos_in + 0x1]
-            values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
+            pos_out = pos_in - half_size_group + _upper_bound_s0(keys_in, @inbounds(keys_in[pos_in + 0x1]), lo, hi, comp) - lo
+            @inbounds keys_out[pos_out + 0x1] = @inbounds keys_in[pos_in + 0x1]
+            @inbounds values_out[pos_out + 0x1] = @inbounds values_in[pos_in + 0x1]
         end
     end
 end

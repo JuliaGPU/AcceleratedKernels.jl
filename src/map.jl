@@ -40,7 +40,7 @@ function map!(
         src, backend;
         kwargs...
     ) do idx
-        dst[idx] = f(src[idx])
+        @inbounds dst[idx] = f(@inbounds src[idx])
     end
     dst
 end

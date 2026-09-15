@@ -3,12 +3,12 @@
 function _searchsortedfirst(v, x, lo::T, hi::T, comp) where T<:Integer
     hi = hi + T(1)
     len = hi - lo
-    @inbounds while len != 0x0
+    while len != T(0)
         half_len = len >>> 0x1
         m = lo + half_len
-        if comp(v[m], x)
-            lo = m + 0x1
-            len -= half_len + 0x1
+        if comp(@inbounds(v[m]), x)
+            lo = m + T(1)
+            len -= half_len + T(1)
         else
             hi = m
             len = half_len
@@ -21,12 +21,12 @@ end
 function _searchsortedfirst(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     hi = hi + T(1)
     len = hi - lo
-    @inbounds while len != 0x0
+    while len != T(0)
         half_len = len >>> 0x1
         m = lo + half_len
-        if Base.Order.lt(ord, v[m], x)
-            lo = m + 0x1
-            len -= half_len + 0x1
+        if Base.Order.lt(ord, @inbounds(v[m]), x)
+            lo = m + T(1)
+            len -= half_len + T(1)
         else
             hi = m
             len = half_len
@@ -40,9 +40,9 @@ function _searchsortedlast(v, x, lo::T, hi::T, comp) where T<:Integer
     u = T(1)
     lo = lo - u
     hi = hi + u
-    @inbounds while lo < hi - u
+    while lo < hi - u
         m = lo + ((hi - lo) >>> 0x1)
-        if comp(x, v[m])
+        if comp(x, @inbounds(v[m]))
             hi = m
         else
             lo = m
@@ -56,9 +56,9 @@ function _searchsortedlast(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T
     u = T(1)
     lo = lo - u
     hi = hi + u
-    @inbounds while lo < hi - u
+    while lo < hi - u
         m = lo + ((hi - lo) >>> 0x1)
-        if Base.Order.lt(ord, x, v[m])
+        if Base.Order.lt(ord, x, @inbounds(v[m]))
             hi = m
         else
             lo = m
@@ -112,7 +112,7 @@ function searchsortedfirst!(
         x, backend;
         min_elems, kwargs...
     ) do i
-        @inbounds ix[i] = _searchsortedfirst(v, x[i], firstindex(v), lastindex(v), comp)
+        @inbounds ix[i] = Base.unsafe_trunc(eltype(ix), _searchsortedfirst(v, @inbounds(x[i]), firstindex(v), lastindex(v), comp))
     end
 end
 
@@ -195,7 +195,7 @@ function searchsortedlast!(
         x, backend;
         min_elems, kwargs...
     ) do i
-        @inbounds ix[i] = _searchsortedlast(v, x[i], firstindex(v), lastindex(v), comp)
+        @inbounds ix[i] = Base.unsafe_trunc(eltype(ix), _searchsortedlast(v, @inbounds(x[i]), firstindex(v), lastindex(v), comp))
     end
 end
 

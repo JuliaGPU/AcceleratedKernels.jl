@@ -133,7 +133,7 @@ end
     ndims = length(vsizes)
 
     length_dims = vsizes[dims]
-    length_outer = length(v) ÷ length_dims
+    length_outer = Base.sdiv_int(length(v), length_dims)
 
     block_size = @groupsize()[1]
 
@@ -155,8 +155,9 @@ end
         tmp = tid
         KernelAbstractions.Extras.@unroll for i in 0x1:ndims
             if i != dims
-                input_base_idx += (tmp % vsizes[i]) * vstrides[i]
-                tmp = tmp ÷ vsizes[i]
+                size_i = Base.unsafe_trunc(typeof(tmp), vsizes[i])
+                input_base_idx += Base.srem_int(tmp, size_i) * vstrides[i]
+                tmp = Base.sdiv_int(tmp, size_i)
             end
         end
 
@@ -196,7 +197,7 @@ end
     ndims = length(vsizes)
 
     length_dims = vsizes[dims]
-    length_outer = length(v) ÷ length_dims
+    length_outer = Base.sdiv_int(length(v), length_dims)
 
     @uniform block_size = @groupsize()[1]
 
@@ -220,15 +221,17 @@ end
     tmp = iblock
     KernelAbstractions.Extras.@unroll for i in 0x1:ndims
         if i != dims
-            input_base_idx += (tmp % vsizes[i]) * vstrides[i]
-            tmp = tmp ÷ vsizes[i]
+            size_i = Base.unsafe_trunc(typeof(tmp), vsizes[i])
+            input_base_idx += Base.srem_int(tmp, size_i) * vstrides[i]
+            tmp = Base.sdiv_int(tmp, size_i)
         end
     end
 
     # We have a block of threads to accumulate along the dims axis; do it in chunks of
     # block_size and keep track of previous chunks' running prefix
     ichunk = typeof(iblock)(0)
-    num_chunks = (length_dims + (0x2 * block_size) - 0x1) ÷ (0x2 * block_size)
+    chunk_size = Base.unsafe_trunc(typeof(length_dims), 0x2 * block_size)
+    num_chunks = Base.sdiv_int(length_dims + chunk_size - 0x1, chunk_size)
     total = neutral
 
     if ithread == 0x0

@@ -17,10 +17,10 @@
     ithread = @index(Local, Linear) - 0x1
 
     i = ithread + iblock * N * 0x2
-    i < len && (s_buf[ithread + 0x1] = vec[i + 0x1])
+    i < len && (@inbounds s_buf[ithread + 0x1] = @inbounds vec[i + 0x1])
 
     i = ithread + N + iblock * N * 0x2
-    i < len && (s_buf[ithread + N + 0x1] = vec[i + 0x1])
+    i < len && (@inbounds s_buf[ithread + N + 0x1] = @inbounds vec[i + 0x1])
 
     @synchronize()
 
@@ -28,38 +28,38 @@
     size_group = typeof(ithread)(2)
 
     while half_size_group <= N
-        gid = ithread ÷ half_size_group
+        gid = Base.sdiv_int(ithread, half_size_group)
 
-        local v1::T
-        local v2::T
+        v1 = zero(T)
+        v2 = zero(T)
         pos1 = typemax(I)
         pos2 = typemax(I)
 
         i = gid * size_group + half_size_group + iblock * N * 0x2
         if i < len
-            tid = gid * size_group + ithread % half_size_group
-            v1 = s_buf[tid + 0x1]
+            tid = gid * size_group + Base.srem_int(ithread, half_size_group)
+            v1 = @inbounds s_buf[tid + 0x1]
 
             i = (gid + 0x1) * size_group + iblock * N * 0x2
             n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
             lo = gid * size_group + half_size_group
             hi = lo + n
-            pos1 = ithread % half_size_group + _lower_bound_s0(s_buf, v1, lo, hi, comp) - lo
+            pos1 = Base.srem_int(ithread, half_size_group) + _lower_bound_s0(s_buf, v1, lo, hi, comp) - lo
         end
 
-        tid = gid * size_group + half_size_group + ithread % half_size_group
+        tid = gid * size_group + half_size_group + Base.srem_int(ithread, half_size_group)
         i = tid + iblock * N * 0x2
         if i < len
-            v2 = s_buf[tid + 0x1]
+            v2 = @inbounds s_buf[tid + 0x1]
             lo = gid * size_group
             hi = lo + half_size_group
-            pos2 = ithread % half_size_group + _upper_bound_s0(s_buf, v2, lo, hi, comp) - lo
+            pos2 = Base.srem_int(ithread, half_size_group) + _upper_bound_s0(s_buf, v2, lo, hi, comp) - lo
         end
 
         @synchronize()
 
-        pos1 != typemax(I) && (s_buf[gid * size_group + pos1 + 0x1] = v1)
-        pos2 != typemax(I) && (s_buf[gid * size_group + pos2 + 0x1] = v2)
+        pos1 != typemax(I) && (@inbounds s_buf[gid * size_group + pos1 + 0x1] = v1)
+        pos2 != typemax(I) && (@inbounds s_buf[gid * size_group + pos2 + 0x1] = v2)
 
         @synchronize()
 
@@ -68,10 +68,10 @@
     end
 
     i = ithread + iblock * N * 0x2
-    i < len && (vec[i + 0x1] = s_buf[ithread + 0x1])
+    i < len && (@inbounds vec[i + 0x1] = @inbounds s_buf[ithread + 0x1])
 
     i = ithread + N + iblock * N * 0x2
-    i < len && (vec[i + 0x1] = s_buf[ithread + N + 0x1])
+    i < len && (@inbounds vec[i + 0x1] = @inbounds s_buf[ithread + N + 0x1])
 end
 
 
@@ -91,33 +91,36 @@ end
     ithread = @index(Local, Linear) - 0x1
 
     idx = ithread + iblock * N
-    size_group = half_size_group * 0x2
-    gid = idx ÷ half_size_group
+    half_size_group = typeof(idx)(half_size_group)
+    size_group = half_size_group * typeof(half_size_group)(0x2)
+    # Use unchecked division: half_size_group is always a positive power of 2,
+    # so divide-by-zero and signed-overflow (typemin/-1) cannot occur.
+    gid = Base.sdiv_int(idx, half_size_group)
 
     # Left half
-    pos_in = gid * size_group + idx % half_size_group
+    pos_in = gid * size_group + Base.srem_int(idx, half_size_group)
     lo = gid * size_group + half_size_group
 
     if lo >= len
         # Incomplete left half, nothing to swap on the right, simply copy elements to be sorted
         # in next iteration
-        pos_in < len && (vec_out[pos_in + 0x1] = vec_in[pos_in + 0x1])
+        pos_in < len && (@inbounds vec_out[pos_in + 0x1] = @inbounds vec_in[pos_in + 0x1])
     else
 
         hi = (gid + 0x1) * size_group
         hi > len && (hi = len)
 
-        pos_out = pos_in + _lower_bound_s0(vec_in, vec_in[pos_in + 0x1], lo, hi, comp) - lo
-        vec_out[pos_out + 0x1] = vec_in[pos_in + 0x1]
+        pos_out = pos_in + _lower_bound_s0(vec_in, @inbounds(vec_in[pos_in + 0x1]), lo, hi, comp) - lo
+        @inbounds vec_out[pos_out + 0x1] = @inbounds vec_in[pos_in + 0x1]
 
         # Right half
-        pos_in = gid * size_group + half_size_group + idx % half_size_group
+        pos_in = gid * size_group + half_size_group + Base.srem_int(idx, half_size_group)
 
         if pos_in < len
             lo = gid * size_group
             hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + _upper_bound_s0(vec_in, vec_in[pos_in + 0x1], lo, hi, comp) - lo
-            vec_out[pos_out + 0x1] = vec_in[pos_in + 0x1]
+            pos_out = pos_in - half_size_group + _upper_bound_s0(vec_in, @inbounds(vec_in[pos_in + 0x1]), lo, hi, comp) - lo
+            @inbounds vec_out[pos_out + 0x1] = @inbounds vec_in[pos_in + 0x1]
         end
     end
 end

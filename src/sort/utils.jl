@@ -6,10 +6,10 @@
 # If you use these functions, you'll have to offset the returned indices too.
 @inbounds @inline function _lower_bound_s0(arr, value, left=0, right=length(arr), comp=(<))
     right <= left && return left
-    comp(arr[right], value) && return right
+    comp(@inbounds(arr[right]), value) && return right
     while right > left + 0x1
         mid = left + ((right - left) >> 0x1)
-        if comp(arr[mid], value)
+        if comp(@inbounds(arr[mid]), value)
             left = mid
         else
             right = mid
@@ -21,10 +21,10 @@ end
 
 @inbounds @inline function _upper_bound_s0(arr, value, left=0, right=length(arr), comp=(<))
     right <= left && return left
-    comp(value, arr[left + 0x1]) && return left
+    comp(value, @inbounds(arr[left + 0x1])) && return left
     while right > left + 0x1
         mid = left + ((right - left) >> 0x1)
-        if comp(value, arr[mid + 0x1])
+        if comp(value, @inbounds(arr[mid + 0x1]))
             right = mid
         else
             left = mid
@@ -36,10 +36,10 @@ end
 
 @inbounds @inline function _lower_bound_si0(ix, vec, value, left=0, right=length(ix), comp=(<))
     right <= left && return left
-    comp(vec[ix[right]], value) && return right
+    comp(vec[@inbounds(ix[right])], value) && return right
     while right > left + 0x1
         mid = left + ((right - left) >> 0x1)
-        if comp(vec[ix[mid]], value)
+        if comp(vec[@inbounds(ix[mid])], value)
             left = mid
         else
             right = mid
@@ -51,10 +51,10 @@ end
 
 @inbounds @inline function _upper_bound_si0(ix, vec, value, left=0, right=length(ix), comp=(<))
     right <= left && return left
-    comp(value, vec[ix[left + 0x1]]) && return left
+    comp(value, vec[@inbounds(ix[left + 0x1])]) && return left
     while right > left + 0x1
         mid = left + ((right - left) >> 0x1)
-        if comp(value, vec[ix[mid + 0x1]])
+        if comp(value, vec[@inbounds(ix[mid + 0x1])])
             right = mid
         else
             left = mid

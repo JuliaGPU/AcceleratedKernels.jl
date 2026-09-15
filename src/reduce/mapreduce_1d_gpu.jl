@@ -1,3 +1,28 @@
+# _TypedMap: wraps f to ensure its output is type-stable as T.
+# Uses @generated so the dispatch is resolved entirely at specialization time —
+# no runtime dispatch, no boxing. Only instantiated when eltype(src) != dst_type.
+struct _TypedMap{T, F}
+    f::F
+end
+
+@generated function (m::_TypedMap{T, F})(x) where {T, F}
+    # Determine at code-generation time which conversion to use
+    RT = Core.Compiler.return_type(F, Tuple{eltype(x)})
+    if RT === T
+        # f already returns T: identity
+        return :(m.f(x))
+    elseif T <: Integer && RT <: Integer
+        # Integer narrowing: use unchecked truncation
+        return :(Base.unsafe_trunc(T, m.f(x)))
+    elseif T <: AbstractFloat
+        # Float cast: direct constructor (fptrunc/fpext, no checks)
+        return :(T(m.f(x)))
+    else
+        # Composite types (tuples, structs): trust f returns T
+        return :(m.f(x))
+    end
+end
+
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(@Const(src), dst, f, op, neutral)
 
     @uniform N = @groupsize()[1]
@@ -16,11 +41,11 @@
 
     i = ithread + iblock * (N * 0x2)
     if i >= len
-        sdata[ithread + 0x1] = neutral
+        @inbounds sdata[ithread + 0x1] = neutral
     elseif i + N >= len
-        sdata[ithread + 0x1] = f(src[i + 0x1])
+        @inbounds sdata[ithread + 0x1] = f(@inbounds src[i + 0x1])
     else
-        sdata[ithread + 0x1] = op(f(src[i + 0x1]), f(src[i + N + 0x1]))
+        @inbounds sdata[ithread + 0x1] = op(f(@inbounds src[i + 0x1]), f(@inbounds src[i + N + 0x1]))
     end
 
     @synchronize()
@@ -41,7 +66,7 @@
     # end
 
     if ithread == 0x0
-        dst[iblock + 0x1] = sdata[0x1]
+        @inbounds dst[iblock + 0x1] = @inbounds sdata[0x1]
     end
 end
 
@@ -76,14 +101,13 @@ function mapreduce_1d_gpu(
     num_per_block = 2 * block_size
     blocks = (len + num_per_block - 1) ÷ num_per_block
 
+    dst_type = typeof(init)
     if !isnothing(temp)
         @argcheck get_backend(temp) === backend
-        @argcheck eltype(temp) === typeof(init)
+        @argcheck eltype(temp) === dst_type
         @argcheck length(temp) >= blocks * 2
         dst = temp
     else
-        # Figure out type for destination
-        dst_type = typeof(init)
         dst = KernelAbstractions.allocate(backend, dst_type, blocks * 2)
     end
 
@@ -92,7 +116,10 @@ function mapreduce_1d_gpu(
     dst_view = @view dst[1:blocks]
 
     kernel! = _mapreduce_block!(backend, block_size)
-    kernel!(src_view, dst_view, f, op, neutral, ndrange=(block_size * blocks,))
+    neutral_typed = convert(dst_type, neutral)
+    # Only wrap f when output type conversion is needed; avoids overhead for same-type and composite types
+    f_typed = (eltype(src_view) === dst_type) ? f : _TypedMap{dst_type, typeof(f)}(f)
+    kernel!(src_view, dst_view, f_typed, op, neutral_typed, ndrange=(block_size * blocks,))
 
     # As long as we still have blocks to process, swap between the src and dst pointers at
     # the beginning of the first and second halves of dst
@@ -110,7 +137,7 @@ function mapreduce_1d_gpu(
         blocks = (len + num_per_block - 1) ÷ num_per_block
 
         # Each block produces one reduced value
-        kernel!(p1, p2, identity, op, neutral, ndrange=(block_size * blocks,))
+        kernel!(p1, p2, identity, op, neutral_typed, ndrange=(block_size * blocks,))
         len = blocks
 
         if len < switch_below

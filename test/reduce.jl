@@ -125,11 +125,11 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
     # Testing different settings
     AK.reduce(
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         array_from_host(rand(Int32, 10_000));
         prefer_threads,
         init=Int32(0),
-        neutral=Int64(0),
+        neutral=Int32(0),
         block_size=64,
         temp=array_from_host(zeros(Int32, 10_000)),
         switch_below=50,
@@ -137,11 +137,11 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         min_elems=100,
     )
     AK.reduce(
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         rand(Int32, 10_000);
         prefer_threads,
         init=Int32(0),
-        neutral=Int64(0),
+        neutral=Int32(0),
         max_tasks=16,
         min_elems=1000,
     )
@@ -227,7 +227,7 @@ end
 
     # Testing different settings
     AK.reduce(
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         array_from_host(rand(Int32, 3, 4, 5));
         prefer_threads,
         init=Int32(0),
@@ -240,7 +240,7 @@ end
         min_elems=100,
     )
     AK.reduce(
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         array_from_host(rand(Int32, 3, 4, 5));
         prefer_threads,
         init=Int32(0),
@@ -464,7 +464,7 @@ end
     # Testing different settings
     AK.mapreduce(
         -,
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         array_from_host(rand(Int32, 3, 4, 5));
         prefer_threads,
         init=Int32(0),
@@ -478,7 +478,7 @@ end
     )
     AK.mapreduce(
         -,
-        (x, y) -> x + 1,
+        (x, y) -> x + one(x),
         array_from_host(rand(Int32, 3, 4, 5));
         prefer_threads,
         init=Int32(0),

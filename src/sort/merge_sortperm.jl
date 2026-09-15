@@ -45,7 +45,7 @@ function merge_sortperm!(
 
     # Initialise indices that will be sorted by the keys in v
     foreachindex(ix, block_size=block_size) do i
-        @inbounds ix[i] = i
+        @inbounds ix[i] = Base.unsafe_trunc(eltype(ix), i)
     end
     keys = inplace ? v : copy(v)
 
@@ -124,12 +124,12 @@ function merge_sortperm_lowmem!(
 
     # Initialise indices that will be sorted by the keys in v
     foreachindex(ix, block_size=block_size) do i
-        @inbounds ix[i] = i
+        @inbounds ix[i] = Base.unsafe_trunc(eltype(ix), i)
     end
 
     # Construct custom comparator indexing into global array v
     ord = Base.Order.ord(lt, by, rev, order)
-    comp = (ix, iy) -> Base.Order.lt(ord, v[ix], v[iy])
+    comp = (ix, iy) -> Base.Order.lt(ord, @inbounds(v[ix]), @inbounds(v[iy]))
 
     # Block level
     blocks = (length(ix) + block_size * 2 - 1) ÷ (block_size * 2)

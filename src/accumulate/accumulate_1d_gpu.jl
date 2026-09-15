@@ -21,7 +21,7 @@ end
     # NOTE: block_size MUST be a power of 2
     len = length(v)
     @uniform block_size = @groupsize()[1]
-    temp = @localmem eltype(v) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
+    temp = @localmem eltype(v) (typeof(block_size)(2) * block_size + conflict_free_offset(typeof(block_size)(2) * block_size),)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -32,8 +32,8 @@ end
     iblock = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    num_blocks = @ndrange()[1] ÷ block_size
-    block_offset = iblock * block_size * 0x2            # Processing two elements per thread
+    num_blocks = Base.unsafe_trunc(typeof(block_size), @ndrange()[1]) ÷ block_size
+    block_offset = iblock * block_size * typeof(iblock)(2)            # Processing two elements per thread
 
     # Copy two elements from the main array; offset indices to avoid bank conflicts
     ai = ithread
@@ -43,31 +43,31 @@ end
     bank_offset_b = conflict_free_offset(bi)
 
     if block_offset + ai < len
-        temp[ai + bank_offset_a + 0x1] = v[block_offset + ai + 0x1]
+        @inbounds temp[ai + bank_offset_a + 0x1] = @inbounds v[block_offset + ai + 0x1]
     else
-        temp[ai + bank_offset_a + 0x1] = neutral
+        @inbounds temp[ai + bank_offset_a + 0x1] = neutral
     end
 
     if block_offset + bi < len
-        temp[bi + bank_offset_b + 0x1] = v[block_offset + bi + 0x1]
+        @inbounds temp[bi + bank_offset_b + 0x1] = @inbounds v[block_offset + bi + 0x1]
     else
-        temp[bi + bank_offset_b + 0x1] = neutral
+        @inbounds temp[bi + bank_offset_b + 0x1] = neutral
     end
 
     # Build block reduction down
     offset = typeof(ithread)(1)
-    next_pow2 = block_size * 0x2
+    next_pow2 = block_size * typeof(block_size)(2)
     d = next_pow2 >> 0x1
-    while d > 0x0             # TODO: unroll this like in reduce.jl ?
+    while d > typeof(d)(0)             # TODO: unroll this like in reduce.jl ?
         @synchronize()
 
         if ithread < d
-            _ai = offset * (0x2 * ithread + 0x1) - 0x1
-            _bi = offset * (0x2 * ithread + 0x2) - 0x1
+            _ai = offset * (typeof(ithread)(2) * ithread + typeof(ithread)(1)) - typeof(ithread)(1)
+            _bi = offset * (typeof(ithread)(2) * ithread + typeof(ithread)(2)) - typeof(ithread)(1)
             _ai += conflict_free_offset(_ai)
             _bi += conflict_free_offset(_bi)
 
-            temp[_bi + 0x1] = op(temp[_bi + 0x1], temp[_ai + 0x1])
+            @inbounds temp[_bi + 0x1] = op(@inbounds(temp[_bi + 0x1]), @inbounds(temp[_ai + 0x1]))
         end
 
         offset = offset << 0x1
@@ -75,9 +75,9 @@ end
     end
 
     # Flush last element
-    if ithread == 0x0
-        offset0 = conflict_free_offset(next_pow2 - 0x1)
-        temp[next_pow2 - 0x1 + offset0 + 0x1] = iblock == 0x0 ? init : neutral
+    if ithread == typeof(ithread)(0)
+        offset0 = conflict_free_offset(next_pow2 - typeof(next_pow2)(1))
+        @inbounds temp[(next_pow2 - typeof(next_pow2)(1) + offset0 + typeof(next_pow2)(1))] = iblock == 0x0 ? init : neutral
     end
 
     # Build block accumulation up
@@ -87,38 +87,38 @@ end
         @synchronize()
 
         if ithread < d
-            _ai = offset * (0x2 * ithread + 0x1) - 0x1
-            _bi = offset * (0x2 * ithread + 0x2) - 0x1
+            _ai = offset * (typeof(ithread)(2) * ithread + typeof(ithread)(1)) - typeof(ithread)(1)
+            _bi = offset * (typeof(ithread)(2) * ithread + typeof(ithread)(2)) - typeof(ithread)(1)
             _ai += conflict_free_offset(_ai)
             _bi += conflict_free_offset(_bi)
 
-            t = temp[_ai + 0x1]
-            temp[_ai + 0x1] = temp[_bi + 0x1]
-            temp[_bi + 0x1] = op(temp[_bi + 0x1], t)
+            t = @inbounds temp[_ai + 0x1]
+            @inbounds temp[_ai + 0x1] = @inbounds temp[_bi + 0x1]
+            @inbounds temp[_bi + 0x1] = op(@inbounds(temp[_bi + 0x1]), t)
         end
 
         d = d << 0x1
     end
 
     # Later blocks should always be inclusively-scanned
-    if inclusive || iblock != 0x0
+    if inclusive || iblock != typeof(iblock)(0)
         # To compute an inclusive scan, shift elements left...
         @synchronize()
-        t1 = temp[ai + bank_offset_a + 0x1]
-        t2 = temp[bi + bank_offset_b + 0x1]
+        t1 = @inbounds(temp[ai + bank_offset_a + 0x1])
+        t2 = @inbounds(temp[bi + bank_offset_b + 0x1])
         @synchronize()
 
-        if ai > 0x0
-            temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
+        if ai > typeof(ai)(0)
+            @inbounds temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
         end
-        temp[bi - 0x1 + conflict_free_offset(bi - 0x1) + 0x1] = t2
+        @inbounds temp[bi - 0x1 + conflict_free_offset(bi - 0x1) + 0x1] = t2
 
         # ...and accumulate the last value too
-        if bi == 0x2 * block_size - 0x1
-            if iblock < num_blocks - 0x1
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[(iblock + 0x1) * block_size * 0x2])
+        if bi == typeof(bi)(2) * block_size - typeof(bi)(1)
+            if iblock < num_blocks - typeof(iblock)(1)
+                @inbounds temp[bi + bank_offset_b + 0x1] = op(t2, @inbounds(v[(iblock + 0x1) * block_size * 0x2]))
             else
-                temp[bi + bank_offset_b + 0x1] = op(t2, v[len])
+                @inbounds temp[bi + bank_offset_b + 0x1] = op(t2, @inbounds(v[len]))
             end
         end
     end
@@ -126,24 +126,24 @@ end
     @synchronize()
 
     # Write this block's final prefix to global array and set flag to "block prefix computed"
-    if bi == 0x2 * block_size - 0x1
+    if bi == typeof(bi)(2) * block_size - typeof(bi)(1)
 
         # Known at compile-time; used in the first pass of the ScanPrefixes algorithm
         if !isnothing(prefixes)
-            prefixes[iblock + 0x1] = temp[bi + bank_offset_b + 0x1]
+            @inbounds prefixes[iblock + 0x1] = @inbounds(temp[bi + bank_offset_b + 0x1])
         end
 
         # Known at compile-time; used only in the DecoupledLookback algorithm
         if !isnothing(flags)
-            flags[iblock + 0x1] = ACC_FLAG_P
+            @inbounds flags[iblock + 0x1] = ACC_FLAG_P
         end
     end
 
     if block_offset + ai < len
-        v[block_offset + ai + 0x1] = temp[ai + bank_offset_a + 0x1]
+        @inbounds v[block_offset + ai + 0x1] = @inbounds(temp[ai + bank_offset_a + 0x1])
     end
     if block_offset + bi < len
-        v[block_offset + bi + 0x1] = temp[bi + bank_offset_b + 0x1]
+        @inbounds v[block_offset + bi + 0x1] = @inbounds(temp[bi + bank_offset_b + 0x1])
     end
 end
 
@@ -163,34 +163,36 @@ end
     # Group (block) and local (thread) indices
     iblock = @index(Group, Linear) - 0x1 + 0x1              # Skipping first block
     ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * 0x2                # Processing two elements per thread
+    block_offset = iblock * block_size * typeof(iblock)(2)                # Processing two elements per thread
 
     # Each block looks back to find running prefix sum
-    running_prefix = prefixes[iblock - 0x1 + 0x1]
-    inspected_block = signed(typeof(iblock))(iblock) - 0x2
-    while inspected_block >= 0x0
+    running_prefix = @inbounds(prefixes[iblock - 0x1 + 0x1])
+    # Use bitcast for UInt32→Int32 to avoid checked conversion (check_sign_bit) on GPU.
+    # Safe because iblock is always a small positive block index (high bit never set).
+    inspected_block = Base.bitcast(Int32, iblock) - Int32(2)
+    while inspected_block >= Int32(0)
         # Opportunistic: a previous block finished everything
-        if UnsafeAtomics.load(pointer(flags, inspected_block + 0x1), UnsafeAtomics.monotonic) == ACC_FLAG_A
+        if UnsafeAtomics.load(pointer(flags, inspected_block + Int32(1)), UnsafeAtomics.monotonic) == ACC_FLAG_A
             UnsafeAtomics.fence(UnsafeAtomics.acquire) # (fence before reading from v)
             # Previous blocks (except last) always have filled values in v, so index is inbounds
-            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * 0x2])
+            running_prefix = op(running_prefix, @inbounds(v[(inspected_block + Int32(1)) * block_size * typeof(block_size)(2)]))
             break
         else
-            running_prefix = op(running_prefix, prefixes[inspected_block + 0x1])
+            running_prefix = op(running_prefix, @inbounds(prefixes[inspected_block + 0x1]))
         end
 
-        inspected_block -= 0x1
+        inspected_block -= Int32(1)
     end
 
     # Now we have aggregate prefix of all previous blocks, add it to all our elements
     ai = ithread
     if block_offset + ai < len
-        v[block_offset + ai + 0x1] = op(running_prefix, v[block_offset + ai + 0x1])
+        @inbounds v[block_offset + ai + 0x1] = op(running_prefix, @inbounds(v[block_offset + ai + 0x1]))
     end
 
     bi = ithread + block_size
     if block_offset + bi < len
-        v[block_offset + bi + 0x1] = op(running_prefix, v[block_offset + bi + 0x1])
+        @inbounds v[block_offset + bi + 0x1] = op(running_prefix, @inbounds(v[block_offset + bi + 0x1]))
     end
 
     # Set flag for "aggregate of all prefixes up to this block finished"
@@ -203,8 +205,8 @@ end
     #       for more details.
     #       We use the happens-before relation between stores to `v` and the store to `flags`.
     UnsafeAtomics.fence(UnsafeAtomics.release)
-    if ithread == 0x0
-        UnsafeAtomics.store!(pointer(flags, iblock + 0x1), convert(eltype(flags), ACC_FLAG_A), UnsafeAtomics.monotonic)
+    if ithread == typeof(ithread)(0)
+        UnsafeAtomics.store!(pointer(flags, iblock + typeof(iblock)(1)), convert(eltype(flags), ACC_FLAG_A), UnsafeAtomics.monotonic)
     end
 end
 
@@ -224,10 +226,10 @@ end
     # Group (block) and local (thread) indices
     iblock = @index(Group, Linear) - 0x1 + 0x1              # Skipping first block
     ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * 0x2                # Processing two elements per thread
+    block_offset = iblock * block_size * typeof(iblock)(2)                # Processing two elements per thread
 
     # Each block looks back to find running prefix sum
-    running_prefix = prefixes[iblock - 0x1 + 0x1]
+    running_prefix = @inbounds(prefixes[iblock - 0x1 + 0x1])
 
     # The prefixes were pre-accumulated, which means (for block_size=N):
     #   - If there were N or fewer prefixes (so fewer than N*N elements in v to begin with), the
@@ -235,20 +237,22 @@ end
     #   - If there were more than N prefixes, each chunk of N prefixes was accumulated, but not
     #     along the chunks. We need to accumulate the prefixes of the previous chunks into
     #     running_prefix.
-    num_preblocks = (iblock - 0x1) ÷ (block_size * 0x2)
-    for i in 0x1:num_preblocks
-        running_prefix = op(running_prefix, prefixes[i * block_size * 0x2])
+    num_preblocks = (iblock - typeof(iblock)(1)) ÷ (block_size * typeof(block_size)(2))
+    i = typeof(iblock)(1)
+    while i <= num_preblocks
+        running_prefix = op(running_prefix, @inbounds(prefixes[i * block_size * typeof(block_size)(2)]))
+        i += typeof(i)(1)
     end
 
     # Now we have aggregate prefix of all previous blocks, add it to all our elements
     ai = ithread
     if block_offset + ai < len
-        v[block_offset + ai + 0x1] = op(running_prefix, v[block_offset + ai + 0x1])
+        @inbounds v[block_offset + ai + 0x1] = op(running_prefix, @inbounds(v[block_offset + ai + 0x1]))
     end
 
     bi = ithread + block_size
     if block_offset + bi < len
-        v[block_offset + bi + 0x1] = op(running_prefix, v[block_offset + bi + 0x1])
+        @inbounds v[block_offset + bi + 0x1] = op(running_prefix, @inbounds(v[block_offset + bi + 0x1]))
     end
 end
 
@@ -299,7 +303,8 @@ function accumulate_1d_gpu!(
     end
 
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, init, neutral, inclusive, flags, prefixes,
+    init_typed = convert(eltype(v), init)
+    kernel1!(op, v, init_typed, neutral, inclusive, flags, prefixes,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
@@ -350,7 +355,8 @@ function accumulate_1d_gpu!(
     end
 
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, init, neutral, inclusive, nothing, prefixes,
+    init_typed = convert(eltype(v), init)
+    kernel1!(op, v, init_typed, neutral, inclusive, nothing, prefixes,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1

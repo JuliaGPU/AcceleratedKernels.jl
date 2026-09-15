@@ -184,9 +184,11 @@ function _mapreduce_impl(
 )
     if isnothing(dims)
         if use_gpu_algorithm(backend, prefer_threads)
+            # Ensure neutral matches the accumulator type (typeof(init)), not eltype(src)
+            neutral_typed = convert(typeof(init), neutral)
             mapreduce_1d_gpu(
                 f, op, src, backend;
-                init, neutral,
+                init, neutral=neutral_typed,
                 max_tasks, min_elems,
                 block_size, temp,
                 switch_below
