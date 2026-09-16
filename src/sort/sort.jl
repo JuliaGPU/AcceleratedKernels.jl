@@ -1,4 +1,5 @@
 include("utils.jl")
+include("slices.jl")
 include("merge_sort.jl")
 include("merge_sort_by_key.jl")
 include("merge_sortperm.jl")
@@ -61,6 +62,9 @@ struct SampleSort <: SortAlgorithm end
         # Algorithm choice
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
+        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
+        dims::Union{Colon, Integer}=Colon(),
+
         # GPU settings
         block_size::Union{Nothing, Int}=nothing,
 
@@ -70,6 +74,12 @@ struct SampleSort <: SortAlgorithm end
 
 Sorts the array `v` in-place using the specified backend. The `lt`, `by`, `rev`, and `order`
 arguments are the same as for `Base.sort`.
+
+By default (`dims=:`) the whole array is sorted as one vector, whatever its shape. Pass an integer
+`dims` to sort each 1D slice along that dimension independently, like `Base.sort!(A; dims)`. On GPU
+backends the slices are sorted with the same merge sort as the whole-array case, each slice its own
+sequence of merges; `RadixSort` does not support `dims`. On CPU backends each slice is sorted with
+`Base.sort!` (also with `alg=SampleSort()`, and without using `temp`), slices spread over the tasks.
 
 ## CPU
 CPU settings: use at most `max_tasks` threads to sort the array such that at least `min_elems`
@@ -138,6 +148,9 @@ function _sort_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
+    # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
+    dims::Union{Colon, Integer}=Colon(),
+
     # GPU settings; nothing => each GPU algorithm picks its own tuned default
     block_size::Union{Nothing, Int}=nothing,
 
@@ -151,9 +164,10 @@ function _sort_impl!(
                 v, backend;
                 lt, by, rev, order,
                 block_size=isnothing(block_size) ? 256 : block_size,
-                temp,
+                temp, dims,
             )
         elseif alg isa RadixSort
+            dims isa Colon || throw(ArgumentError("RadixSort does not support sorting along `dims`"))
             _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
             ordering = Base.Order.ord(lt, by, rev, order)
             ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
@@ -175,7 +189,9 @@ function _sort_impl!(
         end
     else
         alg = isnothing(alg) ? SampleSort() : alg
-        if alg isa SampleSort
+        if !(alg isa SampleSort)
+            throw(ArgumentError("$(typeof(alg)) is not supported by sort! on CPU backends"))
+        elseif dims isa Colon
             sample_sort!(
                 v;
                 lt, by, rev, order,
@@ -183,9 +199,13 @@ function _sort_impl!(
                 temp,
             )
         else
-            throw(ArgumentError("$(typeof(alg)) is not supported by sort! on CPU backends"))
+            ord = Base.Order.ord(lt, by, rev, order)
+            foreach_slice(v, dims; max_tasks, min_elems) do slice
+                Base.sort!(slice; order=ord)
+            end
         end
     end
+    v
 end
 
 
@@ -204,6 +224,9 @@ end
 
         # Algorithm choice
         alg::Union{Nothing, SortAlgorithm}=nothing,
+
+        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
+        dims::Union{Colon, Integer}=Colon(),
 
         # GPU settings
         block_size::Union{Nothing, Int}=nothing,
@@ -244,6 +267,9 @@ end
         # Algorithm choice
         alg::Union{Nothing, SortAlgorithm}=nothing,
 
+        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
+        dims::Union{Colon, Integer}=Colon(),
+
         # GPU settings
         block_size::Union{Nothing, Int}=nothing,
 
@@ -254,6 +280,11 @@ end
 Save into `ix` the index permutation of `v` such that `v[ix]` is sorted. The `lt`, `by`, `rev`, and
 `order` arguments are the same as for `Base.sortperm`. The same algorithms are used as for
 [`sort!`](@ref) with custom by-index comparators.
+
+By default (`dims=:`) the whole array is permuted as one vector. Pass an integer `dims` to permute
+each 1D slice along that dimension independently, like `Base.sortperm!(ix, A; dims)`: `ix` must
+then have the same axes as `v` and receives linear indices into `v`, so that `v[ix]` is sorted
+along `dims`. The permutation is stable in both cases.
 
 ## Algorithm choice
 By default, `sortperm!` uses sample sort on CPU backends and merge sort on GPU
@@ -289,12 +320,21 @@ function _sortperm_impl!(
 
     alg::Union{Nothing, SortAlgorithm}=nothing,
 
+    # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
+    dims::Union{Colon, Integer}=Colon(),
+
     # GPU settings; nothing => merge sort's tuned default (sortperm is merge-only)
     block_size::Union{Nothing, Int}=nothing,
 
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
+    if !(dims isa Colon)
+        1 <= dims <= ndims(v) || throw(ArgumentError("dimension out of range"))
+        axes(ix) == axes(v) ||
+            throw(ArgumentError("index array must have the same axes as the input, $(axes(ix)) != $(axes(v))"))
+    end
+
     if use_gpu_algorithm(backend, prefer_threads)
         alg = isnothing(alg) ? MergeSort() : alg
         bs = isnothing(block_size) ? 256 : block_size
@@ -304,7 +344,7 @@ function _sortperm_impl!(
                     ix, v, backend;
                     lt, by, rev, order,
                     block_size=bs,
-                    temp,
+                    temp, dims,
                 )
             else
                 # merge_sortperm! copies keys alongside indices in shared memory so comparisons
@@ -316,6 +356,7 @@ function _sortperm_impl!(
                     lt, by, rev, order,
                     block_size=bs,
                     temp_ix=temp,   # old `temp` was the index buffer; maps directly to temp_ix
+                    dims,
                 )
             end
         elseif alg isa RadixSort
@@ -325,7 +366,9 @@ function _sortperm_impl!(
         end
     else
         alg = isnothing(alg) ? SampleSort() : alg
-        if alg isa SampleSort
+        if !(alg isa SampleSort)
+            throw(ArgumentError("$(typeof(alg)) is not supported by sortperm! on CPU backends"))
+        elseif dims isa Colon
             sample_sortperm!(
                 ix, v;
                 lt, by, rev, order,
@@ -334,9 +377,15 @@ function _sortperm_impl!(
                 temp,
             )
         else
-            throw(ArgumentError("$(typeof(alg)) is not supported by sortperm! on CPU backends"))
+            # Like Base: sort the linear indices of each slice by the values they point to
+            ord = Base.Order.Perm(Base.Order.ord(lt, by, rev, order), vec(v))
+            copyto!(ix, LinearIndices(v))
+            foreach_slice(ix, dims; max_tasks, min_elems) do slice
+                Base.sort!(slice; order=ord)
+            end
         end
     end
+    ix
 end
 
 
@@ -356,6 +405,9 @@ end
 
         # Algorithm choice
         alg::Union{Nothing, SortAlgorithm}=nothing,
+
+        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
+        dims::Union{Colon, Integer}=Colon(),
 
         # GPU settings
         block_size::Union{Nothing, Int}=nothing,

@@ -33,6 +33,18 @@ v = ROCArray(rand(Int32, 100_000))
 AK.sort!(v)
 ```
 
+Multidimensional arrays are sorted as one flat vector by default; pass `dims` to sort each 1D slice
+along that dimension independently, like `Base.sort!(A; dims)`. `sortperm` along `dims` returns
+linear indices into the array, so `A[ix]` is sorted along `dims`:
+```julia
+A = ROCArray(rand(Float32, 1000, 1000))
+AK.sort!(A; dims=1)             # each column sorted
+ix = AK.sortperm(A; dims=2)     # A[ix] has each row sorted
+```
+
+On GPU backends `dims` uses merge sort (`RadixSort()` does not support it); on CPU backends each
+slice is sorted with `Base.sort!`.
+
 As GPU memory is more expensive, all functions in AcceleratedKernels.jl expose any temporary arrays they will use (the `temp` argument); you can supply your own buffers to make the algorithms not allocate additional GPU storage, e.g.:
 ```julia
 v = ROCArray(rand(Float32, 100_000))

@@ -1,31 +1,35 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_block!(keys, values, comp)
+@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_block!(
+    keys, values, comp, layout, blocks_per_slice,
+)
 
     @uniform N = @groupsize()[1]
     s_keys = @localmem eltype(keys) (N * 0x2,)
     s_values = @localmem eltype(values) (N * 0x2,)
 
     I = typeof(N)
-    len = length(keys)
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
+    # Use zero-based indices internally and half-open search bounds.
 
     # Group (block) and local (thread) indices
     iblock = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
+    # Each block sorts a tile of one slice
+    islice, iblock = slice_block(layout, iblock, blocks_per_slice)
+    slice_keys = slice(keys, layout, islice)
+    slice_values = slice(values, layout, islice)
+    len = layout.len
+
     i = ithread + iblock * N * 0x2
     if i < len
-        s_keys[ithread + 0x1] = keys[i + 0x1]
-        s_values[ithread + 0x1] = values[i + 0x1]
+        s_keys[ithread + 0x1] = slice_keys[i + 0x1]
+        s_values[ithread + 0x1] = slice_values[i + 0x1]
     end
 
     i = ithread + N + iblock * N * 0x2
     if i < len
-        s_keys[ithread + N + 0x1] = keys[i + 0x1]
-        s_values[ithread + N + 0x1] = values[i + 0x1]
+        s_keys[ithread + N + 0x1] = slice_keys[i + 0x1]
+        s_values[ithread + N + 0x1] = slice_values[i + 0x1]
     end
 
     @synchronize()
@@ -85,14 +89,14 @@
 
     i = ithread + iblock * N * 0x2
     if i < len
-        keys[i + 0x1] = s_keys[ithread + 0x1]
-        values[i + 0x1] = s_values[ithread + 0x1]
+        slice_keys[i + 0x1] = s_keys[ithread + 0x1]
+        slice_values[i + 0x1] = s_values[ithread + 0x1]
     end
 
     i = ithread + N + iblock * N * 0x2
     if i < len
-        keys[i + 0x1] = s_keys[ithread + N + 0x1]
-        values[i + 0x1] = s_values[ithread + N + 0x1]
+        slice_keys[i + 0x1] = s_keys[ithread + N + 0x1]
+        slice_values[i + 0x1] = s_values[ithread + N + 0x1]
     end
 end
 
@@ -100,20 +104,24 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_global!(
     @Const(keys_in), keys_out,
     @Const(values_in), values_out,
-    comp, half_size_group,
+    comp, half_size_group, layout, blocks_per_slice,
 )
 
-    len = length(keys_in)
     N = @groupsize()[1]
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
+    # Use zero-based indices internally and half-open search bounds.
 
     # Group (block) and local (thread) indices
     iblock = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
+
+    # Merges never cross slice boundaries
+    islice, iblock = slice_block(layout, iblock, blocks_per_slice)
+    keys_in = slice(keys_in, layout, islice)
+    keys_out = slice(keys_out, layout, islice)
+    values_in = slice(values_in, layout, islice)
+    values_out = slice(values_out, layout, islice)
+    len = layout.len
 
     idx = ithread + iblock * N
     size_group = half_size_group * 0x2
@@ -167,6 +175,9 @@ end
         block_size::Int=256,
         temp_keys::Union{Nothing, AbstractArray}=nothing,
         temp_values::Union{Nothing, AbstractArray}=nothing,
+
+        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
+        dims::Union{Colon, Integer}=Colon(),
     )
 """
 function merge_sort_by_key!(
@@ -182,10 +193,15 @@ function merge_sort_by_key!(
     block_size::Int=256,
     temp_keys::Union{Nothing, AbstractArray}=nothing,
     temp_values::Union{Nothing, AbstractArray}=nothing,
+    dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
     @argcheck block_size > 0
     @argcheck length(keys) == length(values)
+    layout = slice_layout(keys, dims)
+    if !(dims isa Colon)
+        @argcheck axes(keys) == axes(values)
+    end
     if !isnothing(temp_keys)
         @argcheck length(temp_keys) == length(keys)
         @argcheck eltype(temp_keys) === eltype(keys)
@@ -197,16 +213,20 @@ function merge_sort_by_key!(
 
     # Construct comparator
     ord = Base.Order.ord(lt, by, rev, order)
+    (isempty(keys) || layout.len <= 1) && return keys, values
     comp = (x, y) -> Base.Order.lt(ord, x, y)
 
-    # Block level
-    blocks = (length(keys) + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_by_key_block!(backend, block_size)(keys, values, comp, ndrange=(block_size * blocks,))
+    # Block level: each block sorts a tile of one slice in local memory
+    len = layout.len
+    blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
+    _merge_sort_by_key_block!(backend, block_size)(
+        keys, values, comp, layout, blocks,
+        ndrange=(block_size * blocks * slice_count(layout),),
+    )
 
-    # Global level
+    # Global level: merge the sorted tiles of each slice, doubling the run length every pass
     half_size_group = Int32(block_size * 2)
     size_group = half_size_group * 2
-    len = length(keys)
     if len > half_size_group
         pk1 = keys
         pk2 = isnothing(temp_keys) ? similar(keys) : temp_keys
@@ -219,7 +239,10 @@ function merge_sort_by_key!(
         niter = 0
         while len > half_size_group
             blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
-            kernel!(pk1, pk2, pv1, pv2, comp, half_size_group, ndrange=(block_size * blocks,))
+            kernel!(
+                pk1, pk2, pv1, pv2, comp, half_size_group, layout, blocks,
+                ndrange=(block_size * blocks * slice_count(layout),),
+            )
 
             half_size_group = half_size_group << 1;
             size_group = size_group << 1;
@@ -253,6 +276,7 @@ end
         block_size::Int=256,
         temp_keys::Union{Nothing, AbstractArray}=nothing,
         temp_values::Union{Nothing, AbstractArray}=nothing,
+        dims::Union{Colon, Integer}=Colon(),
     )
 """
 function merge_sort_by_key(
