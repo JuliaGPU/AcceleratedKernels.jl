@@ -1007,3 +1007,93 @@ end
     @test_throws ArgumentError AK.sortperm(A; prefer_threads, dims=0)
     @test_throws ArgumentError AK.sortperm!(array_from_host(zeros(Int, 64)), A; prefer_threads, dims=1)
 end
+
+
+@testset "bitonic_sort_alg" begin
+    if !prefer_threads
+        Random.seed!(0)
+
+        # ── Correctness: fuzzy testing across supported types ─────────────────
+        for T in valid_backend_eltypes(BACKEND,
+                        (UInt32, Int32, Float32, UInt64, Int64, Float64))
+            for _ in 1:100
+                n = rand(1:100_000)
+                v_h = rand(T, n)
+                v = array_from_host(v_h)
+                AK.sort!(v; prefer_threads, alg=AK.BitonicSort())
+                @test Array(v) == sort(v_h)
+            end
+        end
+
+        # ── rev=true ──────────────────────────────────────────────────────────
+        for T in valid_backend_eltypes(BACKEND,
+                        (UInt32, Int32, Float32, UInt64, Int64, Float64))
+            n   = 10_000
+            v_h = rand(T, n)
+            v   = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.BitonicSort(), rev=true)
+            @test Array(v) == sort(v_h; rev=true)
+        end
+
+        # ── Sizes around the single-block / multi-block boundary ──────────────
+        # Non-power-of-two lengths exercise the sentinel padding; large ones the
+        # global-memory merge passes.
+        for n in (2, 3, 7, 8, 255, 256, 257, 1023, 1024, 1025,
+                  8191, 8192, 8193, 100_000, 1_000_000)
+            v_h = rand(Float32, n)
+            v   = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.BitonicSort())
+            @test Array(v) == sort(v_h)
+        end
+
+        # ── Adversarial patterns ──────────────────────────────────────────────
+        for n in (1000, 8192, 65536)
+            for v_h in (fill(2.5f0, n), Float32.(1:n), Float32.(n:-1:1),
+                        Float32.(rand(0:1, n)), Float32.(rand(0:3, n)))
+                v = array_from_host(v_h)
+                AK.sort!(v; prefer_threads, alg=AK.BitonicSort())
+                @test Array(v) == sort(v_h)
+            end
+        end
+
+        # ── Ordering composition ──────────────────────────────────────────────
+        v_h = rand(Int32, 10_000)
+        for (rev, order) in ((nothing, Base.Order.Reverse), (true, Base.Order.Forward),
+                             (true, Base.Order.Reverse))
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.BitonicSort(), rev, order)
+            @test Array(v) == sort(v_h; rev, order)
+        end
+
+        # ── Block-size tuning ─────────────────────────────────────────────────
+        v_h = rand(UInt32, 20_000)
+        for block_size in (64, 128, 256, 512)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.BitonicSort(; block_size))
+            @test Array(v) == sort(v_h)
+        end
+
+        # ── Edge cases ────────────────────────────────────────────────────────
+        @test length(Array(AK.sort!(array_from_host(Int32[]); prefer_threads, alg=AK.BitonicSort()))) == 0
+        @test Array(AK.sort!(array_from_host(Int32[42]); prefer_threads, alg=AK.BitonicSort())) == Int32[42]
+        @test Array(AK.sort!(array_from_host(Int32[2, 1]); prefer_threads, alg=AK.BitonicSort())) == Int32[1, 2]
+
+        # ── Out-of-place: input unchanged ─────────────────────────────────────
+        v_h = rand(Float32, 10_000)
+        v   = array_from_host(v_h)
+        w   = AK.sort(v; prefer_threads, alg=AK.BitonicSort())
+        @test Array(w) == sort(v_h)
+        @test Array(v) == v_h
+
+        # ── Rejected: N-D array, custom by/lt, unsupported element type ────────
+        m = array_from_host(rand(Float32, 8, 8))
+        @test_throws ArgumentError AK.sort!(m; prefer_threads, alg=AK.BitonicSort())
+
+        v = array_from_host(rand(Int32, 16))
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort(), by=abs)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort(), lt=(>))
+
+        v = array_from_host(rand(Int16, 16))
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort())
+    end
+end

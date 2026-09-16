@@ -5,6 +5,7 @@ include("merge_sort_by_key.jl")
 include("merge_sortperm.jl")
 include("cpu_sample_sort.jl")
 include("radix_sort.jl")
+include("bitonic_sort.jl")
 
 
 # Available sorting algorithms
@@ -33,6 +34,31 @@ Base.@kwdef struct RadixSort <: SortAlgorithm
 end
 
 _radix_defaults(::Backend) = (block_size=256, items_per_thread=2)
+
+"""
+    BitonicSort(; block_size=nothing)
+
+Use a GPU bitonic sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
+`Int64`, and `Float64` with forward or reverse ordering. This algorithm does not support
+`sortperm!`.
+
+A bitonic sorting network has no data-dependent control flow, so every comparator runs
+unconditionally — a good fit for GPUs. For an input that fits a single workgroup's shared memory
+the whole sort runs in one kernel with no global-memory round-trips, which is faster than the other
+GPU algorithms for small arrays. Above that size the network spills to global memory and its
+`O(n·log²n)` comparisons cost more than the `O(n)`-pass [`RadixSort`](@ref) or `MergeSort`, so it
+grows slower with `n`:
+
+- Small arrays (up to roughly a single workgroup, a few thousand elements): fastest of the three.
+- Medium arrays: comparable to `MergeSort`.
+- Large arrays: slower than `RadixSort` (measured ~1.1–1.8× on an RTX 5080 and RX 9060 XT), because
+  the number of global compare-exchange passes grows with `log²n`.
+
+Non-power-of-two lengths are padded up internally; `block_size` sets the threads per workgroup.
+"""
+Base.@kwdef struct BitonicSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+end
 
 """
     SampleSort()
@@ -183,6 +209,18 @@ function _sort_impl!(
                 block_size=radix_block_size,
                 items_per_thread=radix_items,
                 temp,
+            )
+        elseif alg isa BitonicSort
+            v isa AbstractVector ||
+                throw(ArgumentError("BitonicSort only supports vectors (got a $(ndims(v))-dimensional array)"))
+            _bs_supported(eltype(v)) || throw(ArgumentError("BitonicSort is not supported for eltype \"$(eltype(v))\""))
+            ordering = Base.Order.ord(lt, by, rev, order)
+            ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
+                throw(ArgumentError("BitonicSort only supports forward or reverse ordering"))
+            _bitonic_sort!(
+                v, backend;
+                descending=ordering === Base.Order.Reverse,
+                block_size=isnothing(alg.block_size) ? block_size : alg.block_size,
             )
         else
             throw(ArgumentError("$(typeof(alg)) is not supported by sort! on GPU backends"))
