@@ -132,6 +132,89 @@ end
 end
 
 
+# Sort each length-`slen` slice along one dimension, one workgroup per slice, in shared memory.
+# Slices along dim `d` are strided by `inner` (product of the sizes below `d`); element `j` of
+# slice `s` (both 0-based) is at `(s % inner) + (s ÷ inner) * inner * slen + j * inner`.
+@kernel cpu=false inbounds=true function _bitonic_slice!(
+    A, slen::Int, inner::Int, descending::Bool, ::Val{CAP}, ::Val{BS}, ::Val{IPT},
+) where {CAP, BS, IPT}
+    tile = @localmem eltype(A) (CAP,)
+    s   = Int(@index(Group, Linear)) - 1
+    t   = Int(@index(Local, Linear)) - 1
+    sbase = (s % inner) + (s ÷ inner) * inner * slen
+    pad = descending ? typemin(eltype(A)) : typemax(eltype(A))
+
+    m = 0
+    while m < IPT
+        j = t + m * BS
+        @inbounds tile[j + 1] = j < slen ? A[sbase + j * inner + 1] : pad
+        m += 1
+    end
+    @synchronize()
+
+    kklog = 1
+    while (1 << kklog) <= CAP
+        jlog = kklog - 1
+        while jlog >= 0
+            jj = 1 << jlog
+            p = t
+            while p < (CAP >> 1)
+                i = ((p >> jlog) << (jlog + 1)) | (p & (jj - 1))
+                partner = i + jj
+                asc = (i & (1 << kklog)) == 0
+                a = @inbounds tile[i + 1]
+                b = @inbounds tile[partner + 1]
+                if (a > b) == (asc != descending)
+                    @inbounds tile[i + 1] = b
+                    @inbounds tile[partner + 1] = a
+                end
+                p += BS
+            end
+            @synchronize()
+            jlog -= 1
+        end
+        kklog += 1
+    end
+
+    m = 0
+    while m < IPT
+        j = t + m * BS
+        j < slen && (@inbounds A[sbase + j * inner + 1] = tile[j + 1])
+        m += 1
+    end
+end
+
+
+# Sort each 1-D slice of `A` along `dim`, matching `Base.sort(A; dims)`. Each slice is sorted by one
+# workgroup, so a slice must fit the single-workgroup budget; larger slices are rejected.
+function _bitonic_sort_dims!(
+    A::AbstractArray{T, N}, backend::Backend, dim::Int;
+    descending::Bool,
+    block_size::Union{Nothing, Int}=nothing,
+) where {T, N}
+    slen = size(A, dim)
+    slen <= 1 && return A
+
+    npow = nextpow(2, slen)
+    budget = _prevpow2(_bs_shmem_bytes(backend) ÷ sizeof(T))
+    npow <= budget || throw(ArgumentError(
+        "BitonicSort along dims=$dim needs each slice ($slen elements) to fit the single-workgroup " *
+        "shared-memory budget ($budget elements for $T); use a flat sort or a smaller slice"))
+
+    cap = npow
+    bs = isnothing(block_size) ? min(256, cap) : min(_prevpow2(block_size), cap)
+    ipt = cap ÷ bs
+    inner = dim == 1 ? 1 : Base.prod(ntuple(k -> size(A, k), dim - 1))
+    nslices = length(A) ÷ slen
+
+    _bitonic_slice!(backend, bs)(
+        A, slen, inner, descending, Val(cap), Val(bs), Val(ipt); ndrange = nslices * bs,
+    )
+    KernelAbstractions.synchronize(backend)
+    A
+end
+
+
 function _bitonic_sort!(
     v::AbstractVector{T}, backend::Backend;
     descending::Bool,

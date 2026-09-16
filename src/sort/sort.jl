@@ -55,6 +55,10 @@ grows slower with `n`:
   the number of global compare-exchange passes grows with `log²n`.
 
 Non-power-of-two lengths are padded up internally; `block_size` sets the threads per workgroup.
+
+`BitonicSort` also implements `sort(A; dims)`: each 1-D slice is sorted by its own workgroup in
+shared memory, so per-slice sorting of many small slices is its best case. This requires each slice
+to fit the single-workgroup budget.
 """
 Base.@kwdef struct BitonicSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -99,7 +103,9 @@ struct SampleSort <: SortAlgorithm end
     )
 
 Sorts the array `v` in-place using the specified backend. The `lt`, `by`, `rev`, and `order`
-arguments are the same as for `Base.sort`.
+arguments are the same as for `Base.sort`. Pass an integer `dims` to sort each 1-D slice along that
+dimension independently, matching `Base.sort(A; dims)`; this uses [`BitonicSort`](@ref) and requires
+each slice to fit a single workgroup's shared memory.
 
 By default (`dims=:`) the whole array is sorted as one vector, whatever its shape. Pass an integer
 `dims` to sort each 1D slice along that dimension independently, like `Base.sort!(A; dims)`. On GPU
@@ -183,6 +189,11 @@ function _sort_impl!(
     # Temporary buffer, same size as `v`
     temp::Union{Nothing, AbstractArray}=nothing,
 )
+    if !(dims isa Colon)
+        return _sort_dims_impl!(v, backend, Int(dims);
+                                lt, by, rev, order, alg, prefer_threads, block_size)
+    end
+
     if use_gpu_algorithm(backend, prefer_threads)
         alg = isnothing(alg) ? MergeSort() : alg
         if alg isa MergeSort
@@ -244,6 +255,36 @@ function _sort_impl!(
         end
     end
     v
+end
+
+
+# Sort each 1-D slice of `v` along `dim`, matching `Base.sort(A; dims)`. Only `BitonicSort` provides
+# a `dims` path (each slice sorts in one workgroup); the CPU path falls back to `Base.sort!`.
+function _sort_dims_impl!(
+    v::AbstractArray{T, N}, backend::Backend, dim::Int;
+    lt, by, rev, order, alg, prefer_threads, block_size,
+) where {T, N}
+    1 <= dim <= N || throw(ArgumentError("dimension $dim is out of range 1:$N"))
+
+    if use_gpu_algorithm(backend, prefer_threads)
+        (isnothing(alg) || alg isa BitonicSort) ||
+            throw(ArgumentError("sort along `dims` is only supported by BitonicSort, got $(typeof(alg))"))
+        _bs_supported(T) ||
+            throw(ArgumentError("BitonicSort is not supported for eltype \"$T\""))
+        ordering = Base.Order.ord(lt, by, rev, order)
+        ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
+            throw(ArgumentError("BitonicSort only supports forward or reverse ordering"))
+        bs_block = (alg isa BitonicSort && !isnothing(alg.block_size)) ? alg.block_size : block_size
+        _bitonic_sort_dims!(v, backend, dim; descending=ordering === Base.Order.Reverse,
+                            block_size=bs_block)
+    else
+        ordering = Base.Order.ord(lt, by, rev, order)
+        other_dims = Tuple(d for d in 1:N if d != dim)          # slices vary only along `dim`
+        for slice in eachslice(v; dims=other_dims)
+            sort!(slice; order=ordering)
+        end
+        v
+    end
 end
 
 

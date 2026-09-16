@@ -1097,3 +1097,55 @@ end
         @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort())
     end
 end
+
+
+@testset "bitonic_sort_dims" begin
+    if !prefer_threads
+        Random.seed!(0)
+
+        # ── Per-slice correctness vs Base.sort(A; dims), 2-D and 3-D ──────────
+        for T in valid_backend_eltypes(BACKEND, (UInt32, Int32, Float32, UInt64, Int64, Float64))
+            for (L, ncols) in ((8, 5), (256, 16), (1024, 4), (100, 50), (2048, 8))
+                for dim in (1, 2)
+                    sz = dim == 1 ? (L, ncols) : (ncols, L)
+                    h = rand(T, sz...)
+                    v = array_from_host(h)
+                    AK.sort!(v; prefer_threads, dims=dim, alg=AK.BitonicSort())
+                    @test Array(v) == sort(h; dims=dim)
+
+                    v = array_from_host(h)
+                    AK.sort!(v; prefer_threads, dims=dim, alg=AK.BitonicSort(), rev=true)
+                    @test Array(v) == sort(h; dims=dim, rev=true)
+                end
+            end
+
+            h = rand(T, 7, 40, 5)
+            for dim in (1, 2, 3)
+                v = array_from_host(h)
+                AK.sort!(v; prefer_threads, dims=dim, alg=AK.BitonicSort())
+                @test Array(v) == sort(h; dims=dim)
+            end
+        end
+
+        # ── Out-of-place leaves the input untouched ───────────────────────────
+        h = rand(Float32, 256, 10)
+        v = array_from_host(h)
+        w = AK.sort(v; prefer_threads, dims=1, alg=AK.BitonicSort())
+        @test Array(w) == sort(h; dims=1)
+        @test Array(v) == h
+
+        # ── The default `dims` path (alg=nothing) also uses bitonic ───────────
+        h = rand(Float32, 512, 8)
+        v = array_from_host(h)
+        AK.sort!(v; prefer_threads, dims=2)
+        @test Array(v) == sort(h; dims=2)
+
+        # ── Rejected: slice too large, unsupported eltype, wrong algorithm ─────
+        @test_throws ArgumentError AK.sort!(array_from_host(rand(Float32, 20_000, 4));
+                                            prefer_threads, dims=1, alg=AK.BitonicSort())
+        @test_throws ArgumentError AK.sort!(array_from_host(rand(Int16, 64, 4));
+                                            prefer_threads, dims=1, alg=AK.BitonicSort())
+        @test_throws ArgumentError AK.sort!(array_from_host(rand(Float32, 64, 4));
+                                            prefer_threads, dims=1, alg=AK.RadixSort())
+    end
+end
