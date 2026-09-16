@@ -1007,3 +1007,172 @@ end
     @test_throws ArgumentError AK.sortperm(A; prefer_threads, dims=0)
     @test_throws ArgumentError AK.sortperm!(array_from_host(zeros(Int, 64)), A; prefer_threads, dims=1)
 end
+
+
+@testset "bitonic_sort_alg" begin
+    if !prefer_threads
+        Random.seed!(0)
+        alg = AK.BitonicSort()
+
+        # Fuzz across element types, including ones RadixSort cannot handle
+        for T in valid_backend_eltypes(BACKEND, (UInt8, Int16, Int32, UInt32, Float32, Int64, UInt64, Float64))
+            for _ in 1:20
+                n = rand(1:100_000)
+                v_h = rand(T, n)
+                v = array_from_host(v_h)
+                AK.sort!(v; prefer_threads, alg)
+                @test Array(v) == sort(v_h)
+            end
+        end
+
+        # Lengths around the tile size (2048 by default) and through several global levels
+        for n in (1, 2, 3, 7, 8, 255, 256, 257, 1023, 1024, 1025, 2047, 2048, 2049, 4095, 4096,
+                  4097, 8191, 8192, 8193, 100_000, 1_000_000)
+            v_h = rand(Float32, n)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg)
+            @test Array(v) == sort(v_h)
+        end
+
+        # Adversarial patterns
+        for n in (1000, 8192, 65536)
+            for v_h in (fill(2.5f0, n), Float32.(1:n), Float32.(n:-1:1),
+                        Float32.(rand(0:1, n)), Float32.(rand(0:3, n)))
+                v = array_from_host(v_h)
+                AK.sort!(v; prefer_threads, alg)
+                @test Array(v) == sort(v_h)
+            end
+        end
+
+        # NaNs and signed zeros follow `isless`, like Base
+        v_h = rand(Float32, 5000)
+        v_h[rand(1:5000, 100)] .= NaN32
+        v_h[rand(1:5000, 100)] .= -0.0f0
+        v_h[rand(1:5000, 100)] .= 0.0f0
+        for rev in (false, true)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg, rev)
+            @test isequal(Array(v), sort(v_h; rev))
+        end
+
+        # lt, by, rev and order
+        v_h = rand(Int32, 10_000)
+        for kw in ((rev=true,), (order=Base.Order.Reverse,), (rev=true, order=Base.Order.Reverse),
+                   (lt=(>),), (by=abs,), (by=x -> x % Int32(7), rev=true), (lt=(a, b) -> a % 5 < b % 5,))
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg, kw...)
+            sorted = Array(v)
+            ord = Base.Order.ord(get(kw, :lt, isless), get(kw, :by, identity),
+                                 get(kw, :rev, nothing), get(kw, :order, Base.Order.Forward))
+            @test issorted(sorted; order=ord)
+            @test sort(sorted) == sort(v_h)
+        end
+
+        # Tuning
+        v_h = rand(UInt32, 20_000)
+        for block_size in (32, 128, 256, 512), items_per_thread in (1, 2, 8, 16)
+            v = array_from_host(v_h)
+            AK.sort!(v; prefer_threads, alg=AK.BitonicSort(; block_size, items_per_thread))
+            @test Array(v) == sort(v_h)
+        end
+        v = array_from_host(v_h)
+        AK.sort!(v; prefer_threads, alg, block_size=64)
+        @test Array(v) == sort(v_h)
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort(block_size=100))
+        @test_throws ArgumentError AK.sort!(v; prefer_threads, alg=AK.BitonicSort(items_per_thread=3))
+        @test_throws ArgumentError AK.sort!(v; prefer_threads,
+            alg=AK.BitonicSort(block_size=2, items_per_thread=1 << (Sys.WORD_SIZE - 2)))
+
+        # Empty input
+        @test isempty(Array(AK.sort!(array_from_host(Int32[]); prefer_threads, alg)))
+
+        # Matrices are sorted as one flat vector by default
+        m_h = rand(Float32, 100, 30)
+        m = array_from_host(m_h)
+        AK.sort!(m; prefer_threads, alg)
+        @test vec(Array(m)) == sort(vec(m_h))
+
+        # Out-of-place: input unchanged
+        v_h = rand(Float32, 10_000)
+        v = array_from_host(v_h)
+        w = AK.sort(v; prefer_threads, alg)
+        @test Array(w) == sort(v_h)
+        @test Array(v) == v_h
+
+        # No permutation path
+        @test_throws ArgumentError AK.sortperm(v; prefer_threads, alg)
+    else
+        @test_throws ArgumentError AK.sort!(rand(Int32, 16); prefer_threads, alg=AK.BitonicSort())
+    end
+end
+
+
+@testset "bitonic_sort_dims" begin
+    if !prefer_threads
+        Random.seed!(0)
+        alg = AK.BitonicSort()
+
+        # Slices that fit one tile and slices that need global passes, 2D and 3D
+        for T in valid_backend_eltypes(BACKEND, (Int16, Int32, Float32, Int64, Float64))
+            for (L, ncols) in ((8, 5), (256, 16), (1024, 4), (100, 50), (2048, 8), (2049, 3), (5000, 3), (20_000, 2))
+                for dim in (1, 2)
+                    sz = dim == 1 ? (L, ncols) : (ncols, L)
+                    h = rand(T, sz...)
+                    v = array_from_host(h)
+                    AK.sort!(v; prefer_threads, dims=dim, alg)
+                    @test Array(v) == sort(h; dims=dim)
+
+                    v = array_from_host(h)
+                    AK.sort!(v; prefer_threads, dims=dim, alg, rev=true)
+                    @test Array(v) == sort(h; dims=dim, rev=true)
+                end
+            end
+
+            h = rand(T, 7, 40, 5)
+            for dim in (1, 2, 3)
+                v = array_from_host(h)
+                AK.sort!(v; prefer_threads, dims=dim, alg)
+                @test Array(v) == sort(h; dims=dim)
+            end
+        end
+
+        # Packed slices spanning two tiles, with a partial final tile and captured orderings
+        packed_alg = AK.BitonicSort(block_size=8, items_per_thread=4)
+        mask = UInt32(0x55)
+        for len in (3, 4), dim in (1, 2)
+            h = rand(UInt32, dim == 1 ? (len, 9) : (9, len))
+            for kw in ((by=x -> xor(x, mask),), (lt=(a, b) -> xor(a, mask) < xor(b, mask),))
+                v = array_from_host(h)
+                AK.sort!(v; prefer_threads, dims=dim, alg=packed_alg, kw...)
+                @test Array(v) == sort(h; dims=dim, kw...)
+            end
+        end
+
+        # by / lt, NaNs, vectors, empty and singleton slices
+        h = rand(Float32, 300, 700)
+        @test Array(AK.sort(array_from_host(h); prefer_threads, dims=1, alg, by=x -> -x)) == sort(h; dims=1, by=x -> -x)
+        @test Array(AK.sort(array_from_host(h); prefer_threads, dims=2, alg, lt=(>))) == sort(h; dims=2, lt=(>))
+        h[rand(1:length(h), 1000)] .= NaN32
+        @test isequal(Array(AK.sort(array_from_host(h); prefer_threads, dims=2, alg)), sort(h; dims=2))
+        h = rand(Float32, 1000)
+        @test Array(AK.sort(array_from_host(h); prefer_threads, dims=1, alg)) == sort(h)
+        @test size(AK.sort(array_from_host(rand(Float32, 0, 5)); prefer_threads, dims=1, alg)) == (0, 5)
+        @test size(AK.sort(array_from_host(rand(Float32, 5, 0)); prefer_threads, dims=1, alg)) == (5, 0)
+        h = rand(Float32, 1, 100)
+        @test Array(AK.sort(array_from_host(h); prefer_threads, dims=1, alg)) == h
+
+        # Tuning applies per slice; out-of-place leaves the input untouched
+        h = rand(Float32, 3000, 10)
+        for items_per_thread in (1, 4, 16)
+            v = array_from_host(h)
+            AK.sort!(v; prefer_threads, dims=1, alg=AK.BitonicSort(; block_size=128, items_per_thread))
+            @test Array(v) == sort(h; dims=1)
+        end
+        v = array_from_host(h)
+        w = AK.sort(v; prefer_threads, dims=1, alg)
+        @test Array(w) == sort(h; dims=1)
+        @test Array(v) == h
+
+        @test_throws ArgumentError AK.sort!(array_from_host(h); prefer_threads, dims=3, alg)
+    end
+end

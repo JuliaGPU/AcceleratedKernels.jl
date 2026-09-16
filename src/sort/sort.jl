@@ -5,6 +5,7 @@ include("merge_sort_by_key.jl")
 include("merge_sortperm.jl")
 include("cpu_sample_sort.jl")
 include("radix_sort.jl")
+include("bitonic_sort.jl")
 
 
 # Available sorting algorithms
@@ -33,6 +34,25 @@ Base.@kwdef struct RadixSort <: SortAlgorithm
 end
 
 _radix_defaults(::Backend) = (block_size=256, items_per_thread=2)
+
+"""
+    BitonicSort(; block_size=nothing, items_per_thread=nothing)
+
+Use GPU bitonic sort for `sort!` and `sort`, whole-array or along `dims`. Supports GPU-compatible
+element types and `lt`/`by`/`rev`/`order`; `by` is evaluated at each comparison. The sort is
+unstable and does not support `sortperm!` or `sortperm`.
+
+Fastest for small arrays and short slices, slower than `MergeSort`/`RadixSort` for large
+whole-array sorts. Tiles of up to `block_size * items_per_thread` elements sort in local memory;
+larger inputs need global passes.
+
+Both settings must be positive powers of two and default to `bitonic_defaults(backend)`.
+For `block_size`, the `sort!` keyword takes precedence over the backend default.
+"""
+Base.@kwdef struct BitonicSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
+end
 
 """
     SampleSort()
@@ -77,8 +97,8 @@ arguments are the same as for `Base.sort`.
 
 By default (`dims=:`) the whole array is sorted as one vector, whatever its shape. Pass an integer
 `dims` to sort each 1D slice along that dimension independently, like `Base.sort!(A; dims)`. On GPU
-backends the slices are sorted with the same merge sort as the whole-array case, each slice its own
-sequence of merges; `RadixSort` does not support `dims`. On CPU backends each slice is sorted with
+backends this uses merge sort by default, or [`BitonicSort`](@ref) when requested; `RadixSort`
+does not support `dims`. On CPU backends each slice is sorted with
 `Base.sort!` (also with `alg=SampleSort()`, and without using `temp`), slices spread over the tasks.
 
 ## CPU
@@ -93,15 +113,17 @@ faster if it is a more compute-heavy operation to hide memory latency - that inc
 - Less cache-predictable data movement, e.g. `sortperm`.
 
 ## GPU
-GPU settings: `block_size` sets the number of threads per block. For `RadixSort`, fields on the
-algorithm take precedence over this keyword, then backend defaults. `items_per_thread` is set on
-`RadixSort` and defaults to 2.
+GPU settings: `block_size` sets the number of threads per block. For `RadixSort` and `BitonicSort`,
+fields on the algorithm take precedence over this keyword, then backend defaults.
+`items_per_thread` is set on the algorithm and defaults to 2 for `RadixSort`, 8 for `BitonicSort`.
 
 ## Algorithm choice
 By default, `sort!` uses sample sort on CPU backends and merge sort on GPU
 backends. Pass `alg=SampleSort()` for the CPU path, `alg=MergeSort()` for the GPU merge-sort path,
-or `alg=RadixSort()` to opt into GPU radix sorting. `RadixSort()` supports 32-bit and 64-bit
-integers and floats with default `lt`/`by`.
+`alg=RadixSort()` to opt into GPU radix sorting, or `alg=BitonicSort()` for the GPU sorting
+network. `RadixSort()` supports 32-bit and 64-bit integers and floats with default `lt`/`by`.
+`BitonicSort()` is unstable: fastest for small arrays and short slices, slower than
+`MergeSort`/`RadixSort` for large whole-array sorts.
 
 For both CPU and GPU backends, the `temp` argument can be used to reuse a temporary buffer of the
 same size as `v` to store the sorted output.
@@ -183,6 +205,14 @@ function _sort_impl!(
                 block_size=radix_block_size,
                 items_per_thread=radix_items,
                 temp,
+            )
+        elseif alg isa BitonicSort
+            defaults = bitonic_defaults(backend)
+            bitonic_sort!(
+                v, backend;
+                lt, by, rev, order, dims,
+                block_size=something(alg.block_size, block_size, defaults.block_size),
+                items_per_thread=something(alg.items_per_thread, defaults.items_per_thread),
             )
         else
             throw(ArgumentError("$(typeof(alg)) is not supported by sort! on GPU backends"))
@@ -289,7 +319,7 @@ along `dims`. The permutation is stable in both cases.
 ## Algorithm choice
 By default, `sortperm!` uses sample sort on CPU backends and merge sort on GPU
 backends. Pass `alg=MergeSort(lowmem=true)` to use the lower-memory GPU permutation path.
-`RadixSort()` does not provide a permutation path.
+`RadixSort()` and `BitonicSort()` do not provide a permutation path.
 """
 function sortperm!(
     ix::AbstractArray,
@@ -361,6 +391,8 @@ function _sortperm_impl!(
             end
         elseif alg isa RadixSort
             throw(ArgumentError("RadixSort does not support sortperm"))
+        elseif alg isa BitonicSort
+            throw(ArgumentError("BitonicSort does not support sortperm"))
         else
             throw(ArgumentError("$(typeof(alg)) is not supported by sortperm! on GPU backends"))
         end
