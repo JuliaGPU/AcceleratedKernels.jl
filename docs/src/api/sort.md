@@ -14,13 +14,14 @@ AcceleratedKernels.sortperm
 ```
 
 Algorithm choice is available on `sort!` / `sort` / `sortperm!` / `sortperm` with `alg=AK.MergeSort()`,
-`alg=AK.MergeSort(lowmem=true)`, `alg=AK.RadixSort()`, or `alg=AK.SampleSort()`, depending on the
-backend and operation.
+`alg=AK.MergeSort(lowmem=true)`, `alg=AK.RadixSort()`, `alg=AK.BitonicSort()`, or
+`alg=AK.SampleSort()`, depending on the backend and operation.
 
 Function signatures:
 ```@docs
 AcceleratedKernels.MergeSort
 AcceleratedKernels.RadixSort
+AcceleratedKernels.BitonicSort
 AcceleratedKernels.SampleSort
 ```
 
@@ -42,8 +43,14 @@ AK.sort!(A; dims=1)             # each column sorted
 ix = AK.sortperm(A; dims=2)     # A[ix] has each row sorted
 ```
 
-On GPU backends `dims` uses merge sort (`RadixSort()` does not support it); on CPU backends each
-slice is sorted with `Base.sort!`.
+On GPU backends `dims` uses merge sort by default (`RadixSort()` does not support it); on CPU
+backends each slice is sorted with `Base.sort!`. `BitonicSort()` is unstable and supports `sort!`
+and `sort`, including `dims`, but not `sortperm!` or `sortperm`. It is fastest for small arrays
+and short slices, slower than `MergeSort`/`RadixSort` for large whole-array sorts:
+```julia
+A = ROCArray(rand(Float32, 64, 100_000))
+AK.sort!(A; dims=1, alg=AK.BitonicSort())
+```
 
 As GPU memory is more expensive, all functions in AcceleratedKernels.jl expose any temporary arrays they will use (the `temp` argument); you can supply your own buffers to make the algorithms not allocate additional GPU storage, e.g.:
 ```julia

@@ -1,172 +1,71 @@
-# Portable GPU bitonic sort on KernelAbstractions primitives. A sorting network has no
-# data-dependent branching, so it maps well onto GPUs; inputs that fit a single workgroup sort
-# entirely in shared memory. Non-power-of-two lengths are padded with a sentinel (`typemax`
-# ascending, `typemin` descending) so it sorts to the tail.
+# Bitonic sort with every comparator ascending in `ord`. At each level `kk = 2, 4, ..., N`,
+# the first step pairs zero-based `i` with `i ⊻ (kk - 1)`, reflecting the second ascending run.
+# The remaining strides `kk/4, ..., 1` merge the two runs without sorting either descending.
+#
+# For other lengths, imagine padding with values ordered after all real elements. Ascending
+# comparators leave that padding at the end, so we skip pairs whose partner is past the length.
+# No padding storage or sentinel value is needed.
+#
+# Strides below the tile span run in local memory; larger strides each need a global pass.
+# Both kernels use slices.jl layouts, with one flat slice for whole-array sorts.
 
-# Radix's eltypes: comparable, with a `typemax`/`typemin` sentinel.
-_bs_supported(::Type{T}) where T =
-    T === UInt32 || T === Int32 || T === Float32 ||
-    T === UInt64 || T === Int64 || T === Float64
-
-# Single-workgroup shared-memory budget in bytes; overridable per backend. Matches the radix sort.
-_bs_shmem_bytes(::Backend) = 32 * 1024
-@inline _prevpow2(x::Int) = 1 << (8 * sizeof(Int) - leading_zeros(x) - 1)
-
-
-# Sort one CAP-sized window from scratch in shared memory; the window's global base fixes each
-# comparator's direction. Used for a whole small array and to build the windows of the large path.
-@kernel cpu=false inbounds=true function _bitonic_full!(
-    w, descending::Bool, ::Val{CAP}, ::Val{BS}, ::Val{IPT},
-) where {CAP, BS, IPT}
-    tile = @localmem eltype(w) (CAP,)
-    blk  = @index(Group, Linear)
-    t    = Int(@index(Local, Linear)) - 1
-    base = Int(blk - 0x1) * CAP
-
-    m = 0
-    while m < IPT
-        pos = t + m * BS
-        @inbounds tile[pos + 1] = w[base + pos + 1]
-        m += 1
-    end
-    @synchronize()
-
-    kklog = 1
-    while (1 << kklog) <= CAP
-        jlog = kklog - 1
-        while jlog >= 0
-            j = 1 << jlog
-            p = t
-            while p < (CAP >> 1)
-                i = ((p >> jlog) << (jlog + 1)) | (p & (j - 1))
-                partner = i + j
-                asc = ((base + i) & (1 << kklog)) == 0
-                a = @inbounds tile[i + 1]
-                b = @inbounds tile[partner + 1]
-                if (a > b) == (asc != descending)
-                    @inbounds tile[i + 1] = b
-                    @inbounds tile[partner + 1] = a
-                end
-                p += BS
-            end
-            @synchronize()
-            jlog -= 1
-        end
-        kklog += 1
-    end
-
-    m = 0
-    while m < IPT
-        pos = t + m * BS
-        @inbounds w[base + pos + 1] = tile[pos + 1]
-        m += 1
-    end
-end
-
-
-# Finish the short strides (`j_start` down to 0, all < CAP) of merge level `kklog` for one window
-# in shared memory; every comparator's pair stays inside the window.
-@kernel cpu=false inbounds=true function _bitonic_block!(
-    w, kklog::Int, j_start::Int, descending::Bool,
-    ::Val{CAP}, ::Val{BS}, ::Val{IPT},
-) where {CAP, BS, IPT}
-    tile = @localmem eltype(w) (CAP,)
-    blk  = @index(Group, Linear)
-    t    = Int(@index(Local, Linear)) - 1
-    base = Int(blk - 0x1) * CAP
-    kk = 1 << kklog
-
-    m = 0
-    while m < IPT
-        pos = t + m * BS
-        @inbounds tile[pos + 1] = w[base + pos + 1]
-        m += 1
-    end
-    @synchronize()
-
-    jlog = j_start
-    while jlog >= 0
-        j = 1 << jlog
-        p = t
-        while p < (CAP >> 1)
-            i = ((p >> jlog) << (jlog + 1)) | (p & (j - 1))
-            partner = i + j
-            asc = ((base + i) & kk) == 0
-            a = @inbounds tile[i + 1]
-            b = @inbounds tile[partner + 1]
-            if (a > b) == (asc != descending)
-                @inbounds tile[i + 1] = b
-                @inbounds tile[partner + 1] = a
-            end
-            p += BS
-        end
-        @synchronize()
-        jlog -= 1
-    end
-
-    m = 0
-    while m < IPT
-        pos = t + m * BS
-        @inbounds w[base + pos + 1] = tile[pos + 1]
-        m += 1
-    end
-end
-
-
-# One global compare-exchange for a large-stride merge level, launched one thread per pair
-# (`npow ÷ 2`): every lane works, no divergent guard, and consecutive threads stay coalesced.
-@kernel cpu=false inbounds=true function _bitonic_global!(
-    w, kklog::Int, jlog::Int, descending::Bool,
-)
-    p = Int(@index(Global, Linear)) - 1
+# Elements `i` and `partner` (zero-based) of comparator `p` at level `kklog`, stride `jlog`
+@inline function bitonic_pair(p, kklog, jlog)
     j = 1 << jlog
     i = ((p >> jlog) << (jlog + 1)) | (p & (j - 1))
-    partner = i + j
-    asc = (i & (1 << kklog)) == 0
-    a = @inbounds w[i + 1]
-    b = @inbounds w[partner + 1]
-    if (a > b) == (asc != descending)
-        @inbounds w[i + 1] = b
-        @inbounds w[partner + 1] = a
+    partner = jlog == kklog - 1 ? i ⊻ (2j - 1) : i + j
+    i, partner
+end
+
+@inline function compare_exchange!(elems, ord, i, partner)
+    a = elems[i + 1]
+    b = elems[partner + 1]
+    if Base.Order.lt(ord, b, a)
+        elems[i + 1] = b
+        elems[partner + 1] = a
     end
 end
 
 
-# Sort each length-`slen` slice along one dimension, one workgroup per slice, in shared memory.
-# Slices along dim `d` are strided by `inner` (product of the sizes below `d`); element `j` of
-# slice `s` (both 0-based) is at `(s % inner) + (s ÷ inner) * inner * slen + j * inner`.
-@kernel cpu=false inbounds=true function _bitonic_slice!(
-    A, slen::Int, inner::Int, descending::Bool, ::Val{CAP}, ::Val{BS}, ::Val{IPT},
-) where {CAP, BS, IPT}
-    tile = @localmem eltype(A) (CAP,)
-    s   = Int(@index(Group, Linear)) - 1
-    t   = Int(@index(Local, Linear)) - 1
-    sbase = (s % inner) + (s ÷ inner) * inner * slen
-    pad = descending ? typemin(eltype(A)) : typemax(eltype(A))
+# Run the local strides of levels `first_level:last_level`. A tile holds part of one long slice
+# (`SPAN == CAP`) or `CAP ÷ SPAN` short slices. Unused entries are never read.
+@kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile!(
+    vec, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
+) where {CAP, SPAN}
+    @uniform BS = Int(@groupsize()[1])
+    tile = @localmem eltype(vec) (CAP,)
 
-    m = 0
-    while m < IPT
-        j = t + m * BS
-        @inbounds tile[j + 1] = j < slen ? A[sbase + j * inner + 1] : pad
-        m += 1
+    iblock = Int(@index(Group, Linear)) - 1
+    ithread = Int(@index(Local, Linear)) - 1
+    islice, itile = slice_block(layout, iblock, tiles_per_slice)
+    islice *= CAP ÷ SPAN
+    nslices = slice_count(layout)
+    spanlog = trailing_zeros(SPAN)
+    base = itile * SPAN
+    len = layout.len - base
+
+    # Packing arithmetic folds away when SPAN == CAP.
+    pos = ithread
+    while pos < CAP
+        s = SPAN == CAP ? islice : islice + (pos >> spanlog)
+        off = SPAN == CAP ? pos : pos & (SPAN - 1)
+        if off < len && s < nslices
+            tile[pos + 1] = slice(vec, layout, s)[base + off + 1]
+        end
+        pos += BS
     end
     @synchronize()
 
-    kklog = 1
-    while (1 << kklog) <= CAP
-        jlog = kklog - 1
+    kklog = first_level
+    while kklog <= last_level
+        jlog = min(kklog - 1, spanlog - 1)
         while jlog >= 0
-            jj = 1 << jlog
-            p = t
-            while p < (CAP >> 1)
-                i = ((p >> jlog) << (jlog + 1)) | (p & (jj - 1))
-                partner = i + jj
-                asc = (i & (1 << kklog)) == 0
-                a = @inbounds tile[i + 1]
-                b = @inbounds tile[partner + 1]
-                if (a > b) == (asc != descending)
-                    @inbounds tile[i + 1] = b
-                    @inbounds tile[partner + 1] = a
+            p = ithread
+            while p < CAP ÷ 2
+                offset = SPAN == CAP ? 0 : (p >> (spanlog - 1)) * SPAN
+                i, partner = bitonic_pair(SPAN == CAP ? p : p & (SPAN ÷ 2 - 1), kklog, jlog)
+                if partner < len && (SPAN == CAP || islice + offset ÷ SPAN < nslices)
+                    compare_exchange!(tile, ord, offset + i, offset + partner)
                 end
                 p += BS
             end
@@ -176,94 +75,81 @@ end
         kklog += 1
     end
 
-    m = 0
-    while m < IPT
-        j = t + m * BS
-        j < slen && (@inbounds A[sbase + j * inner + 1] = tile[j + 1])
-        m += 1
+    pos = ithread
+    while pos < CAP
+        s = SPAN == CAP ? islice : islice + (pos >> spanlog)
+        off = SPAN == CAP ? pos : pos & (SPAN - 1)
+        if off < len && s < nslices
+            slice(vec, layout, s)[base + off + 1] = tile[pos + 1]
+        end
+        pos += BS
     end
 end
 
 
-# Sort each 1-D slice of `A` along `dim`, matching `Base.sort(A; dims)`. Each slice is sorted by one
-# workgroup, so a slice must fit the single-workgroup budget; larger slices are rejected.
-function _bitonic_sort_dims!(
-    A::AbstractArray{T, N}, backend::Backend, dim::Int;
-    descending::Bool,
-    block_size::Union{Nothing, Int}=nothing,
-) where {T, N}
-    slen = size(A, dim)
-    slen <= 1 && return A
-
-    npow = nextpow(2, slen)
-    budget = _prevpow2(_bs_shmem_bytes(backend) ÷ sizeof(T))
-    npow <= budget || throw(ArgumentError(
-        "BitonicSort along dims=$dim needs each slice ($slen elements) to fit the single-workgroup " *
-        "shared-memory budget ($budget elements for $T); use a flat sort or a smaller slice"))
-
-    cap = npow
-    bs = isnothing(block_size) ? min(256, cap) : min(_prevpow2(block_size), cap)
-    ipt = cap ÷ bs
-    inner = dim == 1 ? 1 : Base.prod(ntuple(k -> size(A, k), dim - 1))
-    nslices = length(A) ÷ slen
-
-    _bitonic_slice!(backend, bs)(
-        A, slen, inner, descending, Val(cap), Val(bs), Val(ipt); ndrange = nslices * bs,
-    )
-    KernelAbstractions.synchronize(backend)
-    A
+# One global step at stride `2^jlog >= CAP`, one thread per comparator
+@kernel cpu=false inbounds=true function bitonic_global!(
+    vec, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
+)
+    islice, p = slice_block(layout, Int(@index(Global, Linear)) - 1, pairs_per_slice)
+    elems = slice(vec, layout, islice)
+    i, partner = bitonic_pair(p, kklog, jlog)
+    partner < layout.len && compare_exchange!(elems, ord, i, partner)
 end
 
 
-function _bitonic_sort!(
-    v::AbstractVector{T}, backend::Backend;
-    descending::Bool,
-    block_size::Union{Nothing, Int}=nothing,
-) where T
-    len = length(v)
-    len <= 1 && return v
+"""
+    bitonic_defaults(backend::Backend)
 
+Default `block_size` and `items_per_thread` for [`BitonicSort`](@ref) on `backend`.
+"""
+bitonic_defaults(::Backend) = (block_size=256, items_per_thread=8)
+
+
+function bitonic_sort!(
+    v::AbstractArray, backend::Backend=get_backend(v);
+
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+
+    block_size::Int=256,
+    items_per_thread::Int=8,
+    dims::Union{Colon, Integer}=Colon(),
+)
+    @argcheck block_size > 0 && ispow2(block_size)
+    @argcheck items_per_thread > 0 && ispow2(items_per_thread)
+    @argcheck block_size <= typemax(Int) ÷ items_per_thread
+    layout = slice_layout(v, dims)
+    len = layout.len
+    (isempty(v) || len <= 1) && return v
+    ord = Base.Order.ord(lt, by, rev, order)
+
+    # Pack short slices into one tile; split long slices across tiles.
+    tile_size = block_size * items_per_thread
     npow = nextpow(2, len)
-    budget = _prevpow2(_bs_shmem_bytes(backend) ÷ sizeof(T))
-    cap = min(npow, budget)
-    bs = isnothing(block_size) ? min(256, cap) : min(_prevpow2(block_size), cap)
-    ipt = cap ÷ bs
+    nslices = slice_count(layout)
+    span = min(npow, tile_size)
+    cap = span < block_size ? span * nextpow(2, min(nslices, tile_size ÷ span)) : span
+    tiles_per_slice = cld(len, span)
+    nblocks = cld(nslices, cap ÷ span) * tiles_per_slice
+    tile_threads = min(block_size, cap)
+    tile! = bitonic_tile!(backend, tile_threads)
+    tile!(v, ord, layout, tiles_per_slice, 1, trailing_zeros(span), Val(cap), Val(span);
+          ndrange=nblocks * tile_threads)
 
-    # Pad to a power of two; the sentinel sinks to the tail so real values fill 1:len.
-    pad = descending ? typemin(T) : typemax(T)
-    if npow == len
-        w = v
-    else
-        w = similar(v, npow)
-        copyto!(w, 1, v, 1, len)
-        fill!(view(w, (len + 1):npow), pad)
-    end
-
-    if npow <= cap
-        _bitonic_full!(backend, bs)(w, descending, Val(cap), Val(bs), Val(ipt); ndrange = bs)
-    else
-        nlog = trailing_zeros(npow)
-        caplog = trailing_zeros(cap)
-        nblocks = npow ÷ cap
-        full = _bitonic_full!(backend, bs)
-        block = _bitonic_block!(backend, bs)
-        global_step = _bitonic_global!(backend, 256)
-
-        # Build sorted windows, then merge them: global passes for j >= cap, one shared-memory
-        # batch for the remaining j < cap of each merge level.
-        full(w, descending, Val(cap), Val(bs), Val(ipt); ndrange = nblocks * bs)
-        for kklog in (caplog + 1):nlog
-            jlog = kklog - 1
-            while jlog >= caplog
-                global_step(w, kklog, jlog, descending; ndrange = npow ÷ 2)
-                jlog -= 1
+    if npow > span
+        global! = bitonic_global!(backend, block_size)
+        pairs = npow ÷ 2
+        for kklog in (trailing_zeros(span) + 1):trailing_zeros(npow)
+            for jlog in (kklog - 1):-1:trailing_zeros(span)
+                global!(v, ord, layout, pairs, kklog, jlog; ndrange=nslices * pairs)
             end
-            block(w, kklog, caplog - 1, descending, Val(cap), Val(bs), Val(ipt);
-                  ndrange = nblocks * bs)
+            tile!(v, ord, layout, tiles_per_slice, kklog, kklog, Val(cap), Val(span);
+                  ndrange=nblocks * tile_threads)
         end
     end
-    KernelAbstractions.synchronize(backend)
 
-    npow == len || copyto!(v, 1, w, 1, len)
     v
 end
