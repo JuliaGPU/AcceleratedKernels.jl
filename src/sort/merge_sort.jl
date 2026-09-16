@@ -177,9 +177,12 @@ function merge_sort!(
     _merge_sort_block!(backend, block_size)(v, comp, ndrange=(block_size * blocks,))
 
     # Global level
-    half_size_group = Int32(block_size * 2)
-    size_group = half_size_group * 2
     len = length(v)
+    half_size_group = block_size * 2
+    if len <= 2^30
+        half_size_group = Int32(half_size_group)
+    end
+    size_group = half_size_group * 2
     if len > half_size_group
         p1 = v
         p2 = isnothing(temp) ? similar(v) : temp
