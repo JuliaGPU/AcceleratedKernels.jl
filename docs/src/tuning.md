@@ -20,6 +20,13 @@ sorting, `_resolve_sort` runs four steps:
 AcceleratedKernels._resolve_sort
 ```
 
+The other families follow the same steps, with a one-line selection: reductions resolve with
+`_resolve_reduce`.
+
+```@docs
+AcceleratedKernels._resolve_reduce
+```
+
 `Auto` and explicit algorithms share steps 3 and 4, so a tuning cannot make an invalid algorithm
 run, and an explicit setting always wins over the tuning.
 
@@ -31,6 +38,8 @@ fields, and one hook returns it for a backend and element type:
 ```@docs
 AcceleratedKernels.SortTuning
 AcceleratedKernels.sort_tuning
+AcceleratedKernels.ReduceTuning
+AcceleratedKernels.reduce_tuning
 ```
 
 AcceleratedKernels defines the hook's generic method, whose values reproduce the library's

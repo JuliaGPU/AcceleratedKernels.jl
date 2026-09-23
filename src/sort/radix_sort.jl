@@ -373,7 +373,8 @@ function _rs_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool) 
     min_k, max_k = mapreduce(
         x -> (k = _to_sort_key(x); (k, k)),
         (a, b) -> (min(a[1], b[1]), max(a[2], b[2])),
-        v, backend;
+        v;
+        backend,
         init=ident,
         neutral=ident,
     )

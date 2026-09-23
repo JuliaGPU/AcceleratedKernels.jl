@@ -15,10 +15,6 @@
 #        - by_block:      one block per output, grid-stride over outputs (few outputs, large reduction)
 #        - multigroup:    several blocks per output, two-pass (dst_size==1 or very small dst_size)
 
-# Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
-# few output elements can still fill the GPU. A heuristic GPU-occupancy target.
-const TARGET_BLOCKS = 256
-
 # Below this many output elements, splitting a single output's reduction across multiple
 # blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
 # too few blocks cannot fill the GPU on its own. At or above this, by_block grid-strides.
@@ -74,22 +70,22 @@ end
 # Main entry point
 
 function mapreduce_nd(
-    f, op, src::MapReduceSource, backend::Backend;
+    f, op, src::MapReduceSource, backend::Backend, alg::Union{BlockReduce, CPUThreads.Partitioned};
     init,
     neutral=neutral_element(op, typeof(init)),
     dims,
-
-    # CPU settings
-    max_tasks::Int,
-    min_elems::Int,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int,
     temp::Union{Nothing, AbstractArray},
 )
-    @argcheck 1 <= block_size <= 1024
-    @argcheck ispow2(block_size)
+    # Launch settings of the elementwise passes, and of the reduction kernels
+    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
+                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
+    block_size = alg isa BlockReduce ? alg.block_size : 256
+
+    # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
+    # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
+    target_blocks = reduce_tuning(backend, typeof(init)).target_blocks
+    target_blocks >= 1 || throw(ArgumentError(
+        "the reduction tuning's `target_blocks` must be positive, got $target_blocks"))
 
     dims_src = dims isa Number ? (dims,) : dims
     dims_buf = Int[]
@@ -115,7 +111,7 @@ function mapreduce_nd(
     #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))     # 3×5 Matrix{Float32}
     if isempty(dims_valid)
         dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
+        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, launch...)
         return dst
     end
 
@@ -146,7 +142,7 @@ function mapreduce_nd(
     # If the reduced extent is 1, just map each element through f (keep init's type)
     if len == 1
         dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
+        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, launch...)
         return dst
     end
 
@@ -155,8 +151,8 @@ function mapreduce_nd(
     dst = _alloc_or_temp(backend, temp, init, dst_sizes)
     dst_size = length(dst)
 
-    if backend == CPU_BACKEND
-        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, max_tasks, min_elems)
+    if alg isa CPUThreads.Partitioned
+        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, launch...)
         return dst
     end
 
@@ -200,7 +196,7 @@ function mapreduce_nd(
     #   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size) -> by_block, grid-striding
     #                                                            over outputs, single pass
     #
-    # Rationale: grid-striding by_block launches `min(dst_size, TARGET_BLOCKS)` blocks;
+    # Rationale: grid-striding by_block launches `min(dst_size, target_blocks)` blocks;
     # for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
     # the (large) reduction itself across many blocks via multigroup is still better.
     # For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
@@ -223,7 +219,7 @@ function mapreduce_nd(
     # coalescing is better than a strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
-        cld(dst_size, block_size) < TARGET_BLOCKS &&
+        cld(dst_size, block_size) < target_blocks &&
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
@@ -263,7 +259,7 @@ function mapreduce_nd(
         # Grid-stride by_block: one full block cooperates on each output, then
         # grid-strides across remaining outputs if fewer blocks than outputs were
         # launched.
-        launch_blocks = min(dst_size, TARGET_BLOCKS)
+        launch_blocks = min(dst_size, target_blocks)
         _launch_mapreduce_nd_by_block!(
             backend, block_size, buffer, dst, f, op, init, neutral,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
@@ -275,7 +271,7 @@ function mapreduce_nd(
         reduce_groups = min(
             cld(reduce_size, block_size),
             block_size,
-            cld(TARGET_BLOCKS, dst_size),
+            cld(target_blocks, dst_size),
             cld(reduce_size, block_size * MIN_ITEMS_PER_THREAD),
         )
         reduce_groups = max(reduce_groups, 1)
@@ -312,9 +308,9 @@ function mapreduce_nd(
         end
     else
         # GS_DST_CUTOFF <= dst_size < reduce_size: grid-stride over outputs, one pass.
-        # Cap launched blocks at TARGET_BLOCKS; each block handles
+        # Cap launched blocks at target_blocks; each block handles
         # ceil(dst_size / launch_blocks) outputs sequentially.
-        launch_blocks = min(dst_size, TARGET_BLOCKS)
+        launch_blocks = min(dst_size, target_blocks)
         _launch_mapreduce_nd_by_block!(
             backend, block_size, buffer, dst, f, op, init, neutral,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
@@ -662,7 +658,7 @@ end
 # non-striding behavior) at zero extra cost — the while loop runs once.
 #
 # Used for GS_DST_CUTOFF <= dst_size < reduce_size (grid-stride, num_blocks ==
-# min(dst_size, TARGET_BLOCKS) < dst_size in general), and also for the
+# min(dst_size, target_blocks) < dst_size in general), and also for the
 # reduce_groups==1 fallback inside the multigroup branch (num_blocks == dst_size,
 # so the loop runs exactly once per block — identical to the pre-grid-stride kernel).
 

@@ -44,6 +44,14 @@ Supertype of the sorting algorithms: [`MergeSort`](@ref), [`RadixSort`](@ref),
 """
 abstract type SortAlgorithm <: Algorithm end
 
+"""
+    ReduceAlgorithm <: Algorithm
+
+Supertype of the reduction algorithms: [`BlockReduce`](@ref). Reductions also accept
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type ReduceAlgorithm <: Algorithm end
+
 
 """
     AcceleratedKernels.CPUThreads
@@ -54,7 +62,7 @@ other backend.
 """
 module CPUThreads
 
-import ..AcceleratedKernels: SortAlgorithm
+import ..AcceleratedKernels: Algorithm, SortAlgorithm
 
 """
     CPUThreads.SampleSort(; max_tasks=nothing, min_elems=nothing)
@@ -65,6 +73,19 @@ Uses at most `max_tasks` tasks (default `Threads.nthreads()`), each with at leas
 elements (default 1). Only runs on the host backend.
 """
 Base.@kwdef struct SampleSort <: SortAlgorithm
+    max_tasks::Union{Nothing, Int} = nothing
+    min_elems::Union{Nothing, Int} = nothing
+end
+
+"""
+    CPUThreads.Partitioned(; max_tasks=nothing, min_elems=nothing)
+
+Split the input into contiguous parts, one per task, process them on Julia threads, and combine
+the parts' results. Used by reductions, scans, `findall` and `any`/`all` on host arrays. Uses at
+most `max_tasks` tasks (default `Threads.nthreads()`), each with at least `min_elems` elements
+(default 1, or the operation's tuning). Only runs on the host backend.
+"""
+Base.@kwdef struct Partitioned <: Algorithm
     max_tasks::Union{Nothing, Int} = nothing
     min_elems::Union{Nothing, Int} = nothing
 end
@@ -99,16 +120,69 @@ _runs_kernels(::Backend) = true
 _runs_kernels(::HostBackend) = nameof(HostBackend) !== :CPU
 
 
+# Checks shared by the algorithm families
+
+# Algorithm names in error messages
+_algname(a) = nameof(typeof(a))
+_algname(::CPUThreads.SampleSort) = "CPUThreads.SampleSort"
+_algname(::CPUThreads.Partitioned) = "CPUThreads.Partitioned"
+
+# Domain checks of the fields an algorithm was given explicitly, before any arithmetic uses them
+_checkdomain(::Algorithm) = nothing
+
+function _check_positive(a, field)
+    x = getfield(a, field)
+    x === nothing || x >= 1 ||
+        throw(ArgumentError("$(_algname(a)): `$field` must be positive, got $x"))
+    nothing
+end
+
+function _check_pow2(a, field)
+    x = getfield(a, field)
+    x === nothing || (x >= 1 && ispow2(x)) ||
+        throw(ArgumentError("$(_algname(a)): `$field` must be a positive power of two, got $x"))
+    nothing
+end
+
+function _check_threads(a)
+    _check_positive(a, :max_tasks)
+    _check_positive(a, :min_elems)
+end
+
+_checkdomain(a::CPUThreads.Partitioned) = _check_threads(a)
+
+# Unset fields of a threaded algorithm: all threads, and the tuning's minimum per task
+_fill_threads(a::A, t) where {A} =
+    A(something(a.max_tasks, Threads.nthreads()), something(a.min_elems, t.threads_min_elems))
+
+function _require_kernels(a, backend)
+    _runs_kernels(backend) || throw(ArgumentError(
+        "$(_algname(a)) runs AcceleratedKernels' GPU kernels, which " *
+        "$(_backend_name(backend)) cannot run (on the host, this needs KernelAbstractions 0.10); " *
+        "use `Auto()` or a `CPUThreads` algorithm"))
+    nothing
+end
+
+function _require_threads(a, backend)
+    _runs_threads(backend) || throw(ArgumentError(
+        "$(_algname(a)) only runs on the host backend, not on $(_backend_name(backend))"))
+    nothing
+end
+
+
 # Backend resolution
 
 _backend_name(b::Backend) = nameof(typeof(b))
 
-# Values that never determine the backend: lazy index collections, scalars, and any other value
-# that is not an array. Every other array votes with `get_backend`, which throws for array types
-# that do not implement it.
+# Values that never determine the backend: lazy index collections (and Base's wrappers of them),
+# scalars, and any other value that is not an array. Every other array votes with `get_backend`,
+# which throws for array types that do not implement it.
 _backend_vote(_) = nothing
 _backend_vote(x::AbstractArray) = get_backend(x)
 _backend_vote(::Union{AbstractRange, CartesianIndices, LinearIndices}) = nothing
+# Base's views, reshapes and permutations vote like the array they wrap, so that e.g. a reshaped
+# range does not determine the backend either
+_backend_vote(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = _backend_vote(parent(x))
 _backend_vote(x::Tuple) = _backend_votes(x...)
 _backend_vote(bc::Base.Broadcast.Broadcasted) = _backend_votes(bc.args...)
 _backend_vote(x::Base.Broadcast.Extruded) = _backend_vote(x.x)
@@ -145,8 +219,9 @@ _copy(backend, v) = _backend_free(v) ? copyto!(_similar(backend, v), collect(v))
 
 The backend an operation runs on: `backend` if given, else the one every array in `args`
 (destination first) agrees on, recursing into `Broadcasted` trees; ranges, `CartesianIndices`,
-`LinearIndices` and non-array values do not count. Arguments on different backends are an
-`ArgumentError`. If no argument determines it, the host backend is used.
+`LinearIndices`, Base's views, reshapes and permutations of them, and non-array values do not
+count. Arguments on different backends are an `ArgumentError`. If no argument determines it, the
+host backend is used.
 """
 _resolve_backend(backend::Backend, args...) = backend
 function _resolve_backend(::Nothing, args...)

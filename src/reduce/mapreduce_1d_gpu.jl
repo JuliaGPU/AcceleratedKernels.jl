@@ -40,12 +40,6 @@ function mapreduce_1d_gpu(
     f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral,
-
-    # CPU settings - ignored here
-    max_tasks::Int,
-    min_elems::Int,
-
-    # GPU settings
     block_size::Int,
     items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},

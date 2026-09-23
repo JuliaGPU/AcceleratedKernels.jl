@@ -32,14 +32,8 @@ end
 
 
 # Apply op(init, f(x)) to each element of src, storing the result in dst.
-function _mapreduce_nd_apply_init!(
-    f, op, dst, src, backend;
-    init,
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    block_size=256,
-)
-    _foreachindex(eachindex(dst), backend; max_tasks, min_elems, block_size) do i
+function _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, launch...)
+    _foreachindex(eachindex(dst), backend; launch...) do i
         dst[i] = op(init, f(src[i]))
     end
 end
