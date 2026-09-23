@@ -148,7 +148,7 @@ end
 
 # An associative but non-commutative operator: 2x2 matrix products over UInt32, which wraps and so
 # forms a ring. Random products of SL(2, Z) generators stay invertible, so running products never
-# collapse to zero and combining any two operands in the wrong order changes the result.
+# collapse to zero (as products of arbitrary matrices do, hiding ordering mistakes on long inputs).
 struct ScanMat2
     a::UInt32
     b::UInt32
@@ -192,7 +192,8 @@ end
     # the block scan, the lookback / block-prefix carry and the chunked prefix carry are all
     # exercised. On the CPU, `max_tasks=4` exercises the carry between tasks.
     for inclusive in (true, false), (block_size, items_per_thread) in ((256, nothing), (16, 1), (32, 3))
-        for n in (1, 5, 100, 1000, 5000, 70_000)
+        # Includes exact tile boundaries (16 and 96 elements) and one past them
+        for n in (1, 2, 5, 16, 17, 96, 97, 100, 1000, 5000, 70_000)
             xh = [scan_randmat() for _ in 1:n]
             init = scan_randmat()
             y = array_from_host(xh)
@@ -210,8 +211,11 @@ end
     # Both GPU strategies: one thread per slice when there are more slices than elements per
     # slice, else one block per slice, processing the slice in several chunks of 2 * block_size
     for inclusive in (true, false), block_size in (64, 256)
+        # Slices of exactly one and two chunks, and one element more, for both block sizes
+        chunk = 2 * block_size
         for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
-                           ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3))
+                           ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3),
+                           ((3, chunk), 2), ((3, chunk + 1), 2), ((3, 2chunk), 2), ((2chunk + 1, 3), 1))
             xh = [scan_randmat() for _ in CartesianIndices(sz)]
             init = scan_randmat()
             y = array_from_host(xh)
