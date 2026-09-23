@@ -86,7 +86,7 @@ function _accumulate_nd_cpu_sections!(
 
     # Each thread handles a section of the output array - i.e. reducing along the dims, for
     # multiple output strides
-    foreachindex(1:length_outer, CPU(), max_tasks=max_tasks, min_elems=min_elems) do idst
+    _foreachindex(1:length_outer, HOST_BACKEND; max_tasks, min_elems) do idst
 
         @inbounds begin
             # Compute the base index in v for this outer axis

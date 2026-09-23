@@ -487,7 +487,7 @@ function _mapreduce_nd_cpu_sections!(
     Rother  = CartesianIndices(dst)
     Rreduce = _mapreduce_reduce_indices(src, dst)
 
-    foreachindex(dst, max_tasks=max_tasks, min_elems=min_elems) do idst
+    _foreachindex(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
         @inbounds begin
             Iother = Rother[idst]
             res = init

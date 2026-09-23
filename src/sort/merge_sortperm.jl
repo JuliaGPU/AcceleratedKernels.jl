@@ -32,7 +32,7 @@ function _merge_sortperm!(
     end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, backend; block_size) do i
+    _foreachindex(eachindex(ix), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
@@ -75,7 +75,7 @@ function _merge_sortperm_lowmem!(
     end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, backend; block_size) do i
+    _foreachindex(eachindex(ix), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(ix) || layout.len <= 1) && return ix

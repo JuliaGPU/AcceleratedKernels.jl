@@ -2,92 +2,51 @@
 
     Random.seed!(0)
 
-    # Fuzzy correctness testing of searchsortedfirst
-    for _ in 1:100
+    # Fuzzy correctness testing against Base, applied to each query
+    for _ in 1:100, T in (Int32, Float32)
         num_elems_v = rand(1:100_000)
         num_elems_x = rand(1:100_000)
+        vh = sort(rand(T, num_elems_v))
+        xh = rand(T, num_elems_x)
+        v = array_from_host(vh)
+        x = array_from_host(xh)
 
-        # Ints
-        v = array_from_host(sort(rand(Int32, num_elems_v)))
-        x = array_from_host(rand(Int32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedfirst!(ix, v, x; prefer_threads)
+        @test AK.searchsortedfirst!(ix, v, x) === ix
+        @test Array(ix) == [searchsortedfirst(vh, e) for e in xh]
 
-        vh = Array(v)
-        xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh; prefer_threads=true)
-        ixh_base = [searchsortedfirst(vh, e) for e in xh]
-
-        @test all(Array(ix) .== ixh .== ixh_base)
-
-        # Floats
-        v = array_from_host(sort(rand(Float32, num_elems_v)))
-        x = array_from_host(rand(Float32, num_elems_x))
         ix = similar(x, Int32)
-        AK.searchsortedfirst!(ix, v, x; prefer_threads)
-
-        vh = Array(v)
-        xh = Array(x)
-        ixh = AK.searchsortedfirst(vh, xh; prefer_threads=true)
-        ixh_base = [searchsortedfirst(vh, e) for e in xh]
-
-        @test all(Array(ix) .== ixh .== ixh_base)
+        @test AK.searchsortedlast!(ix, v, x) === ix
+        @test Array(ix) == [searchsortedlast(vh, e) for e in xh]
     end
 
-    # Fuzzy correctness testing of searchsortedlast
-    for _ in 1:100
-        num_elems_v = rand(1:100_000)
-        num_elems_x = rand(1:100_000)
-
-        # Ints
-        v = array_from_host(sort(rand(Int32, num_elems_v)))
-        x = array_from_host(rand(Int32, num_elems_x))
-        ix = similar(x, Int32)
-        AK.searchsortedlast!(ix, v, x; prefer_threads)
-
-        vh = Array(v)
-        xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh; prefer_threads=true)
-        ixh_base = [searchsortedlast(vh, e) for e in xh]
-
-        @test all(Array(ix) .== ixh .== ixh_base)
-
-        # Floats
-        v = array_from_host(sort(rand(Float32, num_elems_v)))
-        x = array_from_host(rand(Float32, num_elems_x))
-        ix = similar(x, Int32)
-        AK.searchsortedlast!(ix, v, x; prefer_threads)
-
-        vh = Array(v)
-        xh = Array(x)
-        ixh = AK.searchsortedlast(vh, xh; prefer_threads=true)
-        ixh_base = [searchsortedlast(vh, e) for e in xh]
-
-        @test all(Array(ix) .== ixh .== ixh_base)
+    # Orderings, as in Base
+    vh = rand(Int32(-1000):Int32(1000), 10_000)
+    xh = rand(Int32(-1000):Int32(1000), 1000)
+    for kw in ((rev=true,), (order=Base.Order.Reverse,), (by=abs,), (lt=(>),),
+               (by=abs, rev=true), (lt=(>), rev=true))
+        svh = sort(vh; kw...)
+        v = array_from_host(svh)
+        x = array_from_host(xh)
+        ix = array_from_host(zeros(Int, length(xh)))
+        AK.searchsortedfirst!(ix, v, x; kw...)
+        @test Array(ix) == [searchsortedfirst(svh, e; kw...) for e in xh]
+        AK.searchsortedlast!(ix, v, x; kw...)
+        @test Array(ix) == [searchsortedlast(svh, e; kw...) for e in xh]
     end
 
-    # Testing different settings
+    # Launch settings
     v = array_from_host(sort(rand(Int32, 100_000)))
     x = array_from_host(rand(Int32, 10_000))
     ix = similar(x, Int32)
+    AK.searchsortedfirst!(ix, v, x; block_size=64, max_tasks=10, min_elems=100)
+    @test Array(ix) == [searchsortedfirst(Array(v), e) for e in Array(x)]
+    AK.searchsortedlast!(ix, v, x; block_size=64, max_tasks=10, min_elems=100)
+    @test Array(ix) == [searchsortedlast(Array(v), e) for e in Array(x)]
 
-    AK.searchsortedfirst!(ix, v, x; prefer_threads, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedfirst(v, x; prefer_threads, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedlast!(ix, v, x; prefer_threads, by=abs, lt=(>), rev=true, block_size=64)
-    AK.searchsortedlast(v, x; prefer_threads, by=abs, lt=(>), rev=true, block_size=64)
-
-    vh = Array(v)
-    xh = Array(x)
-    ixh = similar(xh, Int32)
-
-    AK.searchsortedfirst!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedfirst(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-    AK.searchsortedlast(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100)
-
-    # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.searchsortedfirst!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedfirst(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast!(ixh, vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
-    @test_throws MethodError AK.searchsortedlast(vh, xh; prefer_threads=true, by=abs, lt=(>), rev=true, max_tasks=10, min_elems=100, bad=:kwarg)
+    # Invalid arguments
+    @test_throws ArgumentError AK.searchsortedfirst!(similar(x, Int32, 3), v, x)
+    @test_throws ArgumentError AK.searchsortedfirst!(ix, v, x; block_size=0)
+    @test_throws MethodError AK.searchsortedfirst!(ix, v, x; bad=:kwarg)
+    @test_throws MethodError AK.searchsortedlast!(ix, v, x; bad=:kwarg)
 end

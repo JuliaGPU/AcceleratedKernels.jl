@@ -206,8 +206,7 @@ function findall_bools(
     end
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
-    foreachindex(Base.OneTo(length(v)), backend;
-                 max_tasks, min_elems, prefer_threads, block_size) do position
+    _foreachindex(Base.OneTo(length(v)), backend; max_tasks, min_elems, block_size) do position
         input_index = findall_index(input_indices, position)
         bool_index = findall_index(bool_indices, position)
         @inbounds bools[bool_index] = pred(v[input_index]) ? true : false
