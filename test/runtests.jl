@@ -53,6 +53,8 @@ if in_test_env("CUDACore")
         global BACKEND = CUDABackend()
         global MAX_BLOCK_SIZE = Int(CUDACore.attribute(CUDACore.device(), CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK))
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = true
         $_testset_setup_code
     end)
@@ -68,6 +70,8 @@ if in_test_env("AMDGPU")
         global BACKEND = ROCBackend()
         global MAX_BLOCK_SIZE = 1024
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = true
         $_testset_setup_code
     end)
@@ -82,6 +86,8 @@ if in_test_env("Metal")
         global BACKEND = MetalBackend()
         global MAX_BLOCK_SIZE = Int(Metal.device().maxThreadsPerThreadgroup.width)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
         $_testset_setup_code
     end)
@@ -96,6 +102,8 @@ if in_test_env("oneAPI")
         global BACKEND = oneAPIBackend()
         global MAX_BLOCK_SIZE = Int(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
         $_testset_setup_code
     end)
@@ -111,17 +119,24 @@ if in_test_env("OpenCL")
         global BACKEND = OpenCLBackend()
         global MAX_BLOCK_SIZE = Int(OpenCL.cl.device().max_work_group_size)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
         $_testset_setup_code
     end)
 end
 
-# cpu-ka only when --cpu-ka flag passed
+# cpu-ka only when --cpu-ka flag passed: AK's kernels on the host backend, which runs them on
+# KernelAbstractions 0.10 (on PoCL) but not on 0.9
 if args.custom["cpu-ka"] !== nothing
+    AK._runs_kernels(AK.HOST_BACKEND) ||
+        error("--cpu-ka needs KernelAbstractions 0.10, whose host backend runs AK's kernels")
     push!(backends, "cpu-ka" => quote
         global BACKEND = get_backend([])
         global MAX_BLOCK_SIZE = 1024
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = true      # AK's kernels run in this configuration
+        global HOST_KERNELS = true      # ... on the host backend
         global TEST_DL = false
         $_testset_setup_code
     end)
@@ -133,6 +148,8 @@ if args.custom["cpu"] !== nothing || isempty(backends)
         global BACKEND = get_backend([])
         global MAX_BLOCK_SIZE = 1024
         global prefer_threads = true    # Also used to determine whether to run the CPU or GPU tests
+        global TEST_KERNELS = false
+        global HOST_KERNELS = false
         global TEST_DL = false
         $_testset_setup_code
     end)

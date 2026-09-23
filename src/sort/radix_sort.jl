@@ -367,13 +367,13 @@ end
 
 
 # Return the extrema of the transformed sort keys.
-function _rs_key_range(v::AbstractArray{T}, descending::Bool) where T
+function _rs_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool) where T
     K = typeof(_to_sort_key(zero(T)))
     ident = (typemax(K), typemin(K))
     min_k, max_k = mapreduce(
         x -> (k = _to_sort_key(x); (k, k)),
         (a, b) -> (min(a[1], b[1]), max(a[2], b[2])),
-        v;
+        v, backend;
         init=ident,
         neutral=ident,
     )
@@ -435,7 +435,7 @@ function _radix_sort!(
 
     ndrange = (block_size * num_blocks,)
 
-    min_key, max_key = _rs_key_range(p1, descending)
+    min_key, max_key = _rs_key_range(p1, backend, descending)
 
     vitems = Val(items)
     hist_kern! = has_atomics ?

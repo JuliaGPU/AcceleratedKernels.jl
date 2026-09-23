@@ -171,21 +171,8 @@ end
 
 
 
-"""
-    sample_sort!(
-        v::AbstractArray;
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-        temp::Union{Nothing, AbstractArray}=nothing,
-    )
-"""
-function sample_sort!(
+# Parallel sample sort on Julia threads, deferring to `Base.sort!` for the local sorts.
+function _sample_sort!(
     v::AbstractArray;
 
     lt=isless,
@@ -257,21 +244,8 @@ end
 
 
 
-"""
-    sample_sortperm!(
-        ix::AbstractArray, v::AbstractArray;
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-        temp::Union{Nothing, AbstractArray}=nothing,
-    )
-"""
-function sample_sortperm!(
+# Sort permutation on Julia threads: sample sort of the indices, comparing the values.
+function _sample_sortperm!(
     ix::AbstractArray, v::AbstractArray;
 
     lt=isless,
@@ -288,7 +262,7 @@ function sample_sortperm!(
     @argcheck length(ix) == length(v)
 
     # Initialise indices that will be sorted by the keys in v
-    foreachindex(ix; max_tasks, min_elems) do i
+    foreachindex(ix, HOST_BACKEND; max_tasks, min_elems) do i
         @inbounds ix[i] = i
     end
 
@@ -305,7 +279,7 @@ end
 function _sample_sort_barrier!(ix, v, ord; max_tasks, min_elems, temp)
     # Construct custom comparator indexing into global array v for every index comparison
     comp = (ix, iy) -> Base.Order.lt(ord, v[ix], v[iy])
-    sample_sort!(
+    _sample_sort!(
         ix;
         lt=comp,
 
@@ -314,4 +288,47 @@ function _sample_sort_barrier!(ix, v, ord; max_tasks, min_elems, temp)
 
         max_tasks, min_elems, temp,
     )
+end
+
+
+# Sort permutation of each slice along `dims`, like Base: sort the linear indices of each slice by
+# the values they point to.
+function _sample_sortperm_dims!(ix, v, ord, dims; max_tasks, min_elems)
+    perm_ord = Base.Order.Perm(ord, vec(v))
+    copyto!(ix, LinearIndices(v))
+    foreach_slice(ix, dims; max_tasks, min_elems) do slice
+        Base.sort!(slice; order=perm_ord)
+    end
+    ix
+end
+
+
+# Key/value sort on Julia threads: find the stable sorting permutation of the keys (of each slice
+# along `dims`), then gather keys and values through it.
+function _sample_sort_by_key!(keys, values, ord, dims; max_tasks, min_elems, temp_keys, temp_values)
+    for (v, temp) in ((keys, temp_keys), (values, temp_values))
+        isnothing(temp) && continue
+        @argcheck length(temp) == length(v)
+        @argcheck eltype(temp) === eltype(v)
+    end
+    ix = similar(keys, Int)
+    if dims isa Colon
+        _sample_sortperm!(vec(ix), vec(keys); order=ord, max_tasks, min_elems)
+    else
+        _sample_sortperm_dims!(ix, keys, ord, dims; max_tasks, min_elems)
+    end
+    _gather_through!(keys, ix, temp_keys; max_tasks, min_elems)
+    _gather_through!(values, ix, temp_values; max_tasks, min_elems)
+    keys, values
+end
+
+# v[i] = v_old[ix[i]] for every linear index i
+function _gather_through!(v, ix, temp; max_tasks, min_elems)
+    old = isnothing(temp) ? copy(v) : copyto!(temp, v)
+    task_partition(length(v), max_tasks, min_elems) do irange
+        @inbounds for i in irange
+            v[i] = old[ix[i]]
+        end
+    end
+    v
 end

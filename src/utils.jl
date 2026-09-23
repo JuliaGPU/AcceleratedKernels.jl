@@ -14,6 +14,21 @@ end
 # Elements each thread scans in the GPU prefix-scan block kernel.
 @inline default_scan_items_per_thread(backend) = 8
 
+# A kernel's input, marked for loads through the read-only cache as `@Const` does, where that
+# compiles: for a device array or a view of one, with a bits-type element type.
+# WORKAROUND(CUDA.jl): CUDA.jl's cached load (`const_arrayref`) has no path for a bits union such
+# as `Union{Missing, Bool}`, so a kernel with such an `@Const` input fails to compile
+# (JuliaGPU/CUDA.jl#3290).
+# WORKAROUND(KernelAbstractions): `@Const` rebuilds the input's wrappers inside the kernel, and a
+# `ReshapedArray`'s constructor cannot compile for the device (JuliaGPU/KernelAbstractions.jl#792).
+# Once both are fixed, restore `@Const(...)` on the kernels' arguments that call this, and delete
+# it.
+@inline _const_source(src) =
+    isbitstype(eltype(src)) && _const_wrappers(src) ? KernelAbstractions.constify(src) : src
+_const_wrappers(::DenseArray) = true
+_const_wrappers(src::SubArray) = _const_wrappers(parent(src))
+_const_wrappers(src) = false
+
 # Local memory that kernels with a tunable footprint may use: the minimum an OpenCL device must
 # provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
 const LOCAL_MEMORY_BUDGET = 32 * 1024

@@ -102,10 +102,12 @@ end
 
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_global!(
-    @Const(keys_in), keys_out,
-    @Const(values_in), values_out,
+    keys_in_arg, keys_out,
+    values_in_arg, values_out,
     comp, half_size_group, layout, blocks_per_slice,
 )
+    keys_in = _const_source(keys_in_arg)
+    values_in = _const_source(values_in_arg)
 
     N = @groupsize()[1]
 
@@ -161,26 +163,8 @@ end
 end
 
 
-"""
-    merge_sort_by_key!(
-        keys::AbstractArray,
-        values::AbstractArray,
-        backend::Backend=get_backend(keys);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp_keys::Union{Nothing, AbstractArray}=nothing,
-        temp_values::Union{Nothing, AbstractArray}=nothing,
-
-        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort_by_key!(
+# GPU merge sort of `keys` (or of each slice along `dims`), permuting `values` alike.
+function _merge_sort_by_key!(
     keys::AbstractArray,
     values::AbstractArray,
     backend::Backend=get_backend(keys);
@@ -259,37 +243,4 @@ function merge_sort_by_key!(
     end
 
     keys, values
-end
-
-
-"""
-    merge_sort_by_key(
-        keys::AbstractArray,
-        values::AbstractArray,
-        backend::Backend=get_backend(keys);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp_keys::Union{Nothing, AbstractArray}=nothing,
-        temp_values::Union{Nothing, AbstractArray}=nothing,
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort_by_key(
-    keys::AbstractArray,
-    values::AbstractArray,
-    backend::Backend=get_backend(keys);
-    kwargs...
-)
-    keys_copy = copy(keys)
-    values_copy = copy(values)
-
-    merge_sort_by_key!(
-        keys_copy, values_copy, backend;
-        kwargs...
-    )
 end

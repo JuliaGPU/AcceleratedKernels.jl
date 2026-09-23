@@ -1,24 +1,5 @@
-"""
-    merge_sortperm!(
-        ix::AbstractArray,
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        inplace::Bool=false,
-        block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractArray}=nothing,
-        temp_v::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm!(
+# GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
+function _merge_sortperm!(
     ix::AbstractArray,
     v::AbstractArray,
     backend::Backend=get_backend(v);
@@ -51,13 +32,13 @@ function merge_sortperm!(
     end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, block_size=block_size) do i
+    foreachindex(ix, backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
-    keys = inplace ? v : copy(v)
+    keys = inplace ? v : _copy(backend, v)
 
-    merge_sort_by_key!(
+    _merge_sort_by_key!(
         keys, ix, backend;
         lt, by, rev, order, block_size, dims,
         temp_keys=temp_v, temp_values=temp_ix,
@@ -67,55 +48,8 @@ function merge_sortperm!(
 end
 
 
-"""
-    merge_sortperm(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        inplace::Bool=false,
-        block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractArray}=nothing,
-        temp_v::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    ix = similar(v, Int)
-    merge_sortperm!(
-        ix, v, backend;
-        kwargs...
-    )
-end
-
-
-"""
-    merge_sortperm_lowmem!(
-        ix::AbstractArray,
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm_lowmem!(
+# GPU merge sort permutation comparing the keys in global memory, without copying them.
+function _merge_sortperm_lowmem!(
     ix::AbstractArray,
     v::AbstractArray,
     backend::Backend=get_backend(v);
@@ -141,7 +75,7 @@ function merge_sortperm_lowmem!(
     end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, block_size=block_size) do i
+    foreachindex(ix, backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(ix) || layout.len <= 1) && return ix
@@ -187,32 +121,4 @@ function merge_sortperm_lowmem!(
     end
 
     ix
-end
-
-
-"""
-    merge_sortperm_lowmem(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm_lowmem(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    ix = similar(v, Int)
-    merge_sortperm_lowmem!(
-        ix, v, backend;
-        kwargs...
-    )
 end

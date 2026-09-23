@@ -21,6 +21,7 @@ makedocs(;
         "Performance Tips" => "performance.md",
         "Manual" =>[
             "Using Different Backends" => "api/using_backends.md",
+            "Algorithms and Backends" => "api/algorithms.md",
             "General Loops" => "api/foreachindex.md",
             "Map" => "api/map.md",
             "Sorting" => "api/sort.md",
@@ -37,6 +38,7 @@ makedocs(;
             "Utilities" => "api/utilities.md",
         ],
         "Testing" => "testing.md",
+        "Tuning and Capabilities" => "tuning.md",
         "Debugging Kernels" => "debugging.md",
         "Roadmap" => "roadmap.md",
         "References" => "references.md",
