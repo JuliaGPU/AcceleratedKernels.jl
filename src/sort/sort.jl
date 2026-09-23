@@ -5,6 +5,7 @@ include("merge_sort_by_key.jl")
 include("merge_sortperm.jl")
 include("cpu_sample_sort.jl")
 include("radix_sort.jl")
+include("segmented_radix_sort.jl")
 include("bitonic_sort.jl")
 
 
@@ -98,7 +99,7 @@ arguments are the same as for `Base.sort`.
 By default (`dims=:`) the whole array is sorted as one vector, whatever its shape. Pass an integer
 `dims` to sort each 1D slice along that dimension independently, like `Base.sort!(A; dims)`. On GPU
 backends this uses merge sort by default, or [`BitonicSort`](@ref) when requested; `RadixSort`
-does not support `dims`. On CPU backends each slice is sorted with
+supports `dims=1` (a segmented radix over the contiguous slices). On CPU backends each slice is sorted with
 `Base.sort!` (also with `alg=SampleSort()`, and without using `temp`), slices spread over the tasks.
 
 ## CPU
@@ -189,23 +190,30 @@ function _sort_impl!(
                 temp, dims,
             )
         elseif alg isa RadixSort
-            dims isa Colon || throw(ArgumentError("RadixSort does not support sorting along `dims`"))
             _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
             ordering = Base.Order.ord(lt, by, rev, order)
             ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
                 throw(ArgumentError("RadixSort only supports forward or reverse ordering"))
-            defaults = _radix_defaults(backend)
-            radix_block_size = isnothing(alg.block_size) ?
-                               (isnothing(block_size) ? defaults.block_size : block_size) : alg.block_size
-            radix_items = isnothing(alg.items_per_thread) ?
-                          defaults.items_per_thread : alg.items_per_thread
-            _radix_sort!(
-                v, backend;
-                descending=ordering === Base.Order.Reverse,
-                block_size=radix_block_size,
-                items_per_thread=radix_items,
-                temp,
-            )
+            descending = ordering === Base.Order.Reverse
+            if dims isa Colon
+                defaults = _radix_defaults(backend)
+                radix_block_size = isnothing(alg.block_size) ?
+                                   (isnothing(block_size) ? defaults.block_size : block_size) : alg.block_size
+                radix_items = isnothing(alg.items_per_thread) ?
+                              defaults.items_per_thread : alg.items_per_thread
+                _radix_sort!(
+                    v, backend;
+                    descending,
+                    block_size=radix_block_size,
+                    items_per_thread=radix_items,
+                    temp,
+                )
+            elseif Int(dims) == 1
+                # radix along a dimension is a segmented radix over the contiguous slices
+                _segmented_radix_sort_dims!(v, backend; descending)
+            else
+                throw(ArgumentError("RadixSort supports `dims` only along dimension 1"))
+            end
         elseif alg isa BitonicSort
             defaults = bitonic_defaults(backend)
             bitonic_sort!(
