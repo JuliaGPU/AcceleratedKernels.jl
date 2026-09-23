@@ -26,40 +26,31 @@ function accumulate_1d_cpu!(
     # First accumulate chunks independently
     tp = TaskPartitioner(length(v), max_tasks, min_elems)
     if tp.num_tasks == 1
-        return _accumulate_1d_cpu_section!(op, v; init, inclusive)
+        _accumulate_1d_cpu_section!(op, v; init, inclusive)
+        return v
     end
 
-    # Save each task's final accumulated value
+    # Scan each task's section with the requested inclusivity, seeding only the first one with
+    # `init`, and save each section's total
     shared = Vector{eltype(v)}(undef, tp.num_tasks)
     itask_partition(tp) do itask, irange
-        @inbounds begin
-            if itask == 1
-                _accumulate_1d_cpu_section!(
-                    op, @view(v[irange]);
-                    init, inclusive,
-                )
-            else
-                # Later sections should always be inclusively accumulated
-                _accumulate_1d_cpu_section!(
-                    op, @view(v[irange]);
-                    init=neutral,
-                    inclusive=true,
-                )
-            end
-            shared[itask] = v[irange.stop]
-        end
+        shared[itask] = _accumulate_1d_cpu_section!(
+            op, @view(v[irange]);
+            init=itask == 1 ? init : neutral,
+            inclusive,
+        )
     end
 
-    # Now accumulate the final values of each task; the number of tasks is small enough (even for
+    # Now accumulate the totals of each task; the number of tasks is small enough (even for
     # 144-thread HPC nodes) that there is no need to do decoupled lookbacks
     _accumulate_1d_cpu_section!(op, shared; init=neutral, inclusive=true)
 
-    # Now add the final values of each task, except the first one
+    # Now prepend the running total of all previous tasks to each element, except in the first task
     itask_partition(tp) do itask, irange
         @inbounds begin
             if itask != 1
                 for i in irange
-                    v[i] = op(v[i], shared[itask - 1])
+                    v[i] = op(shared[itask - 1], v[i])
                 end
             end
         end
@@ -69,20 +60,20 @@ function accumulate_1d_cpu!(
 end
 
 
+# Scan a section sequentially, returning its total (including `init`).
 function _accumulate_1d_cpu_section!(op, v; init, inclusive)
     @inbounds begin
+        running = init
         if inclusive
-            running = init
             for i in eachindex(v)
                 running = op(running, v[i])
                 v[i] = running
             end
         else
-            running = init
             for i in eachindex(v)
                 v[i], running = running, op(running, v[i])
             end
         end
     end
-    return v
+    return running
 end

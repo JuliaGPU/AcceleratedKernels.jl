@@ -226,15 +226,14 @@ end
     end
 
     # We have a block of threads to accumulate along the dims axis; do it in chunks of
-    # block_size and keep track of previous chunks' running prefix
+    # 2 * block_size and carry the total of all previous chunks (seeded with `init`) into each one.
+    # Operands are combined in element order, so `op` need not be commutative.
     ichunk = typeof(iblock)(0)
     num_chunks = (length_dims + (0x2 * block_size) - 0x1) ÷ (0x2 * block_size)
-    total = neutral
 
     if ithread == 0x0
-        running_prefix[0x1] = neutral
+        running_prefix[0x1] = init
     end
-    @synchronize()
 
     while ichunk < num_chunks
         block_offset = ichunk * block_size * 0x2            # Processing two elements per thread
@@ -246,25 +245,28 @@ end
         bank_offset_a = conflict_free_offset(ai)
         bank_offset_b = conflict_free_offset(bi)
 
-        if block_offset + ai < length_dims
-            temp[ai + bank_offset_a + 0x1] = v[
+        xa = if block_offset + ai < length_dims
+            v[
                 input_base_idx +                            # Outer element axis starting index
                 (block_offset + ai) * vstrides[dims] +      # Move along dims axis in strides
                 0x1                                         # - to 1-indexing
             ]
         else
-            temp[ai + bank_offset_a + 0x1] = neutral
+            neutral
         end
-
-        if block_offset + bi < length_dims
-            temp[bi + bank_offset_b + 0x1] = v[
+        xb = if block_offset + bi < length_dims
+            v[
                 input_base_idx +
                 (block_offset + bi) * vstrides[dims] +
                 0x1
             ]
         else
-            temp[bi + bank_offset_b + 0x1] = neutral
+            neutral
         end
+
+        # The previous iteration's reads of `temp` finished before its last barrier
+        temp[ai + bank_offset_a + 0x1] = xa
+        temp[bi + bank_offset_b + 0x1] = xb
 
         # Build block reduction down
         offset = typeof(ithread)(1)
@@ -279,7 +281,7 @@ end
                 _ai += conflict_free_offset(_ai)
                 _bi += conflict_free_offset(_bi)
 
-                temp[_bi + 0x1] = op(temp[_bi + 0x1], temp[_ai + 0x1])
+                temp[_bi + 0x1] = op(temp[_ai + 0x1], temp[_bi + 0x1])
             end
 
             offset = offset << 0x1
@@ -289,10 +291,10 @@ end
         # Flush last element
         if ithread == 0x0
             offset0 = conflict_free_offset(next_pow2 - 0x1)
-            temp[next_pow2 - 0x1 + offset0 + 0x1] = ichunk == 0x0 ? init : neutral
+            temp[next_pow2 - 0x1 + offset0 + 0x1] = neutral
         end
 
-        # Build block accumulation up
+        # Build block accumulation up, giving an exclusive scan of the chunk
         d = typeof(ithread)(1)
         while d < next_pow2
             offset = offset >> 0x1
@@ -311,63 +313,36 @@ end
 
             d = d << 0x1
         end
-
-        # Later blocks should always be inclusively-scanned
-        if inclusive || ichunk != 0x0
-            # To compute an inclusive scan, shift elements left...
-            @synchronize()
-            t1 = temp[ai + bank_offset_a + 0x1]
-            t2 = temp[bi + bank_offset_b + 0x1]
-            @synchronize()
-
-            if ai > 0x0
-                temp[ai - 0x1 + conflict_free_offset(ai - 0x1) + 0x1] = t1
-            end
-            temp[bi - 0x1 + conflict_free_offset(bi - 0x1) + 0x1] = t2
-
-            # ...and accumulate the last value too
-            if bi == 0x2 * block_size - 0x1
-                if ichunk < num_chunks - 0x1
-                    temp[bi + bank_offset_b + 0x1] = op(t2, v[
-                        input_base_idx +
-                        ((ichunk + 0x1) * block_size * 0x2 - 0x1) * vstrides[dims] +
-                        0x1
-                    ])
-                else
-                    temp[bi + bank_offset_b + 0x1] = op(t2, v[
-                        input_base_idx +
-                        (length_dims - 0x1) * vstrides[dims] +
-                        0x1
-                    ])
-                end
-            end
-        end
-
-        _running_prefix = running_prefix[0x1]
         @synchronize()
 
+        # Exclusive prefixes within the chunk; include the element itself for inclusive scans
+        ea = temp[ai + bank_offset_a + 0x1]
+        eb = temp[bi + bank_offset_b + 0x1]
+        ra = inclusive ? op(ea, xa) : ea
+        rb = inclusive ? op(eb, xb) : eb
+        carry = running_prefix[0x1]
+
         if block_offset + ai < length_dims
-            total = op(_running_prefix, temp[ai + bank_offset_a + 0x1])
             v[
                 input_base_idx +
                 (block_offset + ai) * vstrides[dims] +
                 0x1
-            ] = total
+            ] = op(carry, ra)
         end
         if block_offset + bi < length_dims
-            total = op(_running_prefix, temp[bi + bank_offset_b + 0x1])
             v[
                 input_base_idx +
                 (block_offset + bi) * vstrides[dims] +
                 0x1
-            ] = total
+            ] = op(carry, rb)
         end
 
-        # Update running prefix
-        if bi == 0x2 * block_size - 0x1
-            running_prefix[0x1] = total
-        end
+        # Every thread has read the carry; the last thread extends it by this chunk's total (the
+        # padding past the end of the slice is `neutral`)
         @synchronize()
+        if bi == 0x2 * block_size - 0x1
+            running_prefix[0x1] = op(carry, op(eb, xb))
+        end
 
         ichunk += 0x1
     end

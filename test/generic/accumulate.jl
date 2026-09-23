@@ -146,6 +146,83 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
 end
 
 
+# An associative but non-commutative operator: 2x2 matrix products over UInt32, which wraps and so
+# forms a ring. Random products of SL(2, Z) generators stay invertible, so running products never
+# collapse to zero and combining any two operands in the wrong order changes the result.
+struct ScanMat2
+    a::UInt32
+    b::UInt32
+    c::UInt32
+    d::UInt32
+end
+Base.zero(::Type{ScanMat2}) = ScanMat2(0, 0, 0, 0)
+scan_matmul(x::ScanMat2, y::ScanMat2) = ScanMat2(
+    x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d,
+    x.c * y.a + x.d * y.c, x.c * y.b + x.d * y.d,
+)
+const SCAN_I2 = ScanMat2(1, 0, 0, 1)
+const SCAN_GENS = (ScanMat2(1, 1, 0, 1), ScanMat2(1, 0, 1, 1),
+                   ScanMat2(1, typemax(UInt32), 0, 1), ScanMat2(1, 0, typemax(UInt32), 1))
+scan_randmat() = foldl(scan_matmul, rand(SCAN_GENS, 3); init=SCAN_I2)
+
+# Sequential reference scan of each slice along `dims` (a vector is one slice)
+function scan_reference(xh, dims; init, inclusive)
+    out = similar(xh)
+    for I in CartesianIndices(Base.setindex(axes(xh), 1:1, dims))
+        acc = init
+        for k in axes(xh, dims)
+            J = Base.setindex(Tuple(I), k, dims)
+            if inclusive
+                acc = scan_matmul(acc, xh[J...])
+                out[J...] = acc
+            else
+                out[J...] = acc
+                acc = scan_matmul(acc, xh[J...])
+            end
+        end
+    end
+    out
+end
+
+
+@testset "accumulate_1d non-commutative $(alg isa AK.DecoupledLookback ? "DL" : "SP")" for alg in ALGS
+    Random.seed!(0)
+
+    # Single and multiple blocks, and more blocks than one block can scan (block_size=16), so that
+    # the block scan, the lookback / block-prefix carry and the chunked prefix carry are all
+    # exercised. On the CPU, `max_tasks=4` exercises the carry between tasks.
+    for inclusive in (true, false), (block_size, items_per_thread) in ((256, nothing), (16, 1), (32, 3))
+        for n in (1, 5, 100, 1000, 5000, 70_000)
+            xh = [scan_randmat() for _ in 1:n]
+            init = scan_randmat()
+            y = array_from_host(xh)
+            AK.accumulate!(scan_matmul, y; prefer_threads, max_tasks=4, init, neutral=SCAN_I2,
+                           inclusive, block_size, items_per_thread, alg)
+            @test Array(y) == scan_reference(xh, 1; init, inclusive)
+        end
+    end
+end
+
+
+@testset "accumulate_nd non-commutative" begin
+    Random.seed!(0)
+
+    # Both GPU strategies: one thread per slice when there are more slices than elements per
+    # slice, else one block per slice, processing the slice in several chunks of 2 * block_size
+    for inclusive in (true, false), block_size in (64, 256)
+        for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
+                           ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3))
+            xh = [scan_randmat() for _ in CartesianIndices(sz)]
+            init = scan_randmat()
+            y = array_from_host(xh)
+            AK.accumulate!(scan_matmul, y; prefer_threads, max_tasks=4, init, neutral=SCAN_I2,
+                           inclusive, dims, block_size)
+            @test Array(y) == scan_reference(xh, dims; init, inclusive)
+        end
+    end
+end
+
+
 @testset "accumulate_nd" begin
     Random.seed!(0)
 

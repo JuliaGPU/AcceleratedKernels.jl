@@ -16,6 +16,7 @@ function _decoupled_fence end
 
 
 # Exclusive scan of one value per thread in local memory. All threads in the block must call it.
+# Operands are combined in element order (earlier on the left), so `op` need not be commutative.
 @inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
     # Up-sweep. Use index-sized counters for block sizes of 256 or more.
     offset = one(ithread)
@@ -25,7 +26,7 @@ function _decoupled_fence end
         if ithread < d
             ai = offset * (0x2 * ithread + 0x1) - 0x1
             bi = offset * (0x2 * ithread + 0x2) - 0x1
-            totals[bi + 0x1] = op(totals[bi + 0x1], totals[ai + 0x1])
+            totals[bi + 0x1] = op(totals[ai + 0x1], totals[bi + 0x1])
         end
         offset = offset << 0x1
         d = d >> 0x1
@@ -150,6 +151,7 @@ end
     ithread = @index(Local, Linear) - 0x1
     block_offset = iblock * block_size * ITEMS
 
+    # The lookback walks towards earlier blocks, so each earlier aggregate is combined on the left.
     running_prefix = prefixes[iblock]
     inspected_block = signed(typeof(iblock))(iblock) - 0x2
     while inspected_block >= 0x0
@@ -159,10 +161,10 @@ end
         )
         if flag == ACC_FLAG_A
             _decoupled_fence()          # acquire: order the `v` read after the flag load
-            running_prefix = op(running_prefix, v[(inspected_block + 0x1) * block_size * ITEMS])
+            running_prefix = op(v[(inspected_block + 0x1) * block_size * ITEMS], running_prefix)
             break
         else
-            running_prefix = op(running_prefix, prefixes[inspected_block + 0x1])
+            running_prefix = op(prefixes[inspected_block + 0x1], running_prefix)
         end
 
         inspected_block -= 0x1
@@ -205,10 +207,14 @@ end
     running_prefix = prefixes[iblock]
 
     # If there were more than `block_size*ITEMS` prefixes, each chunk was scanned
-    # internally but not across chunks; fold the earlier chunks' totals in here.
+    # internally but not across chunks; fold the earlier chunks' totals in here, in order.
     num_preblocks = (iblock - 0x1) ÷ (block_size * ITEMS)
-    for i in 0x1:num_preblocks
-        running_prefix = op(running_prefix, prefixes[i * block_size * ITEMS])
+    if num_preblocks > 0x0
+        carry = prefixes[block_size * ITEMS]
+        for i in 0x2:num_preblocks
+            carry = op(carry, prefixes[i * block_size * ITEMS])
+        end
+        running_prefix = op(carry, running_prefix)
     end
 
     j = 0
