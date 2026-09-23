@@ -56,14 +56,22 @@ v2 = oneArray(rand(Float32, 100_000))
 f(v1, v2)
 ```
 
+The loop runs on the backend of the iterable. A range does not determine one, so pass `backend` when a loop over a range accesses GPU arrays:
+```julia
+AK.foreachindex(1:n; backend=AK.get_backend(v)) do i
+    v[i] = i
+end
+```
+Host arrays and ranges run on Julia threads.
+
 All GPU functions allow you to specify a block size - this is often a power of two (mostly 64, 128, 256, 512); the optimum depends on the algorithm, input data and hardware - you can try the different values and `@time` or `@benchmark` them:
 ```julia
-@time AK.foreachindex(f, itr_gpu, block_size=512)
+@time AK.foreachindex(f, itr_gpu; block_size=512)
 ```
 
 Similarly, for performance on the CPU the overhead of spawning threads should be masked by processing more elements per thread (but there is no reason here to launch more threads than `Threads.nthreads()`, the number of threads Julia was started with); the optimum depends on how expensive `f` is - again, benchmarking is your friend:
 ```julia
-@time AK.foreachindex(f, itr_cpu, max_tasks=16, min_elems=1000)
+@time AK.foreachindex(f, itr_cpu; max_tasks=16, min_elems=1000)
 ```
 
 

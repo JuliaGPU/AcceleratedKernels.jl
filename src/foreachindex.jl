@@ -41,27 +41,50 @@ function _forindices_threads(f, indices; max_tasks, min_elems)
 end
 
 
+# Launch settings of the wrappers, checked on every backend (only one of them applies to each)
+function _check_launch(; block_size, max_tasks, min_elems)
+    block_size >= 1 || throw(ArgumentError("`block_size` must be positive, got $block_size"))
+    max_tasks >= 1 || throw(ArgumentError("`max_tasks` must be positive, got $max_tasks"))
+    min_elems >= 1 || throw(ArgumentError("`min_elems` must be positive, got $min_elems"))
+    nothing
+end
+
+# Run `f` over `indices`: on Julia threads on the host backend, as a kernel elsewhere
+function _foreachindex(f, indices, backend::Backend;
+                       block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
+    _check_launch(; block_size, max_tasks, min_elems)
+    if _runs_threads(backend)
+        _forindices_threads(f, indices; max_tasks, min_elems)
+    else
+        _forindices_gpu(f, indices, backend; block_size)
+    end
+    nothing
+end
+
+
 """
     foreachindex(
-        f, itr, backend::Backend=get_backend(itr);
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # GPU settings
-        block_size=256,
+        f, itr;
+        backend=nothing,
+        block_size::Int=256,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
     )
 
-Parallelised `for` loop over the indices of an iterable.
+Parallelised `for` loop over the indices of an iterable: call `f(i)` for every `i` in
+`eachindex(itr)`.
 
 It allows you to run normal Julia code on a GPU over multiple arrays - e.g. CuArray, ROCArray,
-MtlArray, oneArray - with one GPU thread per index.
+MtlArray, oneArray - with one GPU thread per index, in blocks of `block_size` threads.
 
-On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
-`min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
-launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs).
+On the host backend, the loop runs on Julia threads: at most `max_tasks` tasks, or fewer such that
+each task processes at least `min_elems` indices; if a single task ends up being needed, `f` is
+inlined and no task is launched. Tune it to your function - the more expensive it is, the fewer
+elements are needed to amortise the cost of launching a task (which is a few μs).
+
+`backend` is derived from `itr`. A range or other index collection does not determine a backend,
+so loops over one run on the host unless you pass `backend`, e.g. the backend of the arrays that
+`f` accesses.
 
 # Examples
 Normally you would write a for loop like this:
@@ -85,6 +108,15 @@ function f()
     y = similar(x)
     AK.foreachindex(x) do i
         @inbounds y[i] = 2 * x[i] + 1
+    end
+end
+```
+
+A loop over a range needs the backend of the arrays it accesses:
+```julia
+function g!(y, x)
+    AK.foreachindex(1:length(x) ÷ 2; backend=AK.get_backend(x)) do i
+        @inbounds y[i] = x[2i]
     end
 end
 ```
@@ -121,45 +153,29 @@ somecopy!(x)    # This works
 ```
 """
 function foreachindex(
-    f, itr, backend::Backend=get_backend(itr);
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size=256,
+    f, itr;
+    backend::Union{Nothing, Backend}=nothing,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 )
-    if use_gpu_algorithm(backend, prefer_threads)
-        _forindices_gpu(f, eachindex(itr), backend; block_size)
-    else
-        _forindices_threads(f, eachindex(itr); max_tasks, min_elems)
-    end
+    backend = _resolve_backend(backend, itr)
+    _foreachindex(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
 end
 
 
 """
     foraxes(
-        f, itr, dims::Union{Nothing, <:Integer}=nothing, backend::Backend=get_backend(itr);
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # GPU settings
-        block_size=256,
+        f, itr, dims::Union{Nothing, Integer}=nothing;
+        backend=nothing,
+        block_size::Int=256,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
     )
 
-Parallelised `for` loop over the indices along axis `dims` of an iterable.
-
-It allows you to run normal Julia code on a GPU over multiple arrays - e.g. CuArray, ROCArray,
-MtlArray, oneArray - with one GPU thread per index.
-
-On CPUs at most `max_tasks` threads are launched, or fewer such that each thread processes at least
-`min_elems` indices; if a single task ends up being needed, `f` is inlined and no thread is
-launched. Tune it to your function - the more expensive it is, the fewer elements are needed to
-amortise the cost of launching a thread (which is a few μs).
+Parallelised `for` loop over the indices along axis `dims` of an iterable: call `f(i)` for every
+`i` in `axes(itr, dims)`, or in `eachindex(itr)` for `dims=nothing`. `dims` mirrors
+`axes(itr, dims)`. The keywords are those of [`foreachindex`](@ref).
 
 # Examples
 Normally you would write a for loop like this:
@@ -191,51 +207,17 @@ function f()
 end
 ```
 
-**Important note**: to use this function on a GPU, the objects referenced inside the loop body must
-have known types - i.e. be inside a function. For example:
-```julia
-using oneAPI
-import AcceleratedKernels as AK
-
-x = oneArray(reshape(1:3000, 3, 1000))
-
-# CRASHES - typical error message: "Reason: unsupported dynamic function invocation"
-# AK.foraxes(x) do i
-#     x[i] = i
-# end
-
-function somecopy!(v)
-    # Because it is inside a function, the type of `v` will be known
-    AK.foraxes(v) do i
-        v[i] = i
-    end
-end
-
-somecopy!(x)    # This works
-```
+As with [`foreachindex`](@ref), the objects referenced inside the loop body must have known types
+on a GPU, i.e. be inside a function.
 """
 function foraxes(
-    f, itr, dims::Union{Nothing, <:Integer}=nothing, backend::Backend=get_backend(itr);
-
-    # CPU settings
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size=256,
+    f, itr, dims::Union{Nothing, Integer}=nothing;
+    backend::Union{Nothing, Backend}=nothing,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 )
-    if isnothing(dims)
-        return foreachindex(
-            f, itr, backend;
-            max_tasks, min_elems,
-            prefer_threads, block_size,
-        )
-    end
-
-    if use_gpu_algorithm(backend, prefer_threads)
-        _forindices_gpu(f, axes(itr, dims), backend; block_size)
-    else
-        _forindices_threads(f, axes(itr, dims); max_tasks, min_elems)
-    end
+    backend = _resolve_backend(backend, itr)
+    indices = isnothing(dims) ? eachindex(itr) : axes(itr, dims)
+    _foreachindex(f, indices, backend; block_size, max_tasks, min_elems)
 end

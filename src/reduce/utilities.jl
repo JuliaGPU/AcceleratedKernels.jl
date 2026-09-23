@@ -39,7 +39,7 @@ function _mapreduce_nd_apply_init!(
     min_elems=1,
     block_size=256,
 )
-    foreachindex(dst, backend; max_tasks, min_elems, block_size) do i
+    _foreachindex(eachindex(dst), backend; max_tasks, min_elems, block_size) do i
         dst[i] = op(init, f(src[i]))
     end
 end

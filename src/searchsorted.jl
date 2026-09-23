@@ -70,165 +70,89 @@ end
 
 """
     searchsortedfirst!(
-        ix::AbstractVector,
-        v::AbstractVector,
-        x::AbstractVector,
-        backend::Backend=get_backend(x);
-
-        by=identity, lt=isless, rev::Bool=false,
-
-        # CPU settings
+        ix::AbstractVector, v::AbstractVector, xs::AbstractVector;
+        backend=nothing,
+        lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+        order::Base.Order.Ordering=Base.Order.Forward,
+        block_size::Int=256,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+    ) -> ix
 
-        # GPU settings
-        block_size::Int=256,
-    )
+Batched binary search: for each element `xs[i]`, write `searchsortedfirst(v, xs[i]; lt, by, rev,
+order)` into `ix[i]`, the index of the first element of the sorted vector `v` not ordered before
+`xs[i]`. Unlike `Base.searchsortedfirst`, which would treat `xs` as a single value, every element
+of `xs` is a separate query. `ix` needs as many elements as `xs`.
 
-Equivalent to applying `searchsortedfirst!` element-wise to each element of `x`. The CPU and GPU
-settings are the same as for [`foreachindex`](@ref).
+`backend` is derived from `ix`, `v` and `xs`; the launch keywords are those of
+[`foreachindex`](@ref), except that on the host at least `min_elems=1000` queries go to each
+task.
+
+# Examples
+```julia
+import AcceleratedKernels as AK
+using CUDA
+
+v = CuArray(sort(rand(Float32, 1_000_000)))
+xs = CuArray(rand(Float32, 10_000))
+ix = similar(xs, Int)
+AK.searchsortedfirst!(ix, v, xs)
+```
 """
 function searchsortedfirst!(
-    ix::AbstractVector,
-    v::AbstractVector,
-    x::AbstractVector,
-    backend::Backend=get_backend(x);
-
-    by=identity, lt=isless, rev::Bool=false,
-
-    # CPU settings with different default from `foreachindex`
+    ix::AbstractVector, v::AbstractVector, xs::AbstractVector;
+    backend::Union{Nothing, Backend}=nothing,
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
-
-    kwargs...
 )
-    # Simple sanity checks
-    @argcheck length(ix) == length(x)
-
-    # Construct comparator
-    ord = Base.Order.ord(lt, by, rev)
-    comp = (x, y) -> Base.Order.lt(ord, x, y)
-
-    foreachindex(
-        x, backend;
-        min_elems, kwargs...
-    ) do i
-        @inbounds ix[i] = _searchsortedfirst(v, x[i], firstindex(v), lastindex(v), comp)
+    backend = _resolve_backend(backend, ix, v, xs)
+    length(ix) == length(xs) || throw(ArgumentError(
+        "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
+    ord = Base.Order.ord(lt, by, rev, order)
+    _foreachindex(eachindex(xs), backend; block_size, max_tasks, min_elems) do i
+        @inbounds ix[i] = _searchsortedfirst(v, xs[i], firstindex(v), lastindex(v), ord)
     end
-end
-
-
-"""
-    searchsortedfirst(
-        v::AbstractVector,
-        x::AbstractVector,
-        backend::Backend=get_backend(x);
-
-        by=identity, lt=isless, rev::Bool=false,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=1000,
-
-        # GPU settings
-        block_size::Int=256,
-    )
-
-Equivalent to applying `searchsortedfirst` element-wise to each element of `x`. The CPU and GPU
-settings are the same as for [`foreachindex`](@ref).
-"""
-function searchsortedfirst(
-    v::AbstractVector,
-    x::AbstractVector,
-    backend::Backend=get_backend(x);
-    kwargs...
-)
-    ix = similar(x, Int)
-    searchsortedfirst!(
-        ix, v, x, backend;
-        kwargs...
-    )
     ix
 end
 
 
 """
     searchsortedlast!(
-        ix::AbstractVector,
-        v::AbstractVector,
-        x::AbstractVector,
-        backend::Backend=get_backend(x);
-
-        by=identity, lt=isless, rev::Bool=false,
-
-        # CPU settings
+        ix::AbstractVector, v::AbstractVector, xs::AbstractVector;
+        backend=nothing,
+        lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+        order::Base.Order.Ordering=Base.Order.Forward,
+        block_size::Int=256,
         max_tasks::Int=Threads.nthreads(),
         min_elems::Int=1000,
+    ) -> ix
 
-        # GPU settings
-        block_size::Int=256,
-    )
-
-Equivalent to applying `searchsortedlast!` element-wise to each element of `x`. The CPU and GPU
-settings are the same as for [`foreachindex`](@ref).
+Batched binary search: for each element `xs[i]`, write `searchsortedlast(v, xs[i]; lt, by, rev,
+order)` into `ix[i]`, the index of the last element of the sorted vector `v` not ordered after
+`xs[i]`. The keywords are those of [`searchsortedfirst!`](@ref).
 """
 function searchsortedlast!(
-    ix::AbstractVector,
-    v::AbstractVector,
-    x::AbstractVector,
-    backend::Backend=get_backend(x);
-
-    by=identity, lt=isless, rev::Bool=false,
-
-    # CPU settings with different default from `foreachindex`
+    ix::AbstractVector, v::AbstractVector, xs::AbstractVector;
+    backend::Union{Nothing, Backend}=nothing,
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
-
-    kwargs...
 )
-    # Simple sanity checks
-    @argcheck length(ix) == length(x)
-
-    # Construct comparator
-    ord = Base.Order.ord(lt, by, rev)
-    comp = (x, y) -> Base.Order.lt(ord, x, y)
-
-    foreachindex(
-        x, backend;
-        min_elems, kwargs...
-    ) do i
-        @inbounds ix[i] = _searchsortedlast(v, x[i], firstindex(v), lastindex(v), comp)
+    backend = _resolve_backend(backend, ix, v, xs)
+    length(ix) == length(xs) || throw(ArgumentError(
+        "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
+    ord = Base.Order.ord(lt, by, rev, order)
+    _foreachindex(eachindex(xs), backend; block_size, max_tasks, min_elems) do i
+        @inbounds ix[i] = _searchsortedlast(v, xs[i], firstindex(v), lastindex(v), ord)
     end
-end
-
-
-"""
-    searchsortedlast(
-        v::AbstractVector,
-        x::AbstractVector,
-        backend::Backend=get_backend(x);
-
-        by=identity, lt=isless, rev::Bool=false,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=1000,
-
-        # GPU settings
-        block_size::Int=256,
-    )
-
-Equivalent to applying `searchsortedlast` element-wise to each element of `x`. The CPU and GPU
-settings are the same as for [`foreachindex`](@ref).
-"""
-function searchsortedlast(
-    v::AbstractVector,
-    x::AbstractVector,
-    backend::Backend=get_backend(x);
-    kwargs...
-)
-    ix = similar(x, Int)
-    searchsortedlast!(
-        ix, v, x, backend;
-        kwargs...
-    )
     ix
 end

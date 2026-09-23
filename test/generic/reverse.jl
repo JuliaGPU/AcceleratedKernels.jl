@@ -14,7 +14,7 @@
         for T in test_types, n in edge_sizes
             h = rand(T, n)
             v = array_from_host(h)
-            AK.reverse!(v; prefer_threads)
+            AK.reverse!(v)
             @test Array(v) == reverse(h)
         end
 
@@ -22,14 +22,14 @@
         for _ in 1:50
             h = rand(Float32, rand(1:100_000))
             v = array_from_host(h)
-            AK.reverse!(v; prefer_threads)
-            AK.reverse!(v; prefer_threads)
+            AK.reverse!(v)
+            AK.reverse!(v)
             @test Array(v) == h
         end
 
         # Returns the same array it was given, not a copy
         v = array_from_host(rand(Float32, 1000))
-        @test AK.reverse!(v; prefer_threads) === v
+        @test AK.reverse!(v) === v
     end
 
     @testset "reverse! out-of-place" begin
@@ -37,23 +37,21 @@
             h = rand(T, n)
             src = array_from_host(h)
             dst = array_from_host(zeros(T, n))
-            AK.reverse!(dst, src; prefer_threads)
+            AK.reverse!(dst, src)
             @test Array(dst) == reverse(h)
             @test Array(src) == h                   # source left untouched
         end
 
         @test_throws Exception AK.reverse!(
             array_from_host(rand(Float32, 10)),
-            array_from_host(rand(Float32, 11));
-            prefer_threads,
-        )
+            array_from_host(rand(Float32, 11)))
     end
 
     @testset "reverse allocating" begin
         for T in test_types, n in edge_sizes
             h = rand(T, n)
             v = array_from_host(h)
-            out = AK.reverse(v; prefer_threads)
+            out = AK.reverse(v)
             @test Array(out) == reverse(h)
             @test Array(v) == h                     # source left untouched
             @test out !== v
@@ -67,12 +65,12 @@
             h = rand(Float32, n)
 
             v = array_from_host(h)
-            AK.reverse!(v; prefer_threads)
+            AK.reverse!(v)
             @test Array(v) == reverse(h)
 
             src = array_from_host(h)
             dst = array_from_host(zeros(Float32, n))
-            AK.reverse!(dst, src; prefer_threads)
+            AK.reverse!(dst, src)
             @test Array(dst) == reverse(h)
         end
     end
@@ -82,12 +80,12 @@
         h = rand(Float32, 10_000)
         for block_size in (32, 64, 128, 256)
             v = array_from_host(h)
-            AK.reverse!(v; prefer_threads, block_size)
+            AK.reverse!(v; block_size)
             @test Array(v) == reverse(h)
         end
         for (max_tasks, min_elems) in ((1, 1), (2, 100), (4, 1000))
             v = array_from_host(h)
-            AK.reverse!(v; prefer_threads, max_tasks, min_elems)
+            AK.reverse!(v; max_tasks, min_elems)
             @test Array(v) == reverse(h)
         end
     end
@@ -101,16 +99,16 @@
             h = rand(Float32, shape...)
 
             v = array_from_host(h)
-            AK.reverse!(v; dims=dim, prefer_threads)
+            AK.reverse!(v; dims=dim)
             @test Array(v) == reverse(h; dims=dim)
 
             src = array_from_host(h)
-            out = AK.reverse(src; dims=dim, prefer_threads)
+            out = AK.reverse(src; dims=dim)
             @test Array(out) == reverse(h; dims=dim)
             @test Array(src) == h                       # source left untouched
 
             dst = array_from_host(zeros(Float32, shape...))
-            AK.reverse!(dst, src; dims=dim, prefer_threads)
+            AK.reverse!(dst, src; dims=dim)
             @test Array(dst) == reverse(h; dims=dim)
         end
 
@@ -123,32 +121,32 @@
             h = rand(Float32, shape...)
 
             v = array_from_host(h)
-            AK.reverse!(v; dims=dims, prefer_threads)
+            AK.reverse!(v; dims=dims)
             @test Array(v) == reverse(h; dims=dims)
 
-            out = AK.reverse(array_from_host(h); dims=dims, prefer_threads)
+            out = AK.reverse(array_from_host(h); dims=dims)
             @test Array(out) == reverse(h; dims=dims)
 
             src = array_from_host(h)
             dst = array_from_host(zeros(Float32, shape...))
-            AK.reverse!(dst, src; dims=dims, prefer_threads)
+            AK.reverse!(dst, src; dims=dims)
             @test Array(dst) == reverse(h; dims=dims)
         end
 
         # Any iterable of integers works, e.g. a Vector (Base only accepts tuples)
         h = rand(Float32, 4, 5, 6)
-        out = AK.reverse(array_from_host(h); dims=[1, 3], prefer_threads)
+        out = AK.reverse(array_from_host(h); dims=[1, 3])
         @test Array(out) == reverse(h; dims=(1, 3))
 
         # Stateful iterators must survive validation, including duplicate detection.
         expected = reverse(h; dims=(1, 3))
         v = array_from_host(h)
-        @test AK.reverse!(v; dims=Iterators.Stateful([1, 3]), prefer_threads) === v
+        @test AK.reverse!(v; dims=Iterators.Stateful([1, 3])) === v
         @test Array(v) == expected
         src = array_from_host(h)
-        @test Array(AK.reverse(src; dims=Iterators.Stateful([1, 3]), prefer_threads)) == expected
+        @test Array(AK.reverse(src; dims=Iterators.Stateful([1, 3]))) == expected
         dst = similar(src)
-        @test AK.reverse!(dst, src; dims=Iterators.Stateful([1, 3]), prefer_threads) === dst
+        @test AK.reverse!(dst, src; dims=Iterators.Stateful([1, 3])) === dst
         @test Array(dst) == expected
         @test Array(src) == h
 
@@ -157,15 +155,15 @@
         src_int = array_from_host(h_int)
         for dims in (:, (), 1, (1, 2))
             dst_float = array_from_host(zeros(Float32, size(h_int)))
-            @test AK.reverse!(dst_float, src_int; dims, prefer_threads) === dst_float
+            @test AK.reverse!(dst_float, src_int; dims) === dst_float
             @test Array(dst_float) == reverse(h_int; dims)
         end
         @test Array(src_int) == h_int
 
         # dims=() reverses nothing
         v = array_from_host(h)
-        @test Array(AK.reverse!(v; dims=(), prefer_threads)) == h
-        @test Array(AK.reverse(v; dims=(), prefer_threads)) == h
+        @test Array(AK.reverse!(v; dims=())) == h
+        @test Array(AK.reverse(v; dims=())) == h
 
         # Shapes spanning many blocks, with odd extents so the in-place middle slice is
         # non-trivial, for integer element types too
@@ -173,10 +171,10 @@
             h = rand(T, shape)
             for dims in (1, 2, (1, 2)), block_size in (64, 256)
                 v = array_from_host(h)
-                AK.reverse!(v; dims, prefer_threads, block_size)
+                AK.reverse!(v; dims, block_size)
                 @test Array(v) == reverse(h; dims)
 
-                out = AK.reverse(array_from_host(h); dims, prefer_threads, block_size)
+                out = AK.reverse(array_from_host(h); dims, block_size)
                 @test Array(out) == reverse(h; dims)
             end
         end
@@ -185,34 +183,54 @@
         h = zeros(Float32, 0, 5)
         for dims in (1, 2, (1, 2))
             v = array_from_host(h)
-            @test Array(AK.reverse!(v; dims, prefer_threads)) == reverse(h; dims)
+            @test Array(AK.reverse!(v; dims)) == reverse(h; dims)
 
             dst = array_from_host(copy(h))
-            @test Array(AK.reverse!(dst, v; dims, prefer_threads)) == reverse(h; dims)
+            @test Array(AK.reverse!(dst, v; dims)) == reverse(h; dims)
 
-            @test Array(AK.reverse(v; dims, prefer_threads)) == reverse(h; dims)
+            @test Array(AK.reverse(v; dims)) == reverse(h; dims)
         end
     end
 
     # Invalid dims arguments throw, matching Base/CUDA
     @testset "dims errors" begin
         v = array_from_host(rand(Float32, 2, 3, 4))
-        @test_throws ArgumentError AK.reverse!(v; dims=0, prefer_threads)
-        @test_throws ArgumentError AK.reverse!(v; dims=4, prefer_threads)
-        @test_throws ArgumentError AK.reverse(v; dims=0, prefer_threads)
-        @test_throws ArgumentError AK.reverse(v; dims=4, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(v; dims=0)
+        @test_throws ArgumentError AK.reverse!(v; dims=4)
+        @test_throws ArgumentError AK.reverse(v; dims=0)
+        @test_throws ArgumentError AK.reverse(v; dims=4)
 
         # Non-integer dims must throw rather than silently do nothing
-        @test_throws ArgumentError AK.reverse!(v; dims=1.5, prefer_threads)
-        @test_throws ArgumentError AK.reverse(v; dims=(1, 2.5), prefer_threads)
+        @test_throws ArgumentError AK.reverse!(v; dims=1.5)
+        @test_throws ArgumentError AK.reverse(v; dims=(1, 2.5))
 
         dst = similar(v)
-        @test_throws ArgumentError AK.reverse!(dst, v; dims=Iterators.Stateful([1, 1]), prefer_threads)
-        @test_throws ArgumentError AK.reverse!(v; dims=nothing, prefer_threads)
-        @test_throws ArgumentError AK.reverse!(similar(v, 4, 3, 2), v; dims=1, prefer_threads)
+        @test_throws ArgumentError AK.reverse!(dst, v; dims=Iterators.Stateful([1, 1]))
+        @test_throws ArgumentError AK.reverse!(v; dims=nothing)
+        @test_throws ArgumentError AK.reverse!(similar(v, 4, 3, 2), v; dims=1)
 
         # Duplicate dims throw, as in Base
-        @test_throws ArgumentError AK.reverse!(v; dims=(1, 1), prefer_threads)
-        @test_throws ArgumentError AK.reverse(v; dims=[2, 3, 2], prefer_threads)
+        @test_throws ArgumentError AK.reverse!(v; dims=(1, 1))
+        @test_throws ArgumentError AK.reverse(v; dims=[2, 3, 2])
     end
+
+    # Invalid launch settings throw on every backend, also where nothing needs to move
+    @testset "launch setting errors" begin
+        for x in (array_from_host(rand(Int32, 10)), array_from_host(Int32[1]),
+                  array_from_host(Int32[]))
+            @test_throws ArgumentError AK.reverse!(x; block_size=0)
+            @test_throws ArgumentError AK.reverse!(x; max_tasks=0)
+            @test_throws ArgumentError AK.reverse!(similar(x), x; min_elems=0)
+            @test_throws ArgumentError AK.reverse(x; block_size=0)
+        end
+        m = array_from_host(rand(Int32, 2, 3))
+        @test_throws ArgumentError AK.reverse!(m; dims=(), max_tasks=0)
+        @test_throws ArgumentError AK.reverse!(similar(m), m; dims=1, min_elems=0)
+    end
+end
+
+@testset "reverse: backend-free inputs" begin
+    r = AK.reverse(1:5; backend=BACKEND)
+    @test get_backend(r) == BACKEND
+    @test Array(r) == 5:-1:1
 end

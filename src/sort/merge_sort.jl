@@ -156,7 +156,7 @@ function _merge_sort!(
     # keys' type (broadcasting would make a `BitArray` of `Bool` keys on the host)
     if by !== identity
         keys = similar(v, Base.promote_op(by, eltype(v)))
-        map!(by, keys, v, backend; block_size)
+        map!(by, keys, v; backend, block_size)
         _merge_sort_by_key!(
             keys, v, backend;
             lt, rev, order, block_size, dims,
