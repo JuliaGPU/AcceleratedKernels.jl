@@ -51,6 +51,7 @@ if in_test_env("CUDACore")
     push!(backends, "cuda" => quote
         using CUDACore
         global BACKEND = CUDABackend()
+        global MAX_BLOCK_SIZE = Int(CUDACore.attribute(CUDACore.device(), CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK))
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = true
         $_testset_setup_code
@@ -65,6 +66,7 @@ if in_test_env("AMDGPU")
     push!(backends, "amdgpu" => quote
         using AMDGPU
         global BACKEND = ROCBackend()
+        global MAX_BLOCK_SIZE = 1024
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = true
         $_testset_setup_code
@@ -78,6 +80,7 @@ if in_test_env("Metal")
     push!(backends, "metal" => quote
         using Metal
         global BACKEND = MetalBackend()
+        global MAX_BLOCK_SIZE = Int(Metal.device().maxThreadsPerThreadgroup.width)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
         $_testset_setup_code
@@ -91,6 +94,7 @@ if in_test_env("oneAPI")
     push!(backends, "oneapi" => quote
         using oneAPI
         global BACKEND = oneAPIBackend()
+        global MAX_BLOCK_SIZE = Int(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
         $_testset_setup_code
@@ -105,6 +109,7 @@ if in_test_env("OpenCL")
         using pocl_jll
         using OpenCL
         global BACKEND = OpenCLBackend()
+        global MAX_BLOCK_SIZE = Int(OpenCL.cl.device().max_work_group_size)
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
         $_testset_setup_code
@@ -115,6 +120,7 @@ end
 if args.custom["cpu-ka"] !== nothing
     push!(backends, "cpu-ka" => quote
         global BACKEND = get_backend([])
+        global MAX_BLOCK_SIZE = 1024
         global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
         $_testset_setup_code
@@ -125,6 +131,7 @@ end
 if args.custom["cpu"] !== nothing || isempty(backends)
     push!(backends, "cpu" => quote
         global BACKEND = get_backend([])
+        global MAX_BLOCK_SIZE = 1024
         global prefer_threads = true    # Also used to determine whether to run the CPU or GPU tests
         global TEST_DL = false
         $_testset_setup_code

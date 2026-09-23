@@ -1066,3 +1066,23 @@ end
         @test AK.all(x->x<0, v; prefer_threads, alg) === false
     end
 end
+
+
+@testset "reduce block sizes" begin
+    # The block-level tree reduction must cover every power-of-two group size the device allows;
+    # each shape below reaches a different kernel: the 1D block reduction, the grid-strided
+    # one-block-per-output reduction (contiguous and strided sources), and the multi-block
+    # reduction with its second pass.
+    Random.seed!(0)
+    vh = rand(Int32(1):Int32(100), 100_000)
+    v = array_from_host(vh)
+    shapes = (((3000, 40), 1), ((40, 3000), 2), ((20_000, 4), 1))
+    mats = [(array_from_host(rand(Int32(1):Int32(100), sz)), dims) for (sz, dims) in shapes]
+    for block_size in filter(<=(MAX_BLOCK_SIZE), 2 .^ (0:10))
+        @test AK.reduce(+, v; prefer_threads, init=Int32(0), block_size) == sum(vh)
+        for (m, dims) in mats
+            @test Array(AK.reduce(+, m; prefer_threads, init=Int32(0), dims, block_size)) ==
+                  sum(Array(m); dims)
+        end
+    end
+end
