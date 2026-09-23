@@ -8,456 +8,311 @@ include("radix_sort.jl")
 include("bitonic_sort.jl")
 
 
-# Available sorting algorithms
-abstract type SortAlgorithm end
+# Sorting algorithms (`CPUThreads.SampleSort` is defined with the other CPUThreads algorithms)
 
 """
-    MergeSort(; lowmem=false)
+    MergeSort(; block_size=nothing, lowmem=false)
 
-Use GPU merge sort for `sort!` and `sort`. For `sortperm!`, `lowmem=true` selects the
-lower-memory permutation path.
+GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
+kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
+(any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
+passes merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
+the cost of reading them from global memory in every comparison; other operations reject it.
 """
 Base.@kwdef struct MergeSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
     lowmem::Bool = false
 end
 
 """
     RadixSort(; block_size=nothing, items_per_thread=nothing)
 
-Use GPU radix sort for `sort!` and `sort`. Supports `UInt32`, `Int32`, `Float32`, `UInt64`,
-`Int64`, and `Float64` with forward or reverse ordering. This algorithm does not support
-`sortperm!`.
+GPU LSD radix sort for whole arrays of 32- and 64-bit integers and floats (`UInt32`, `Int32`,
+`Float32`, `UInt64`, `Int64`, `Float64`) under the default ordering or its reverse; it is stable
+and orders floats like `isless`. It does not support `dims`, custom `lt`/`by`, `sortperm!` or
+`sort_by_key!`. `block_size` must be a power of two up to 1024, `items_per_thread` between 1 and
+64. `items_per_thread` applies where radix sort's chunked kernels run, which needs atomics and a
+`block_size` that is a multiple of 32 whose tiles fit local memory; elsewhere its portable kernels
+sort one item per thread.
 """
 Base.@kwdef struct RadixSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
     items_per_thread::Union{Nothing, Int} = nothing
 end
 
-_radix_defaults(::Backend) = (block_size=256, items_per_thread=2)
-
 """
     BitonicSort(; block_size=nothing, items_per_thread=nothing)
 
-Use GPU bitonic sort for `sort!` and `sort`, whole-array or along `dims`. Supports GPU-compatible
-element types and `lt`/`by`/`rev`/`order`; `by` is evaluated at each comparison. The sort is
-unstable and does not support `sortperm!` or `sortperm`.
-
-Fastest for small arrays and short slices, slower than `MergeSort`/`RadixSort` for large
-whole-array sorts. Tiles of up to `block_size * items_per_thread` elements sort in local memory;
-larger inputs need global passes.
-
-Both settings must be positive powers of two and default to `bitonic_defaults(backend)`.
-For `block_size`, the `sort!` keyword takes precedence over the backend default.
+GPU bitonic sorting network, for whole arrays and `dims`, every element type and ordering. It is
+unstable and does not support `sortperm!` or `sort_by_key!`. Fastest for small arrays and short
+slices: tiles of `block_size * items_per_thread` elements sort in local memory, larger inputs need
+global passes. Both settings must be positive powers of two.
 """
 Base.@kwdef struct BitonicSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
     items_per_thread::Union{Nothing, Int} = nothing
 end
 
-"""
-    SampleSort()
 
-Use CPU sample sort for `sort!`, `sort`, `sortperm!`, and `sortperm`.
-"""
-struct SampleSort <: SortAlgorithm end
-
-
-# All other algorithms have the same naming convention as Julia Base ones; provide similar
-# interface here too.
+include("tuning.jl")
 
 
 """
     sort!(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
+        v::AbstractArray;
+        backend=nothing,
+        alg::Algorithm=Auto(),
+        dims::Union{Colon, Integer}=:,
+        lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
         order::Base.Order.Ordering=Base.Order.Forward,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # Algorithm choice
-        alg::Union{Nothing, SortAlgorithm}=nothing,
-
-        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-
-        # GPU settings
-        block_size::Union{Nothing, Int}=nothing,
-
-        # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
-    )
+    ) -> v
 
-Sorts the array `v` in-place using the specified backend. The `lt`, `by`, `rev`, and `order`
-arguments are the same as for `Base.sort`.
+Sort `v` in place. `lt`, `by`, `rev` and `order` are those of `Base.sort!`, and so is the result:
+by default the sort is stable. `dims=:` sorts the whole array as one vector (`Base.sort!` requires
+`dims` for arrays of more than one dimension); an integer `dims` sorts each slice along that
+dimension independently.
 
-By default (`dims=:`) the whole array is sorted as one vector, whatever its shape. Pass an integer
-`dims` to sort each 1D slice along that dimension independently, like `Base.sort!(A; dims)`. On GPU
-backends this uses merge sort by default, or [`BitonicSort`](@ref) when requested; `RadixSort`
-does not support `dims`. On CPU backends each slice is sorted with
-`Base.sort!` (also with `alg=SampleSort()`, and without using `temp`), slices spread over the tasks.
+`alg` is [`Auto()`](@ref Auto) by default, which chooses an algorithm for the backend and device,
+the element type, the ordering, and the length of the array or slices: on the host,
+[`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort); on GPUs,
+[`MergeSort`](@ref), or [`BitonicSort`](@ref) for short inputs or [`RadixSort`](@ref) for long
+ones where the device's tuning enables them and they give the same result. `Auto(stable=false)`
+also allows the unstable `BitonicSort` for elements that compare equal without being identical
+(e.g. floats). An explicit algorithm, with any of its settings, is used as given or rejected with
+an `ArgumentError`.
 
-## CPU
-CPU settings: use at most `max_tasks` threads to sort the array such that at least `min_elems`
-elements are sorted by each thread. A parallel sample sort is used, processing
-independent slices of the array and deferring to `Base.sort!` for the final local sorts.
+`backend` is derived from `v`; pass it only for arrays that do not determine their backend.
 
-Note that the Base Julia `sort!` is mainly memory-bound, so multithreaded sorting only becomes
-faster if it is a more compute-heavy operation to hide memory latency - that includes:
-- Sorting more complex types, e.g. lexicographic sorting of tuples / structs / strings.
-- More complex comparators, e.g. `by=custom_complex_function` or `lt=custom_lt_function`.
-- Less cache-predictable data movement, e.g. `sortperm`.
-
-## GPU
-GPU settings: `block_size` sets the number of threads per block. For `RadixSort` and `BitonicSort`,
-fields on the algorithm take precedence over this keyword, then backend defaults.
-`items_per_thread` is set on the algorithm and defaults to 2 for `RadixSort`, 8 for `BitonicSort`.
-
-## Algorithm choice
-By default, `sort!` uses sample sort on CPU backends and merge sort on GPU
-backends. Pass `alg=SampleSort()` for the CPU path, `alg=MergeSort()` for the GPU merge-sort path,
-`alg=RadixSort()` to opt into GPU radix sorting, or `alg=BitonicSort()` for the GPU sorting
-network. `RadixSort()` supports 32-bit and 64-bit integers and floats with default `lt`/`by`.
-`BitonicSort()` is unstable: fastest for small arrays and short slices, slower than
-`MergeSort`/`RadixSort` for large whole-array sorts.
-
-For both CPU and GPU backends, the `temp` argument can be used to reuse a temporary buffer of the
-same size as `v` to store the sorted output.
+`temp` is an optional scratch array with the same length and element type as `v`, used by
+`MergeSort`, `RadixSort` and, for `dims=:`, `CPUThreads.SampleSort`.
 
 # Examples
-Simple parallel CPU sort using all available threads (as given by `julia --threads N`):
 ```julia
 import AcceleratedKernels as AK
-v = rand(1000)
-AK.sort!(v)
-```
+using CUDA
 
-Parallel GPU sorting, passing a temporary buffer to avoid allocating a new one:
-```julia
-using oneAPI
-import AcceleratedKernels as AK
-v = oneArray(rand(1000))
-temp = similar(v)
-AK.sort!(v, temp=temp)
+v = CuArray(rand(Float32, 100_000))
+AK.sort!(v)                                         # Auto: stable, chosen for the device
+AK.sort!(v; rev=true, alg=AK.Auto(stable=false))    # may use an unstable algorithm
+AK.sort!(v; alg=AK.RadixSort(block_size=512))       # this algorithm, with this setting
+
+A = CuArray(rand(Int32, 64, 10_000))
+AK.sort!(A; dims=1)                                 # each column
+
+AK.sort!(rand(1000))                                # host array: Julia threads
 ```
 """
 function sort!(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    _sort_impl!(
-        v, backend;
-        kwargs...
-    )
-end
-
-
-function _sort_impl!(
-    v::AbstractArray, backend::Backend;
-
+    v::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
+    alg::Algorithm=Auto(),
+    dims::Union{Colon, Integer}=Colon(),
     lt=isless,
     by=identity,
     rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Forward,
-
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    prefer_threads::Bool=true,
-
-    alg::Union{Nothing, SortAlgorithm}=nothing,
-
-    # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-    dims::Union{Colon, Integer}=Colon(),
-
-    # GPU settings; nothing => each GPU algorithm picks its own tuned default
-    block_size::Union{Nothing, Int}=nothing,
-
-    # Temporary buffer, same size as `v`
+    order::Base.Order.Ordering=Base.Order.Forward,
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    if use_gpu_algorithm(backend, prefer_threads)
-        alg = isnothing(alg) ? MergeSort() : alg
-        if alg isa MergeSort
-            merge_sort!(
-                v, backend;
-                lt, by, rev, order,
-                block_size=isnothing(block_size) ? 256 : block_size,
-                temp, dims,
-            )
-        elseif alg isa RadixSort
-            dims isa Colon || throw(ArgumentError("RadixSort does not support sorting along `dims`"))
-            _rs_supported(eltype(v)) || throw(ArgumentError("RadixSort is not supported for eltype \"$(eltype(v))\""))
-            ordering = Base.Order.ord(lt, by, rev, order)
-            ordering === Base.Order.Forward || ordering === Base.Order.Reverse ||
-                throw(ArgumentError("RadixSort only supports forward or reverse ordering"))
-            defaults = _radix_defaults(backend)
-            radix_block_size = isnothing(alg.block_size) ?
-                               (isnothing(block_size) ? defaults.block_size : block_size) : alg.block_size
-            radix_items = isnothing(alg.items_per_thread) ?
-                          defaults.items_per_thread : alg.items_per_thread
-            _radix_sort!(
-                v, backend;
-                descending=ordering === Base.Order.Reverse,
-                block_size=radix_block_size,
-                items_per_thread=radix_items,
-                temp,
-            )
-        elseif alg isa BitonicSort
-            defaults = bitonic_defaults(backend)
-            bitonic_sort!(
-                v, backend;
-                lt, by, rev, order, dims,
-                block_size=something(alg.block_size, block_size, defaults.block_size),
-                items_per_thread=something(alg.items_per_thread, defaults.items_per_thread),
-            )
-        else
-            throw(ArgumentError("$(typeof(alg)) is not supported by sort! on GPU backends"))
-        end
+    backend = _resolve_backend(backend, v, temp)
+    ord = Base.Order.ord(lt, by, rev, order)
+    a = _resolve_sort(alg, backend, v, dims, ord)
+    _sort_impl!(a, v, backend, dims, ord; lt, by, rev, order, temp)
+    return v
+end
+
+function _sort_impl!(a::MergeSort, v, backend, dims, ord; lt, by, rev, order, temp)
+    _merge_sort!(v, backend; lt, by, rev, order, block_size=a.block_size, temp, dims)
+end
+
+function _sort_impl!(a::RadixSort, v, backend, dims, ord; lt, by, rev, order, temp)
+    _radix_sort!(v, backend; descending=ord === Base.Order.Reverse,
+                 block_size=a.block_size, items_per_thread=a.items_per_thread, temp)
+end
+
+function _sort_impl!(a::BitonicSort, v, backend, dims, ord; lt, by, rev, order, temp)
+    _bitonic_sort!(v, backend; lt, by, rev, order, dims,
+                   block_size=a.block_size, items_per_thread=a.items_per_thread)
+end
+
+function _sort_impl!(a::CPUThreads.SampleSort, v, backend, dims, ord; lt, by, rev, order, temp)
+    if dims isa Colon
+        # `vec`: the local sorts use `Base.sort!`, which needs `dims` for other arrays
+        _sample_sort!(vec(v); lt, by, rev, order, max_tasks=a.max_tasks, min_elems=a.min_elems, temp)
     else
-        alg = isnothing(alg) ? SampleSort() : alg
-        if !(alg isa SampleSort)
-            throw(ArgumentError("$(typeof(alg)) is not supported by sort! on CPU backends"))
-        elseif dims isa Colon
-            sample_sort!(
-                v;
-                lt, by, rev, order,
-                max_tasks, min_elems,
-                temp,
-            )
-        else
-            ord = Base.Order.ord(lt, by, rev, order)
-            foreach_slice(v, dims; max_tasks, min_elems) do slice
-                Base.sort!(slice; order=ord)
-            end
+        foreach_slice(v, dims; max_tasks=a.max_tasks, min_elems=a.min_elems) do slice
+            Base.sort!(slice; order=ord)
         end
     end
-    v
 end
 
 
 """
-    sort(
-        v::AbstractArray, backend::Backend=get_backend(v);
+    sort(v::AbstractArray; kwargs...)
 
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # Algorithm choice
-        alg::Union{Nothing, SortAlgorithm}=nothing,
-
-        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-
-        # GPU settings
-        block_size::Union{Nothing, Int}=nothing,
-
-        # Temporary buffer, same size as `v`
-        temp::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Out-of-place sort, same settings as [`sort!`](@ref).
+Out-of-place [`sort!`](@ref): sort a copy of `v`, with the same keywords.
 """
-function sort(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    vcopy = copy(v)
-    sort!(
-        vcopy, backend;
-        kwargs...
-    )
+function sort(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
+    backend = _resolve_backend(backend, v)
+    return sort!(_copy(backend, v); backend, kwargs...)
 end
 
 
 """
     sortperm!(
         ix::AbstractArray,
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
+        v::AbstractArray;
+        backend=nothing,
+        alg::Algorithm=Auto(),
+        dims::Union{Colon, Integer}=:,
+        lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
         order::Base.Order.Ordering=Base.Order.Forward,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # Algorithm choice
-        alg::Union{Nothing, SortAlgorithm}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-
-        # GPU settings
-        block_size::Union{Nothing, Int}=nothing,
-
-        # Temporary buffer, same size as `v`
         temp::Union{Nothing, AbstractArray}=nothing,
-    )
+    ) -> ix
 
-Save into `ix` the index permutation of `v` such that `v[ix]` is sorted. The `lt`, `by`, `rev`, and
-`order` arguments are the same as for `Base.sortperm`. The same algorithms are used as for
-[`sort!`](@ref) with custom by-index comparators.
+Write into `ix` the stable permutation that sorts `v`, so that `v[ix]` is sorted; `ix` is always
+overwritten. The keywords are those of [`sort!`](@ref).
 
-By default (`dims=:`) the whole array is permuted as one vector. Pass an integer `dims` to permute
-each 1D slice along that dimension independently, like `Base.sortperm!(ix, A; dims)`: `ix` must
-then have the same axes as `v` and receives linear indices into `v`, so that `v[ix]` is sorted
-along `dims`. The permutation is stable in both cases.
+With `dims=:`, `ix` needs as many elements as `v` and receives indices `1:length(v)`. With an
+integer `dims`, `ix` must have the same axes as `v` and receives linear indices into `v`, so that
+`v[ix]` is sorted along `dims`, like `Base.sortperm!(ix, A; dims)`.
 
-## Algorithm choice
-By default, `sortperm!` uses sample sort on CPU backends and merge sort on GPU
-backends. Pass `alg=MergeSort(lowmem=true)` to use the lower-memory GPU permutation path.
-`RadixSort()` and `BitonicSort()` do not provide a permutation path.
+`Auto()` chooses [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort) on the
+host and [`MergeSort`](@ref) on GPUs; `MergeSort(lowmem=true)` avoids copying the keys.
+`RadixSort` and `BitonicSort` have no permutation path. `backend` is derived from `ix` and `v`.
+`temp` is an optional scratch array like `ix`.
 """
 function sortperm!(
     ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend=get_backend(v);
-    kwargs...
-)
-    _sortperm_impl!(
-        ix, v, backend;
-        kwargs...
-    )
-end
-
-
-function _sortperm_impl!(
-    ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend;
-
+    v::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
+    alg::Algorithm=Auto(),
+    dims::Union{Colon, Integer}=Colon(),
     lt=isless,
     by=identity,
     rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Forward,
-
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    prefer_threads::Bool=true,
-
-    alg::Union{Nothing, SortAlgorithm}=nothing,
-
-    # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-    dims::Union{Colon, Integer}=Colon(),
-
-    # GPU settings; nothing => merge sort's tuned default (sortperm is merge-only)
-    block_size::Union{Nothing, Int}=nothing,
-
-    # Temporary buffer, same size as `v`
+    order::Base.Order.Ordering=Base.Order.Forward,
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    if !(dims isa Colon)
-        1 <= dims <= ndims(v) || throw(ArgumentError("dimension out of range"))
-        axes(ix) == axes(v) ||
-            throw(ArgumentError("index array must have the same axes as the input, $(axes(ix)) != $(axes(v))"))
-    end
-
-    if use_gpu_algorithm(backend, prefer_threads)
-        alg = isnothing(alg) ? MergeSort() : alg
-        bs = isnothing(block_size) ? 256 : block_size
-        if alg isa MergeSort
-            if alg.lowmem
-                merge_sortperm_lowmem!(
-                    ix, v, backend;
-                    lt, by, rev, order,
-                    block_size=bs,
-                    temp, dims,
-                )
-            else
-                # merge_sortperm! copies keys alongside indices in shared memory so comparisons
-                # never touch global memory during the binary-search step.
-                # merge_sortperm_lowmem! avoids the key copy but its comparator does two global
-                # loads per comparison, making it O(n log²n) in global traffic at large n.
-                merge_sortperm!(
-                    ix, v, backend;
-                    lt, by, rev, order,
-                    block_size=bs,
-                    temp_ix=temp,   # old `temp` was the index buffer; maps directly to temp_ix
-                    dims,
-                )
-            end
-        elseif alg isa RadixSort
-            throw(ArgumentError("RadixSort does not support sortperm"))
-        elseif alg isa BitonicSort
-            throw(ArgumentError("BitonicSort does not support sortperm"))
-        else
-            throw(ArgumentError("$(typeof(alg)) is not supported by sortperm! on GPU backends"))
-        end
+    backend = _resolve_backend(backend, ix, v, temp)
+    ord = Base.Order.ord(lt, by, rev, order)
+    if dims isa Colon
+        length(ix) == length(v) || throw(ArgumentError(
+            "index array must have as many elements as the input, $(length(ix)) != $(length(v))"))
     else
-        alg = isnothing(alg) ? SampleSort() : alg
-        if !(alg isa SampleSort)
-            throw(ArgumentError("$(typeof(alg)) is not supported by sortperm! on CPU backends"))
-        elseif dims isa Colon
-            sample_sortperm!(
-                ix, v;
-                lt, by, rev, order,
-                max_tasks,
-                min_elems,
-                temp,
-            )
-        else
-            # Like Base: sort the linear indices of each slice by the values they point to
-            ord = Base.Order.Perm(Base.Order.ord(lt, by, rev, order), vec(v))
-            copyto!(ix, LinearIndices(v))
-            foreach_slice(ix, dims; max_tasks, min_elems) do slice
-                Base.sort!(slice; order=ord)
-            end
-        end
+        axes(ix) == axes(v) || throw(ArgumentError(
+            "index array must have the same axes as the input, $(axes(ix)) != $(axes(v))"))
     end
-    ix
+    a = _resolve_sort(alg, backend, v, dims, ord; perm=true)
+    _sortperm_impl!(a, ix, v, backend, dims, ord; lt, by, rev, order, temp)
+    return ix
+end
+
+function _sortperm_impl!(a::MergeSort, ix, v, backend, dims, ord; lt, by, rev, order, temp)
+    if a.lowmem
+        _merge_sortperm_lowmem!(ix, v, backend; lt, by, rev, order,
+                                block_size=a.block_size, temp, dims)
+    else
+        # Copies keys alongside indices, so comparisons never read global memory; the low-memory
+        # path does two global loads per comparison, O(n log²n) global traffic at large n.
+        _merge_sortperm!(ix, v, backend; lt, by, rev, order,
+                         block_size=a.block_size, temp_ix=temp, dims)
+    end
+end
+
+function _sortperm_impl!(a::CPUThreads.SampleSort, ix, v, backend, dims, ord;
+                         lt, by, rev, order, temp)
+    if dims isa Colon
+        _sample_sortperm!(vec(ix), vec(v); lt, by, rev, order,
+                          max_tasks=a.max_tasks, min_elems=a.min_elems, temp)
+    else
+        _sample_sortperm_dims!(ix, v, ord, dims; max_tasks=a.max_tasks, min_elems=a.min_elems)
+    end
 end
 
 
 """
-    sortperm(
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
+    sortperm(v::AbstractArray; kwargs...)
 
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # Algorithm choice
-        alg::Union{Nothing, SortAlgorithm}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-
-        # GPU settings
-        block_size::Union{Nothing, Int}=nothing,
-
-        # Temporary buffer, same size as `v`
-        temp::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Out-of-place sortperm, same settings as [`sortperm!`](@ref).
+Out-of-place [`sortperm!`](@ref): return an `Int` array shaped like `v` holding the permutation,
+with the same keywords.
 """
-function sortperm(
-    v::AbstractArray,
-    backend::Backend=get_backend(v);
-    kwargs...
+function sortperm(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
+    backend = _resolve_backend(backend, v)
+    return sortperm!(_similar(backend, v, Int), v; backend, kwargs...)
+end
+
+
+"""
+    sort_by_key!(
+        keys::AbstractArray,
+        values::AbstractArray;
+        backend=nothing,
+        alg::Algorithm=Auto(),
+        dims::Union{Colon, Integer}=:,
+        lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+        order::Base.Order.Ordering=Base.Order.Forward,
+        temp_keys::Union{Nothing, AbstractArray}=nothing,
+        temp_values::Union{Nothing, AbstractArray}=nothing,
+    ) -> (keys, values)
+
+Sort `keys` in place and apply the same permutation to `values`, stably: values with equal keys
+keep their relative order. The ordering keywords and `dims` are those of [`sort!`](@ref); `values`
+must have as many elements as `keys` (the same axes with an integer `dims`).
+
+`Auto()` chooses [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort) on the
+host and [`MergeSort`](@ref) on GPUs, the algorithms that support key/value sorting. `backend` is
+derived from `keys` and `values`. `temp_keys` and `temp_values` are optional scratch arrays like
+`keys` and `values`.
+
+Thrust, oneDPL and Kokkos call this operation `sort_by_key`, CUB `SortPairs`.
+
+# Examples
+```julia
+import AcceleratedKernels as AK
+using Metal
+
+keys = MtlArray(rand(Int32(1):Int32(10), 1000))
+values = MtlArray(Int32.(1:1000))
+AK.sort_by_key!(keys, values)      # values of equal keys stay in ascending order
+```
+"""
+function sort_by_key!(
+    keys::AbstractArray,
+    values::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
+    alg::Algorithm=Auto(),
+    dims::Union{Colon, Integer}=Colon(),
+    lt=isless,
+    by=identity,
+    rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+    temp_keys::Union{Nothing, AbstractArray}=nothing,
+    temp_values::Union{Nothing, AbstractArray}=nothing,
 )
-    ix = similar(v, Int)
-    sortperm!(
-        ix, v, backend;
-        kwargs...
-    )
+    backend = _resolve_backend(backend, keys, values, temp_keys, temp_values)
+    ord = Base.Order.ord(lt, by, rev, order)
+    if dims isa Colon
+        length(keys) == length(values) || throw(ArgumentError(
+            "keys and values must have the same length, $(length(keys)) != $(length(values))"))
+    else
+        axes(keys) == axes(values) || throw(ArgumentError(
+            "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
+    end
+    a = _resolve_sort(alg, backend, keys, dims, ord; pairs=true)
+    _sort_by_key_impl!(a, keys, values, backend, dims, ord;
+                       lt, by, rev, order, temp_keys, temp_values)
+    return keys, values
+end
+
+function _sort_by_key_impl!(a::MergeSort, keys, values, backend, dims, ord;
+                            lt, by, rev, order, temp_keys, temp_values)
+    _merge_sort_by_key!(keys, values, backend; lt, by, rev, order, dims,
+                        block_size=a.block_size, temp_keys, temp_values)
+end
+
+function _sort_by_key_impl!(a::CPUThreads.SampleSort, keys, values, backend, dims, ord;
+                            lt, by, rev, order, temp_keys, temp_values)
+    _sample_sort_by_key!(keys, values, ord, dims;
+                         max_tasks=a.max_tasks, min_elems=a.min_elems, temp_keys, temp_values)
 end

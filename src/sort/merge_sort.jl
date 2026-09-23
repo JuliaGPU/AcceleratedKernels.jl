@@ -128,23 +128,8 @@ end
 end
 
 
-"""
-    merge_sort!(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-
-        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort!(
+# GPU merge sort of `v` (or of each slice along `dims`), in place.
+function _merge_sort!(
     v::AbstractArray, backend::Backend=get_backend(v);
 
     lt=isless,
@@ -166,10 +151,12 @@ function merge_sort!(
     end
     (isempty(v) || layout.len <= 1) && return v
 
-    # Compute keys once instead of evaluating `by` in every comparison.
+    # Compute keys once instead of evaluating `by` in every comparison, into an array of the
+    # keys' type (broadcasting would make a `BitArray` of `Bool` keys on the host)
     if by !== identity
-        keys = by.(v)
-        merge_sort_by_key!(
+        keys = similar(v, Base.promote_op(by, eltype(v)))
+        map!(by, keys, v, backend; block_size)
+        _merge_sort_by_key!(
             keys, v, backend;
             lt, rev, order, block_size, dims,
             temp_values=temp,   # temp was for v swap buffer; maps to temp_values here
@@ -218,30 +205,4 @@ function merge_sort!(
     end
 
     v
-end
-
-
-"""
-    merge_sort(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    v_copy = copy(v)
-    merge_sort!(
-        v_copy, backend;
-        kwargs...
-    )
 end

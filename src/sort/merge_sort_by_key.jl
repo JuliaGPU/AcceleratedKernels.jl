@@ -161,26 +161,8 @@ end
 end
 
 
-"""
-    merge_sort_by_key!(
-        keys::AbstractArray,
-        values::AbstractArray,
-        backend::Backend=get_backend(keys);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp_keys::Union{Nothing, AbstractArray}=nothing,
-        temp_values::Union{Nothing, AbstractArray}=nothing,
-
-        # Sort each 1D slice along this dimension; `:` sorts the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort_by_key!(
+# GPU merge sort of `keys` (or of each slice along `dims`), permuting `values` alike.
+function _merge_sort_by_key!(
     keys::AbstractArray,
     values::AbstractArray,
     backend::Backend=get_backend(keys);
@@ -259,37 +241,4 @@ function merge_sort_by_key!(
     end
 
     keys, values
-end
-
-
-"""
-    merge_sort_by_key(
-        keys::AbstractArray,
-        values::AbstractArray,
-        backend::Backend=get_backend(keys);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp_keys::Union{Nothing, AbstractArray}=nothing,
-        temp_values::Union{Nothing, AbstractArray}=nothing,
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sort_by_key(
-    keys::AbstractArray,
-    values::AbstractArray,
-    backend::Backend=get_backend(keys);
-    kwargs...
-)
-    keys_copy = copy(keys)
-    values_copy = copy(values)
-
-    merge_sort_by_key!(
-        keys_copy, values_copy, backend;
-        kwargs...
-    )
 end

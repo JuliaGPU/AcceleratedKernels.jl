@@ -270,12 +270,8 @@ If you need other algorithms in your work that may be of general use, please ope
 | [General Looping](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/foreachindex/) | `foreachindex`, `foraxes`                        | `Kokkos::parallel_for` `RAJA::forall` `thrust::transform` |
 | [Mapping](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/map/) | `map` `map!`                                     | `thrust::transform`                                       |
 | [Sorting](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/sort/) | `sort` `sort!`                                   | `sort` `sort_team` `stable_sort`                          |
-|                                               | `sample_sort!` `sample_sortperm!`                |                                                           |
-|                                               | `merge_sort` `merge_sort!`                       |                                                           |
-|                                               | `merge_sort_by_key` `merge_sort_by_key!`         | `sort_team_by_key`                                        |
 |                                               | `sortperm` `sortperm!`                           | `sort_permutation` `index_permutation`                    |
-|                                               | `merge_sortperm` `merge_sortperm!`               |                                                           |
-|                                               | `merge_sortperm_lowmem` `merge_sortperm_lowmem!` |                                                           |
+|                                               | `sort_by_key!`                                   | `sort_by_key` `sort_team_by_key` `cub::DeviceRadixSort::SortPairs` |
 | [Reduction](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reduce/) | `reduce`                                         | `Kokkos:parallel_reduce` `fold` `aggregate`               |
 | [MapReduce](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/mapreduce/) | `mapreduce`                                      | `transform_reduce` `fold`                                 |
 | [Accumulation](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/accumulate/) | `accumulate` `accumulate!`                       | `prefix_sum` `thrust::scan` `cumsum`                      |
@@ -343,6 +339,12 @@ $> julia -e 'import Pkg; Pkg.test("AcceleratedKernels")'
 Start Julia with multiple threads to run the tests on a multithreaded CPU backend:
 ```bash
 $> julia --threads=4 -e 'import Pkg; Pkg.test("AcceleratedKernels.jl")'
+```
+
+With KernelAbstractions 0.10, whose host backend runs kernels on PoCL, `--cpu-ka` tests
+AcceleratedKernels' GPU kernels on host arrays instead of the threaded CPU algorithms:
+```bash
+$> julia -e 'import Pkg; Pkg.test("AcceleratedKernels"; test_args=["--cpu-ka"])'
 ```
 
 
