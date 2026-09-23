@@ -2,15 +2,8 @@ function mapreduce_1d_cpu(
     f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral,
-
-    # CPU settings
     max_tasks::Int,
     min_elems::Int,
-
-    # GPU settings - ignored here
-    block_size::Int,
-    temp::Union{Nothing, AbstractArray},
-    switch_below::Int,
 )
     if src isa Base.Broadcast.Broadcasted
         return op(init, Base.mapreduce(f, op, src; init=neutral))

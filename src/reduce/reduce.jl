@@ -1,43 +1,8 @@
 # Backend implementations
 include("utilities.jl")
+include("tuning.jl")
 
 const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}
-
-function _mapreduce_backend(src::AbstractArray)
-    return _mapreduce_get_backend(src)
-end
-
-function _mapreduce_backend(src::Base.Broadcast.Broadcasted)
-    backend = _mapreduce_backend_from_args(src.args)
-    return isnothing(backend) ? CPU_BACKEND : backend
-end
-
-function _mapreduce_get_backend(src::AbstractArray)
-    try
-        return get_backend(src)
-    catch err
-        err isa ArgumentError || rethrow()
-        return CPU_BACKEND
-    end
-end
-
-_mapreduce_backend_from_arg(src::AbstractArray) = _mapreduce_get_backend(src)
-_mapreduce_backend_from_arg(src::Base.Broadcast.Broadcasted) = _mapreduce_backend(src)
-_mapreduce_backend_from_arg(_) = nothing
-
-function _mapreduce_backend_from_args(args::Tuple)
-    backend = nothing
-    for arg in args
-        arg_backend = _mapreduce_backend_from_arg(arg)
-        isnothing(arg_backend) && continue
-        if isnothing(backend)
-            backend = arg_backend
-        else
-            @argcheck arg_backend == backend
-        end
-    end
-    return backend
-end
 
 function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
     src_axes = axes(src)
@@ -54,58 +19,38 @@ include("mapreduce_nd.jl")
 
 """
     reduce(
-        op, src::AbstractArray, backend::Backend=get_backend(src);
+        op, src::AbstractArray;
+        backend=nothing,
         init,
         neutral=neutral_element(op, typeof(init)),
         dims=nothing,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=1,
-
-        # GPU settings
-        block_size::Int=256,
-        items_per_thread::Int=max(2, default_items_per_thread(backend)),
+        alg::Algorithm=Auto(),
         temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
     )
 
-Reduce `src` along dimensions `dims` using the binary operator `op`. If `dims` is `nothing` or
-`:`, reduce `src` to a scalar. If `dims` is an integer or a collection of integers, reduce `src`
-along those dimension(s). The `init` value is used as the initial value for the reduction; `neutral`
-is the neutral element for the operator `op`.
+Reduce `src` along dimensions `dims` using the binary operator `op`, which must be associative
+and commutative. If `dims` is `nothing` or `:`, reduce `src` to a scalar, returned on the host.
+If `dims` is an integer or a collection of integers, reduce `src` along those dimension(s). The
+`init` value is used as the initial value for the reduction; `neutral` is the neutral element for
+the operator `op`.
 
 The returned type is the same as `init` - to control output precision, specify `init` explicitly.
 
-## CPU settings
-Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims` is an integer or a collection of integers) multithreading currently only becomes
-faster for `max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
+`alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
+AcceleratedKernels.CPUThreads.Partitioned) on the host and [`BlockReduce`](@ref) on GPUs, with the
+device's settings. `backend` is derived from `src`.
 
-Note that multithreading reductions only improves performance for cases with more compute-heavy
-operations, which hide the memory latency and thread launch overhead - that includes:
-- Reducing more complex types, e.g. reduction of tuples / structs / strings.
-- More complex operators, e.g. `op=custom_complex_op_function`.
-
-For non-memory-bound operations, reductions scale almost linearly with the number of threads.
-
-## GPU settings
-The `block_size` parameter controls the number of threads per block and must be a power of two.
-
-The GPU-only `items_per_thread` parameter must be at least 1 and controls how many elements each
-thread reduces in a block-strided pass. Its default is
-`max(2, default_items_per_thread(backend))`; larger values can improve throughput on discrete GPUs.
+On the host, multithreading reductions only improves performance for operations that hide the
+memory latency and thread launch overhead, e.g. reductions of tuples or structs, or expensive
+operators.
 
 The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
 (`dims=nothing` or `dims=:`), `length(temp) >= 2 * cld(length(src), items_per_thread * block_size)`
-is required. For reduction along dimensions (`dims` is an integer or a collection of
-integers), `temp` is used as the destination array, and thus must have the exact dimensions required - i.e. same
-dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
-corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
-behavior.
-
-The `switch_below` parameter controls the threshold below which the reduction is performed on the
-CPU and is only used for 1D reductions (i.e. `dims=nothing`).
+of the `BlockReduce` settings is required. For reduction along dimensions (`dims` is an integer or
+a collection of integers), `temp` is used as the destination array, and thus must have the exact
+dimensions required - i.e. same dimensionwise sizes as `src`, except for the reduced dimension(s)
+which become 1; there are some corner cases when one dimension is zero, check against
+`Base.reduce` for CPU arrays for exact behavior.
 
 # Examples
 Computing a sum, reducing down to a scalar that is copied to host:
@@ -117,92 +62,42 @@ v = CuArray{Int16}(rand(1:1000, 100_000))
 vsum = AK.reduce((x, y) -> x + y, v; init=zero(eltype(v)))
 ```
 
-Computing dimensionwise sums in a 2D matrix:
+Computing dimensionwise sums in a 2D matrix, with explicit settings:
 ```julia
 import AcceleratedKernels as AK
 using Metal
 
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
 mrowsum = AK.reduce(+, m; init=zero(eltype(m)), dims=1)
-mcolsum = AK.reduce(+, m; init=zero(eltype(m)), dims=2)
+mcolsum = AK.reduce(+, m; init=zero(eltype(m)), dims=2, alg=AK.BlockReduce(block_size=512))
 ```
 """
-function reduce(
-    op, src::AbstractArray, backend::Backend=_mapreduce_backend(src);
-    init,
-    kwargs...
-)
-    _mapreduce_impl(
-        identity, op, src, backend;
-        init,
-        kwargs...
-    )
-end
-
-
+reduce(op, src::AbstractArray; kwargs...) = mapreduce(identity, op, src; kwargs...)
 
 
 """
     mapreduce(
-        f, op, src::AbstractArray, backend::Backend=get_backend(src);
+        f, op, src::AbstractArray, srcs::AbstractArray...;
+        backend=nothing,
         init,
         neutral=neutral_element(op, typeof(init)),
         dims=nothing,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=1,
-
-        # GPU settings
-        block_size::Int=256,
-        items_per_thread::Int=max(2, default_items_per_thread(backend)),
+        alg::Algorithm=Auto(),
         temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
     )
 
-    mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray...; init, kwargs...)
-    mapreduce(f, op, A::AbstractArray, B::AbstractArray, As::AbstractArray..., backend::Backend; init, kwargs...)
+Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f`
+elementwise. The keywords are those of [`reduce`](@ref); `init` is used as the initial value for
+the reduction (i.e. after mapping), and `neutral` is needed for an efficient GPU implementation
+that also allows a nonzero `init`.
 
-Reduce `src` along dimensions `dims` using the binary operator `op` after applying `f` elementwise.
-If `dims` is `nothing` or `:`, reduce `src` to a scalar. If `dims` is an integer or a collection of
-integers, reduce `src` along those dimension(s). The `init` value is used as the initial value for
-the reduction (i.e. after mapping).
+Multiple input arrays are supported with the same axes. This follows `Base.mapreduce(f, op, A,
+B, ...)` semantics: `f` is mapped across corresponding elements of the inputs and the mapped
+values are reduced without materializing the intermediate array. Mismatched axes throw
+`DimensionMismatch`. `backend` is derived from all inputs. A `Broadcasted` object is also
+accepted as the single source, with singleton-expanding broadcast semantics, for array backends.
 
-The `neutral` value is the neutral element for the operator `op`, which is needed for an efficient
-GPU implementation that also allows a nonzero `init`.
-
-The returned type is the same as `init` - to control output precision, specify `init` explicitly.
-
-Multiple input arrays are supported with the same axes. This follows `Base.mapreduce(f, op, A, B,
-...)` semantics: `f` is mapped across corresponding elements of the inputs and the mapped values
-are reduced without materializing the intermediate array. Mismatched axes throw
-`DimensionMismatch`; singleton-expanding broadcast semantics are reserved for internal
-`Broadcasted` sources used by array backends.
-
-## CPU settings
-Use at most `max_tasks` threads with at least `min_elems` elements per task. For N-dimensional
-arrays (`dims` is an integer or a collection of integers) multithreading currently only becomes
-faster for `max_tasks >= 4`; all other cases are scaling linearly with the number of threads.
-
-## GPU settings
-The `block_size` parameter controls the number of threads per block and must be a power of two.
-
-The GPU-only `items_per_thread` parameter must be at least 1 and controls how many elements each
-thread reduces in a block-strided pass. Its default is
-`max(2, default_items_per_thread(backend))`; larger values can improve throughput on discrete GPUs.
-
-The `temp` parameter can be used to pass a pre-allocated temporary array. For reduction to a scalar
-(`dims=nothing` or `dims=:`), `length(temp) >= 2 * cld(length(src), items_per_thread * block_size)`
-is required. For reduction along dimensions (`dims` is an integer or a collection of
-integers), `temp` is used as the destination array, and thus must have the exact dimensions required - i.e. same
-dimensionwise sizes as `src`, except for the reduced dimension(s) which become 1; there are some
-corner cases when one dimension is zero, check against `Base.reduce` for CPU arrays for exact
-behavior.
-
-The `switch_below` parameter controls the threshold below which the reduction is performed on the
-CPU and is only used for 1D reductions (i.e. `dims=nothing`).
-
-# Example
+# Examples
 Computing a sum of squares, reducing down to a scalar that is copied to host:
 ```julia
 import AcceleratedKernels as AK
@@ -220,122 +115,61 @@ using Metal
 f(x) = x * x
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
 mrowsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=1)
-mcolsumsq = AK.mapreduce(f, +, m; init=zero(eltype(m)), dims=2)
 ```
 
 Computing a two-input dimensional reduction:
 ```julia
 rows = AK.mapreduce((x, y) -> x * y, +, a, b; init=0f0, dims=1)
 ```
-
-An explicit backend may be passed after all input arrays:
-```julia
-rows = AK.mapreduce((x, y) -> x * y, +, a, b, backend; init=0f0, dims=1)
-```
 """
 function mapreduce(
-    f, op, src::MapReduceSource, backend::Backend=_mapreduce_backend(src);
+    f, op, src::MapReduceSource, srcs::AbstractArray...;
+    backend::Union{Nothing, Backend}=nothing,
     init,
-    kwargs...
+    neutral=neutral_element(op, typeof(init)),
+    dims=nothing,
+    alg::Algorithm=Auto(),
+    temp::Union{Nothing, AbstractArray}=nothing,
 )
-    _mapreduce_impl(
-        f, op, src, backend;
-        init,
-        kwargs...
-    )
-end
-
-function mapreduce(
-    f, op, src::AbstractArray, src2::AbstractArray, srcs::AbstractArray...;
-    init,
-    kwargs...
-)
-    return _mapreduce_multi(
-        f, op, nothing, src, src2, srcs...;
-        init,
-        kwargs...
-    )
-end
-
-function mapreduce(
-    f, op, src::AbstractArray, src2::AbstractArray, arg, args...;
-    init,
-    kwargs...
-)
-    backend = isempty(args) ? arg : args[end]
-    backend isa Backend || throw(MethodError(mapreduce, (f, op, src, src2, arg, args...)))
-    srcs = isempty(args) ? () : (arg, args[1:end - 1]...)
-    return _mapreduce_multi(
-        f, op, backend, src, src2, srcs...;
-        init,
-        kwargs...
-    )
-end
-
-function _mapreduce_multi(
-    f, op, backend::Union{Nothing, Backend}, src::AbstractArray, srcs::AbstractArray...;
-    init,
-    kwargs...
-)
-    _mapreduce_check_map_axes(src, srcs...)
-    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
-    return mapreduce(
-        identity, op, bc, isnothing(backend) ? _mapreduce_backend(bc) : backend;
-        init,
-        kwargs...
-    )
+    if !isempty(srcs)
+        src isa AbstractArray ||
+            throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
+        _mapreduce_check_map_axes(src, srcs...)
+        src = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
+        f = identity
+    end
+    backend = _resolve_backend(backend, src, temp)
+    a = _resolve_reduce(alg, backend, typeof(init), dims)
+    _mapreduce_impl(f, op, src, backend, a; init, neutral, dims, temp)
 end
 
 
 function _mapreduce_impl(
-    f, op, src::MapReduceSource, backend::Backend;
-    init,
-    neutral=neutral_element(op, typeof(init)),
-    dims = nothing,
-
-    # CPU settings
-    max_tasks::Int=Threads.nthreads(),
-    min_elems::Int=1,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int=256,
-    items_per_thread::Int=max(2, default_items_per_thread(backend)),
-    temp::Union{Nothing, AbstractArray}=nothing,
-    switch_below::Int=0,
+    f, op, src::MapReduceSource, backend::Backend, alg;
+    init, neutral, dims, temp,
 )
-
     # scalar *linear* indexing into a multidimensional Broadcasted object is
     # only available on Julia 1.12; on earlier version, materialize it first.
     if VERSION < v"1.12-" && src isa Base.Broadcast.Broadcasted
         src = Base.Broadcast.materialize(src)
     end
 
-    if isnothing(dims) || dims isa Colon
-        if use_gpu_algorithm(backend, prefer_threads)
+    if _whole(dims)
+        if alg isa BlockReduce
             mapreduce_1d_gpu(
                 f, op, src, backend;
                 init, neutral,
-                max_tasks, min_elems,
-                block_size, items_per_thread, temp,
-                switch_below
+                block_size=alg.block_size, items_per_thread=alg.items_per_thread,
+                temp, switch_below=alg.switch_below,
             )
         else
             mapreduce_1d_cpu(
                 f, op, src, backend;
                 init, neutral,
-                max_tasks, min_elems,
-                block_size, temp,
-                switch_below
+                max_tasks=alg.max_tasks, min_elems=alg.min_elems,
             )
         end
     else
-        return mapreduce_nd(
-            f, op, src, backend;
-            init, neutral, dims,
-            max_tasks, prefer_threads,
-            min_elems, block_size,
-            temp,
-        )
+        mapreduce_nd(f, op, src, backend, alg; init, neutral, dims, temp)
     end
 end

@@ -11,6 +11,9 @@ AcceleratedKernels.SortAlgorithm
 AcceleratedKernels.CPUThreads
 ```
 
+The algorithm types of each operation are documented with it, for [sorting](sort.md) and for
+[reductions](reduce.md).
+
 #### How `Auto` chooses
 
 `Auto` looks at the backend and its current device, the element type, the layout (a whole array or
@@ -18,7 +21,7 @@ slices along `dims`, and their length) and the ordering, never at the array's co
 host backend it chooses the family's `CPUThreads` algorithm, which runs on Julia threads. On a GPU
 it follows per-device tuning values: for sorting, `BitonicSort` for short arrays and slices,
 `RadixSort` for long whole arrays of the element types it supports, and `MergeSort` otherwise,
-subject to `Auto`'s requirements (`stable=true` by default).
+subject to `Auto`'s requirements (`stable=true` by default); for reductions, `BlockReduce`.
 
 Algorithms carry their settings as fields, and a field left at `nothing` takes the device's
 tuned value:
@@ -34,9 +37,9 @@ element type, the ordering or the backend cannot run, or an invalid setting, is 
 #### The `backend` keyword
 
 Operations run on the backend of their arrays: `backend` is derived from every array argument,
-the destination first, and all of them must agree. Ranges, `CartesianIndices`, `LinearIndices`,
-numbers and other non-array arguments do not count. If no argument determines the backend (e.g.
-a loop over a range), the operation runs on the host.
+the destination first, and all of them must agree. Ranges, `CartesianIndices`, `LinearIndices`
+(also through views and reshapes), numbers and other non-array arguments do not count. If no
+argument determines the backend (e.g. a loop over a range), the operation runs on the host.
 
 Pass `backend` explicitly for arrays that cannot tell (a range to be processed on a GPU, for
 instance), or for memory that several backends can access. AcceleratedKernels does not check that

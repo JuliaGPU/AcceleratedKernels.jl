@@ -134,14 +134,12 @@ function _any_impl(
             return mapreduce(
                 pred,
                 (x, y) -> x || y,
-                v,
-                backend;
+                v;
+                backend,
                 init=false,
                 neutral=false,
-                prefer_threads=true,
-                block_size,
+                alg=BlockReduce(; block_size, switch_below=alg.switch_below),
                 temp=alg.temp,
-                switch_below=alg.switch_below,
             )
         end
     else
@@ -268,14 +266,12 @@ function _all_impl(
             return mapreduce(
                 pred,
                 (x, y) -> x && y,
-                v,
-                backend;
+                v;
+                backend,
                 init=true,
                 neutral=true,
-                prefer_threads=false,
-                block_size,
+                alg=BlockReduce(; block_size, switch_below=alg.switch_below),
                 temp=alg.temp,
-                switch_below=alg.switch_below,
             )
         end
     else

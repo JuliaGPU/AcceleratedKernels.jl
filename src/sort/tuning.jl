@@ -50,11 +50,6 @@ per backend type, which may choose different values per device.
 sort_tuning(::Backend, ::Type) = SortTuning()
 
 
-# Algorithm names in error messages
-_algname(a) = nameof(typeof(a))
-_algname(::CPUThreads.SampleSort) = "CPUThreads.SampleSort"
-
-
 # The operation an algorithm is resolved for, for error messages
 _sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!"
 
@@ -106,22 +101,6 @@ _rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 # Domain checks of explicitly set fields, before any arithmetic uses them
 
-_checkdomain(::Algorithm) = nothing
-
-function _check_positive(a, field)
-    x = getfield(a, field)
-    x === nothing || x >= 1 ||
-        throw(ArgumentError("$(_algname(a)): `$field` must be positive, got $x"))
-    nothing
-end
-
-function _check_pow2(a, field)
-    x = getfield(a, field)
-    x === nothing || (x >= 1 && ispow2(x)) ||
-        throw(ArgumentError("$(_algname(a)): `$field` must be a positive power of two, got $x"))
-    nothing
-end
-
 _checkdomain(a::MergeSort) = _check_positive(a, :block_size)
 
 function _checkdomain(a::RadixSort)
@@ -146,10 +125,7 @@ function _checkdomain(a::BitonicSort)
     nothing
 end
 
-function _checkdomain(a::CPUThreads.SampleSort)
-    _check_positive(a, :max_tasks)
-    _check_positive(a, :min_elems)
-end
+_checkdomain(a::CPUThreads.SampleSort) = _check_threads(a)
 
 
 # Fill unset fields from the tuning
@@ -162,22 +138,12 @@ _fill(a::RadixSort, t::SortTuning, T) =
 _fill(a::BitonicSort, t::SortTuning, T) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
-_fill(a::CPUThreads.SampleSort, t::SortTuning, T) =
-    CPUThreads.SampleSort(something(a.max_tasks, Threads.nthreads()),
-                          something(a.min_elems, t.threads_min_elems))
+_fill(a::CPUThreads.SampleSort, t::SortTuning, T) = _fill_threads(a, t)
 _fill(a::Algorithm, t::SortTuning, T) =
     throw(ArgumentError("$(_algname(a)) is not a sorting algorithm"))
 
 
 # Check a complete algorithm against the backend, the operation and the arguments
-
-function _require_kernels(a, backend)
-    _runs_kernels(backend) || throw(ArgumentError(
-        "$(_algname(a)) runs AcceleratedKernels' GPU kernels, which " *
-        "$(_backend_name(backend)) cannot run (on the host, this needs KernelAbstractions 0.10); " *
-        "use `Auto()` or a `CPUThreads` algorithm"))
-    nothing
-end
 
 function _check(a::MergeSort, backend, T, layout, ord; perm, pairs)
     _checkdomain(a)
@@ -215,7 +181,5 @@ end
 
 function _check(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
     _checkdomain(a)
-    _runs_threads(backend) || throw(ArgumentError(
-        "CPUThreads.SampleSort only runs on the host backend, not on $(_backend_name(backend))"))
-    nothing
+    _require_threads(a, backend)
 end
