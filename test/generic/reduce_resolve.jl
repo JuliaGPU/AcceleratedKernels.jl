@@ -111,9 +111,11 @@ end
 @testset "reduce resolution: tuning values" begin
     # A tuning cannot make a reduction along `dims` launch nothing
     with_reduce_tuning(; target_blocks=0) do
-        @test_throws ArgumentError AK.mapreduce_nd(identity, +, zeros(Int32, 4, 4), RRB,
-                                                   AK.BlockReduce(256, 2, 0);
-                                                   init=Int32(0), dims=1, temp=nothing)
+        @test_throws ArgumentError AK.mapreduce_nd!(identity, +, zeros(Int32, 1, 4),
+                                                    zeros(Int32, 4, 4), RRB,
+                                                    AK.BlockReduce(256, 2, 0), Int32;
+                                                    init=AK._NoInit(), neutral=nothing,
+                                                    dims_valid=(1,))
     end
 end
 
@@ -155,4 +157,50 @@ end
     @test_throws MethodError AK.reduce(+, v; init=Int32(0), max_tasks=2)
     @test_throws MethodError AK.reduce(+, v; init=Int32(0), prefer_threads=false)
     @test_throws MethodError AK.sum(v; switch_below=10)
+end
+
+
+@testset "reduce resolution: accumulator and seed" begin
+    # The accumulator type follows Base's promotion to a fixed point
+    @test AK._reduce_acctype(Base.add_sum, Int8, Int8) === Int
+    @test AK._reduce_acctype(+, Int8, Int8) === Int8
+    @test AK._reduce_acctype(+, Bool, Bool) === Int
+    @test AK._reduce_acctype(+, Int, Float32) === Float32
+    @test AK._reduce_acctype(max, Tuple{Int32, Int32}, Tuple{Int32, Int32}) === Tuple{Int32, Int32}
+    @test AK._first_type(Base.add_sum, Int8) === Int
+    if VERSION >= v"1.13-"      # older `add_sum`s keep mixed-signedness small integers small
+        @test AK._reduce_acctype(Base.add_sum, UInt8, Int8) === Int
+        @test AK._reduce_acctype(Base.add_sum, UInt8, Bool) === Int
+    end
+    @test AK._reduce_acctype(+, Union{}, Char) === Union{}
+    @test AK._reduce_acctype(Returns(false), Union{}, Int) === Int
+    @test AK._reduce_acctype(coalesce, Int, Union{Missing, Int}) === Union{Missing, Int}
+    # `init` is applied once, not a partial result: only `op(init, x)`'s type counts
+    @test AK._reduce_acctype((a, b) -> something(a, 0) + something(b, 0), Nothing, Int) === Int
+
+    # Seeds: the caller's neutral, else GPUArraysCore's, else an empty lane
+    @test AK._reduce_seed(+, Int32, nothing) === Int32(0)
+    @test AK._reduce_seed(min, Float32, nothing) === Inf32
+    @test AK._reduce_seed(+, Float32, nothing) === -0.0f0
+    @test AK._reduce_seed(Base.add_sum, ComplexF32, nothing) === complex(-0.0f0, -0.0f0)
+    @test AK._reduce_seed(+, Int32, 0) === Int32(0)
+    @test AK._reduce_seed((a, b) -> a + b, Int32, nothing) isa AK._Lane{Int32}
+    @test !AK._valid(AK._reduce_seed((a, b) -> a + b, Int32, nothing))
+    # Empty lanes of every kind of type
+    @test !AK._valid(AK._Lane{Tuple{Int8, Int64}}())
+    @test !AK._valid(AK._Lane{Union{Missing, Int}}())
+    @test !AK._valid(AK._Lane{String}())
+    @test AK._valid(AK._Lane{String}("x"))
+
+    # Results infer, whether or not the operator has a known neutral element
+    @test only(Base.return_types(v -> AK.sum(v), (Vector{Int8},))) === Int
+    @test only(Base.return_types(v -> AK.reduce((a, b) -> a + b, v), (Vector{Int32},))) === Int32
+    @test only(Base.return_types(m -> AK.sum(m; dims=1), (Matrix{Int8},))) === Matrix{Int}
+    @test only(Base.return_types(v -> AK.mapreduce(tuple, (a, b) -> a, v, v),
+                                 (Vector{Int32},))) === Tuple{Int32, Int32}
+
+    # BlockReduce needs a bits-type accumulator; the host algorithm does not
+    @test_throws ArgumentError resolve_reduce(AK.Auto(); T=Union{Missing, Int32})
+    @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); T=String)
+    @test resolve_reduce(AK.Auto(); T=String, backend=AK.HOST_BACKEND) isa AK.CPUThreads.Partitioned
 end

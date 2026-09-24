@@ -33,6 +33,10 @@ _const_wrappers(src) = false
 # provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
 const LOCAL_MEMORY_BUDGET = 32 * 1024
 
+# The default of every `init` keyword: no initial value given. As in Base, this differs from
+# `init=nothing`, which is an explicit initial value.
+struct _NoInit end
+
 # Keep the default shared-memory use within the local-memory budget.
 @inline function default_scan_items_per_thread(backend, ::Type{T}, block_size) where T
     block_size > 0 || return default_scan_items_per_thread(backend)

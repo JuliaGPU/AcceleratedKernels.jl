@@ -69,24 +69,9 @@ end
 
 # Main entry point
 
-function mapreduce_nd(
-    f, op, src::MapReduceSource, backend::Backend, alg::Union{BlockReduce, CPUThreads.Partitioned};
-    init,
-    neutral=neutral_element(op, typeof(init)),
-    dims,
-    temp::Union{Nothing, AbstractArray},
-)
-    # Launch settings of the elementwise passes, and of the reduction kernels
-    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
-                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
-    block_size = alg isa BlockReduce ? alg.block_size : 256
-
-    # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
-    # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
-    target_blocks = reduce_tuning(backend, typeof(init)).target_blocks
-    target_blocks >= 1 || throw(ArgumentError(
-        "the reduction tuning's `target_blocks` must be positive, got $target_blocks"))
-
+# The reduced dimensions `dims` (an integer or a collection of integers), as Base validates them:
+# duplicates are ignored, and dimensions beyond `ndims` reduce nothing.
+function _reduced_dims(dims, ndim::Int)
     dims_src = dims isa Number ? (dims,) : dims
     dims_buf = Int[]
     for d in dims_src
@@ -95,64 +80,61 @@ function mapreduce_nd(
         dim < 1 && throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
         push!(dims_buf, dim)
     end
+    return Tuple(d for d in Base.unique(dims_buf) if d <= ndim)
+end
 
-    # Match Base: duplicate dims are ignored, e.g. dims=(2,2) behaves like dims=2.
-    dims_all = Tuple(Base.unique(dims_buf))
+# Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
+# dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
+# `_Fold()` (see `_finish`).
+function mapreduce_nd!(
+    f, op, dst::AbstractArray, src::MapReduceSource, backend::Backend,
+    alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
+    init,
+    neutral,
+    dims_valid::Tuple,
+) where {A}
+    # Launch settings of the elementwise passes, and of the reduction kernels
+    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
+                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
+    block_size = alg isa BlockReduce ? alg.block_size : 256
+
+    # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
+    # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
+    target_blocks = reduce_tuning(backend, A).target_blocks
+    target_blocks >= 1 || throw(ArgumentError(
+        "the reduction tuning's `target_blocks` must be positive, got $target_blocks"))
 
     src_sizes = size(src)
-    ndim      = length(src_sizes)
-
-    dims_valid = Tuple(d for d in dims_all if d <= ndim)
 
     # Degenerate cases begin; order of priority matters
 
-    # All reduced dims are beyond ndims: just map each element through f and add init, e.g.:
-    #   julia> x = rand(Float64, 3, 5);
-    #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))     # 3×5 Matrix{Float32}
-    if isempty(dims_valid)
-        dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, launch...)
-        return dst
-    end
+    len = Base.prod(src_sizes[d] for d in dims_valid; init=1)
 
-    # The per-dimension sizes of the destination array; construct tuple without allocations
-    dst_sizes = unrolled_map_index(src_sizes) do i
-        i in dims_valid ? 1 : src_sizes[i]
-    end
-
-    # If any kept dimension is zero, return empty array (reduced dims become 1), e.g.:
-    #   julia> x = rand(3, 0, 5);  reduce(+, x, dims=3)     # 3×0×1 Array{Float64, 3}
-    for isize in eachindex(src_sizes)
-        isize in dims_valid && continue
-        if src_sizes[isize] == 0
-            return _alloc_or_temp(backend, temp, init, dst_sizes)
-        end
-    end
-
-    len = Base.prod(src_sizes[d] for d in dims_valid)
-
-    # If a reduced dimension is zero, return array filled with init, e.g.:
-    #   julia> x = rand(3, 0, 5);  mapreduce(+, x, dims=2)     # 3×1×5 of zeros
+    # Empty reductions, e.g. reduce(+, rand(3, 0, 5), dims=2): `init`, else nothing is written
     if len == 0
-        dst = _alloc_or_temp(backend, temp, init, dst_sizes)
-        fill!(dst, init)
+        init isa Union{_NoInit, _Fold} || fill!(dst, init)
         return dst
     end
 
-    # If the reduced extent is 1, just map each element through f (keep init's type)
+    # Nothing to write, e.g. reduce(+, rand(3, 0, 5), dims=3), a 3×0×1 array
+    isempty(dst) && return dst
+    # (overwriting with single elements combines nothing, even when `op` always throws)
+    len == 1 && init isa _NoInit || _check_acctype(op, f, A)
+
+    # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
+    # dimensions, or only ones of size 1
     if len == 1
-        dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, launch...)
+        _mapreduce_nd_single!(f, op, dst, src, backend, A; init, launch...)
         return dst
     end
 
     # Degenerate cases end
 
-    dst = _alloc_or_temp(backend, temp, init, dst_sizes)
     dst_size = length(dst)
+    neutral = _reduce_seed(op, A, neutral)
 
     if alg isa CPUThreads.Partitioned
-        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, launch...)
+        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, neutral, launch...)
         return dst
     end
 
@@ -168,7 +150,7 @@ function mapreduce_nd(
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_generic!(backend, block_size)
         kernel!(
-            src, dst, f, op, init,
+            src, dst, f, op, neutral, init,
             CartesianIndices(dst), _mapreduce_reduce_indices(src, dst), dst_size,
             ndrange=(block_size * blocks,),
         )
@@ -241,7 +223,7 @@ function mapreduce_nd(
         blocks = cld(dst_size, rows_per_block)
         kernel! = _mapreduce_nd_by_thread_tiled_strided!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
             ndrange=(block_size * blocks,),
         )
@@ -250,7 +232,7 @@ function mapreduce_nd(
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
@@ -261,7 +243,7 @@ function mapreduce_nd(
         # launched.
         launch_blocks = min(dst_size, target_blocks)
         _launch_mapreduce_nd_by_block!(
-            backend, block_size, buffer, dst, f, op, init, neutral,
+            backend, block_size, buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
         )
@@ -277,7 +259,7 @@ function mapreduce_nd(
         reduce_groups = max(reduce_groups, 1)
 
         if reduce_groups > 1
-            partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
+            partial = KernelAbstractions.allocate(backend, typeof(neutral), (dst_size, reduce_groups))
 
             kernel! = _mapreduce_nd_multigroup!(backend, block_size)
             kernel!(
@@ -293,7 +275,7 @@ function mapreduce_nd(
             pass2_block_size = _pass2_block_size(reduce_groups)
             kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
             kernel2!(
-                partial, dst, op, init, neutral,
+                partial, dst, op, neutral, init,
                 dst_size, reduce_groups,
                 ndrange=(pass2_block_size * dst_size,),
             )
@@ -301,7 +283,7 @@ function mapreduce_nd(
             # reduce_groups collapsed to 1 (e.g. reduce_size <= block_size): just do a
             # single-block-per-output reduction directly, no partial array needed.
             _launch_mapreduce_nd_by_block!(
-                backend, block_size, buffer, dst, f, op, init, neutral,
+                backend, block_size, buffer, dst, f, op, neutral, init,
                 base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
                 dst_size, reduce_size, dst_size,
             )
@@ -312,7 +294,7 @@ function mapreduce_nd(
         # ceil(dst_size / launch_blocks) outputs sequentially.
         launch_blocks = min(dst_size, target_blocks)
         _launch_mapreduce_nd_by_block!(
-            backend, block_size, buffer, dst, f, op, init, neutral,
+            backend, block_size, buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
         )
@@ -341,7 +323,8 @@ function _mapreduce_strided_layout(src::AbstractArray)
     s = try
         strides(src)
     catch err
-        err isa MethodError || rethrow()
+        # (an `ArgumentError` for a reshape of a non-contiguous view, on some Julia versions)
+        err isa Union{MethodError, ArgumentError} || rethrow()
         return nothing
     end
 
@@ -364,7 +347,8 @@ function _mapreduce_is_dense_buffer(p::AbstractArray)
     try
         return strides(p) == _mapreduce_dense_strides(size(p))
     catch err
-        err isa MethodError || rethrow()
+        # (an `ArgumentError` for a reshape of a non-contiguous view, on some Julia versions)
+        err isa Union{MethodError, ArgumentError} || rethrow()
         return false
     end
 end
@@ -413,7 +397,7 @@ function _contiguous_vector_width(
 end
 
 function _launch_mapreduce_nd_by_block!(
-    backend, block_size, buffer, dst, f, op, init, neutral,
+    backend, block_size, buffer, dst, f, op, neutral, init,
     base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
 )
@@ -423,7 +407,7 @@ function _launch_mapreduce_nd_by_block!(
     if W == 4
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(4),
             ndrange=(block_size * num_blocks,),
@@ -431,7 +415,7 @@ function _launch_mapreduce_nd_by_block!(
     elseif W == 2
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(2),
             ndrange=(block_size * num_blocks,),
@@ -439,7 +423,7 @@ function _launch_mapreduce_nd_by_block!(
     else
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             output_size, reduce_size, num_blocks,
             ndrange=(block_size * num_blocks,),
@@ -465,33 +449,25 @@ _mapreduce_reduce_indices(src, dst) =
 end
 
 
-# Allocate a destination array, or validate and reuse a user-provided `temp`.
-function _alloc_or_temp(backend, temp, init, sizes)
-    isnothing(temp) && return KernelAbstractions.allocate(backend, typeof(init), sizes)
-    @argcheck get_backend(temp) == backend
-    @argcheck size(temp) == sizes
-    @argcheck eltype(temp) == typeof(init)
-    temp
-end
-
 # CPU path
 
 function _mapreduce_nd_cpu_sections!(
     f, op, dst, src;
-    init, max_tasks, min_elems,
+    init, neutral, max_tasks, min_elems,
 )
     Rother  = CartesianIndices(dst)
     Rreduce = _mapreduce_reduce_indices(src, dst)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     _foreachindex(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
         @inbounds begin
             Iother = Rother[idst]
-            res = init
+            res = neutral
             for Ireduce in Rreduce
                 J = max(Iother, Ireduce)
-                res = op(res, f(src[J]))
+                res = op_lanes(res, f_lanes(src[J]))
             end
-            dst[idst] = res
+            dst[idst] = _finish(op, init, dst, idst, res)
         end
     end
     dst
@@ -548,9 +524,10 @@ end
 # being elided, leaving a `throw` that the GPU backends cannot compile.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_generic!(
     src, dst,
-    f, op, init,
+    f, op, neutral, init,
     Rother, Rreduce, output_size,
 )
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -558,25 +535,27 @@ end
 
     if tid < output_size
         Iother = Rother[tid + 0x1]
-        res = init
+        res = neutral
         for Ireduce in Rreduce
             J = max(Iother, Ireduce)
-            res = op(res, f(src[J]))
+            res = op_lanes(res, f_lanes(src[J]))
         end
-        dst[Iother] = res
+        dst[Iother] = _finish(op, init, dst, Iother, res)
     end
 end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
-    @Const(src), dst,
-    f, op, init, neutral,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset, reduce_stride,
     output_size, reduce_size,
     ::Val{rows},
 ) where {rows}
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
     @uniform reduce_threads = N ÷ rows
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -594,7 +573,7 @@ end
         sbase = base_offset + iout
         j = lane
         while j < reduce_size
-            acc = op(acc, f(src[sbase + j * reduce_stride + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[sbase + j * reduce_stride + 0x1]))
             j += reduce_threads
         end
     end
@@ -607,14 +586,14 @@ end
         if lane < step
             dst_lane = row + lane * rows
             src_lane = row + (lane + step) * rows
-            sdata[dst_lane + 0x1] = op(sdata[dst_lane + 0x1], sdata[src_lane + 0x1])
+            sdata[dst_lane + 0x1] = op_lanes(sdata[dst_lane + 0x1], sdata[src_lane + 0x1])
         end
         @synchronize()
         step ÷= 2
     end
 
     if lane == 0x0 && iout < output_size
-        dst[iout + 0x1] = op(init, sdata[row + 0x1])
+        dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[row + 0x1])
     end
 end
 
@@ -623,13 +602,15 @@ end
 # e.g. reduce(+, rand(3, 1000), dims=1) — only 3 elements to reduce per output.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
-    @Const(src), dst,
-    f, op, init,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
 )
+    src = _const_source(src_arg)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
     # NOTE: index calculations use zero-indexing (fewer ops, matches the CUDA / ROCm / oneAPI /
     # Metal code this is transpiled to), converting to one-indexing only at memory accesses.
     # `base_offset` (the source's element offset within its dense buffer; 0 for a dense
@@ -642,13 +623,13 @@ end
     if tid < output_size
         input_base = base_offset + _outer_decode(tid, outer_strides, outer_sizes)
 
-        res = init
+        res = neutral
         for j in 0x0:reduce_size - 0x1
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
-            res = op(res, f(src[input_base + off + 0x1]))
+            res = op_lanes(res, f_lanes(src[input_base + off + 0x1]))
         end
 
-        dst[tid + 0x1] = res
+        dst[tid + 0x1] = _finish(op, init, dst, tid + 0x1, res)
     end
 end
 
@@ -663,15 +644,17 @@ end
 # so the loop runs exactly once per block — identical to the pre-grid-stride kernel).
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
-    @Const(src), dst,
-    f, op, init, neutral,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
 )
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -683,17 +666,17 @@ end
         j   = ithread
         while j < reduce_size
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
-            acc = op(acc, f(src[input_base + off + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[input_base + off + 0x1]))
             j  += N
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = op(init, sdata[0x1])
+            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -714,7 +697,7 @@ end
 # The host launcher verifies the pointer, row alignment, and UInt32 index bound.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block_contiguous!(
     src, dst,
-    f, op, init, neutral,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     output_size, reduce_size, num_blocks,
@@ -723,7 +706,8 @@ end
     @uniform N = @groupsize()[1]
     @uniform T = eltype(src)
     @uniform W = _unval(valW)
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -737,21 +721,21 @@ end
         stridew = UInt32(N) * UInt32(W)
         while jw + UInt32(W - 1) < rs
             v = vloada(Vec{W, T}, pointer(src, input_base + jw + 0x1))
-            acc = _acc_lanes(f, op, acc, v)
+            acc = _acc_lanes(f_lanes, op_lanes, acc, v)
             jw += stridew
         end
         while jw < rs
-            acc = op(acc, f(src[input_base + jw + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[input_base + jw + 0x1]))
             jw += UInt32(1)
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = op(init, sdata[0x1])
+            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -767,15 +751,17 @@ end
 # into partial[iout, igroup]. The second pass combines the groups.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_multigroup!(
-    @Const(src), partial,
+    src_arg, partial,
     f, op, neutral,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     ::Val{output_size}, reduce_size, reduce_groups,
 ) where {output_size}
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(partial) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -790,14 +776,14 @@ end
     j   = ithread + igroup * N
     while j < reduce_size
         off = _reduce_offset(j, reduce_strides, reduce_sizes)
-        acc = op(acc, f(src[input_base + off + 0x1]))
+        acc = op_lanes(acc, f_lanes(src[input_base + off + 0x1]))
         j  += N * reduce_groups
     end
 
     sdata[ithread + 0x1] = acc
     @synchronize()
 
-    @inline reduce_group!(@context, op, sdata, ithread)
+    @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
     if ithread == 0x0
         partial[iout + igroup * output_size + 0x1] = sdata[0x1]
@@ -805,17 +791,18 @@ end
 end
 
 # GPU kernel: multi-group second pass — one block per output reduces over the `reduce_groups`
-# partials and folds in `init`. Launched with a block size sized to `reduce_groups`
+# partials and applies `init` (see `_finish`). Launched with a block size sized to `reduce_groups`
 # (see _pass2_block_size), avoiding an oversubscribed tree-reduce when reduce_groups
 # is much smaller than 256.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_partial_to_dst!(
     @Const(partial), dst,
-    op, init, neutral,
+    op, neutral, init,
     output_size, reduce_groups,
 )
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    _, op_lanes = _lanefuncs(_Partials(), op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -824,17 +811,17 @@ end
         acc = neutral
         g = ithread
         while g < reduce_groups
-            acc = op(acc, partial[iblock + g * output_size + 0x1])
+            acc = op_lanes(acc, partial[iblock + g * output_size + 0x1])
             g += N
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iblock + 0x1] = op(init, sdata[0x1])
+            dst[iblock + 0x1] = _finish(op, init, dst, iblock + 0x1, sdata[0x1])
         end
     end
 end

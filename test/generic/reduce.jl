@@ -151,7 +151,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
         alg=reduce_alg(block_size=64, switch_below=50, max_tasks=10, min_elems=100),
         init=Int32(0),
         neutral=Int64(0),
-        temp=array_from_host(zeros(Int32, 10_000)),
+        temp=array_from_host(zeros(Int64, 10_000)),
     )
     AK.reduce(
         (x, y) -> x + 1,
@@ -378,23 +378,23 @@ end
     end
 
     # Testing different settings
-    AK.reduce(
+    AK.mapreducedim!(
+        identity,
         (x, y) -> x + 1,
+        array_from_host(zeros(Int32, 3, 1, 5)),
         array_from_host(rand(Int32, 3, 4, 5));
         alg=reduce_alg(block_size=64, max_tasks=10, min_elems=100),
         init=Int32(0),
         neutral=Int32(0),
-        dims=2,
-        temp=array_from_host(zeros(Int32, 3, 1, 5)),
     )
-    AK.reduce(
+    AK.mapreducedim!(
+        identity,
         (x, y) -> x + 1,
+        array_from_host(zeros(Int32, 3, 4, 1)),
         array_from_host(rand(Int32, 3, 4, 5));
         alg=reduce_alg(block_size=64, max_tasks=16, min_elems=1000),
         init=Int32(0),
         neutral=Int32(0),
-        dims=3,
-        temp=array_from_host(zeros(Int32, 3, 4, 1)),
     )
 end
 
@@ -798,25 +798,23 @@ end
     end
 
     # Testing different settings
-    AK.mapreduce(
+    AK.mapreducedim!(
         -,
         (x, y) -> x + 1,
+        array_from_host(zeros(Int32, 3, 1, 5)),
         array_from_host(rand(Int32, 3, 4, 5));
         alg=reduce_alg(block_size=64, max_tasks=10, min_elems=100),
         init=Int32(0),
         neutral=Int32(0),
-        dims=2,
-        temp=array_from_host(zeros(Int32, 3, 1, 5)),
     )
-    AK.mapreduce(
+    AK.mapreducedim!(
         -,
         (x, y) -> x + 1,
+        array_from_host(zeros(Int32, 3, 4, 1)),
         array_from_host(rand(Int32, 3, 4, 5));
         alg=reduce_alg(block_size=64, max_tasks=16, min_elems=1000),
         init=Int32(0),
         neutral=Int32(0),
-        dims=3,
-        temp=array_from_host(zeros(Int32, 3, 4, 1)),
     )
 end
 @testset "sum" begin
@@ -1085,5 +1083,254 @@ end
         for (m, dims) in mats
             @test Array(AK.reduce(+, m; init=Int32(0), dims, alg)) == sum(Array(m); dims)
         end
+    end
+end
+
+
+@testset "reduction contract" begin
+    Random.seed!(0)
+    alg = REDUCE_ALG
+
+    # Omitted `init`: an empty reduction is an error, except for `sum`, `prod` and `count`, which
+    # give zero or one of the accumulator type
+    @test AK.sum(array_from_host(Int32[]); alg) === 0
+    @test AK.sum(array_from_host(Float32[]); alg) === 0.0f0
+    @test AK.sum(array_from_host(Int32[]); acctype=Int32, alg) === Int32(0)
+    @test AK.prod(array_from_host(Int32[]); alg) === 1
+    @test AK.count(array_from_host(Bool[]); alg) === 0
+    @test_throws ArgumentError AK.minimum(array_from_host(Int32[]); alg)
+    @test_throws ArgumentError AK.reduce(max, array_from_host(Int32[]); alg)
+    @test_throws ArgumentError AK.reduce(+, array_from_host(Int32[]); alg)
+    @test_throws ArgumentError AK.reduce((a, b) -> a + b, array_from_host(Int32[]); alg)
+    # An explicit `init` is returned as it is for an empty reduction, and applied once otherwise,
+    # also when it is not a neutral element
+    @test AK.sum(array_from_host(Float32[]); init=1, alg) === 1
+    @test AK.maximum(array_from_host(Int32[]); init=Int32(-1), alg) === Int32(-1)
+    @test AK.sum(array_from_host(ones(Int32, 1000)); init=Int32(10), alg) === 1010
+    @test AK.reduce(*, array_from_host(fill(Int32(2), 20)); init=Int32(3), alg) === Int32(3 << 20)
+    # `init=nothing` is an initial value, not an omitted one; `+` cannot fold it, which only
+    # matters when there is something to fold
+    @test_throws Exception AK.reduce(+, array_from_host(Int32[1, 2]); init=nothing, alg)
+    @test AK.reduce(+, array_from_host(Int32[]); init=nothing, alg) === nothing
+    @test AK.mapreduce(x -> error("never called"), +, array_from_host(Int32[]); init=7, alg) === 7
+
+    # The accumulator type is the fold type of `op`, from `init`'s type and the mapped elements
+    h8 = Int8[100, 100, 27]
+    v8 = array_from_host(h8)
+    @test AK.sum(v8; alg) === 227
+    @test AK.reduce(+, v8; alg) === Int8(-29)
+    @test AK.reduce(+, v8; init=0, alg) === 227
+    @test AK.sum(array_from_host([1, 2]); init=Int8(0), alg) === 3
+    @test AK.reduce((a, b) -> Base.add_sum(a, b), v8; alg) === 227
+    @test AK.maximum(v8; alg) === Int8(100)
+    # ... joined with the one-element partial results': here the element type, not the narrower
+    # one the fold produces
+    @test AK.reduce(Returns(Int8(0)), array_from_host(Int32[5, 6, 7]); alg) === Int32(0)
+    if !TEST_KERNELS
+        @test AK.reduce(coalesce, [missing, 1, 2]; init=0, alg) === 0
+    end
+    # Partial results of small integers are `Int`s, also for mixed signedness (where Julia 1.10's
+    # `add_sum` of the `init` and an element would stay a `UInt8`)
+    @test AK.sum(array_from_host(Int8[-1, -2]); init=UInt8(0), alg) === -3
+    @test AK.count(array_from_host([true, true]); init=UInt8(0), alg) === 2
+    # A single element has the accumulator type too; `f` may index device arrays
+    @test AK.reduce((a, b) -> a + b, array_from_host([true]); alg) === 1
+    @test AK.sum(array_from_host([true]); alg) === 1
+    w = array_from_host(Int32[11, 22])
+    @test AK.mapreduce(let w = w; x -> w[x]; end, +, array_from_host(Int32[2]); alg) === Int32(22)
+    # Seeds are exact identities, and `sum`'s empty rule is no `init`: a sum of negative zeros is
+    # a negative zero
+    for n in (1, 2, 1000)
+        @test AK.sum(array_from_host(fill(-0.0f0, n)); alg) === -0.0f0
+        @test Base.all(signbit, Array(AK.sum(array_from_host(fill(-0.0f0, 2, n)); dims=2, alg)))
+    end
+
+    # `acctype` sets the accumulator type, and the result's
+    @test AK.reduce(+, array_from_host(Int8[100, 100, 56]); acctype=Int8, alg) === Int8(0)
+    @test AK.sum(array_from_host(Int8[100, 100, 56]); acctype=Int16, alg) === Int16(256)
+    @test AK.reduce(max, v8; init=Int8(0), acctype=Int32, alg) === Int32(100)
+    xf = Float32[1.0f8, 1, -1.0f8]
+    if Float64 in valid_backend_eltypes(BACKEND, (Float64,))
+        @test AK.sum(array_from_host(xf); acctype=Float64, alg) === 1.0
+        R = array_from_host(zeros(Float32, 1, 2))
+        AK.mapreducedim!(identity, +, R, array_from_host([xf xf]); overwrite=true,
+                         acctype=Float64, alg)
+        @test Array(R) == [1 1]
+    end
+    m8 = rand(Int8(-9):Int8(9), 40, 30)
+    dm8 = array_from_host(m8)
+    for dims in (1, 2)
+        r = AK.sum(dm8; dims, acctype=Int16, alg)
+        @test eltype(r) === Int16 && Array(r) == sum(m8; dims)
+    end
+    # ... which `init` does not change (only an empty reduction returns it as it is)
+    @test AK.sum(array_from_host(Int32[1, 2]); init=0, acctype=Int32, alg) === Int32(3)
+    @test AK.count(array_from_host([true, true]); acctype=Int32, alg) === Int32(2)
+    @test AK.sum(array_from_host(Int32[]); init=0, acctype=Int32, alg) === 0
+    if !TEST_KERNELS
+        @test_throws InexactError AK.reduce(+, Int8[1, 2]; init=0.5, acctype=Int16, alg)
+    end
+    # ... and must be able to hold the partial results
+    @test_throws ArgumentError AK.sum(v8; acctype=String, alg)
+    @test_throws ArgumentError AK.reduce((a, b) -> "", v8; acctype=Int, alg)
+    @test_throws ArgumentError AK.sum(v8; acctype=1, alg)
+    # (whether their values fit is the caller's obligation)
+    if !TEST_KERNELS
+        @test_throws InexactError AK.sum([100, 100]; acctype=Int8, alg)
+    end
+
+    # Reductions along `dims` return the accumulator type, also with `init`
+    for dims in (1, 2, (1, 2), 3)
+        r = AK.sum(dm8; dims, alg)
+        @test eltype(r) === Int && Array(r) == sum(m8; dims)
+        r = AK.sum(dm8; dims, init=Int16(1), alg)
+        @test eltype(r) === Int && Array(r) == sum(m8; dims, init=Int16(1))
+        r = AK.maximum(dm8; dims, alg)
+        @test eltype(r) === Int8 && Array(r) == maximum(m8; dims)
+        r = AK.count(x -> x > 0, dm8; dims, alg)
+        @test eltype(r) === Int && Array(r) == count(x -> x > 0, m8; dims)
+    end
+
+    # Empty reduced dimensions: `init`, else an error, except for `sum`, `prod` and `count`
+    e8 = array_from_host(zeros(Int8, 0, 3))
+    for (r, value) in ((AK.sum(e8; dims=1, alg), 0), (AK.prod(e8; dims=1, alg), 1),
+                       (AK.count(x -> x > 0, e8; dims=1, alg), 0))
+        @test eltype(r) === Int && Array(r) == fill(value, 1, 3)
+    end
+    @test eltype(AK.sum(e8; dims=1, acctype=Int8, alg)) === Int8
+    @test Array(AK.minimum(e8; dims=1, init=Int8(7), alg)) == fill(Int8(7), 1, 3)
+    @test_throws ArgumentError AK.minimum(e8; dims=1, alg)
+    @test_throws ArgumentError AK.mapreduce(x -> x + 1, +, array_from_host(zeros(Int32, 0, 2));
+                                            dims=1, alg)
+    @test size(AK.maximum(array_from_host(zeros(Int8, 3, 0)); dims=1, alg)) == (1, 0)
+    # ... an error only where an output has an empty slice
+    @test size(AK.minimum(array_from_host(zeros(Int32, 0, 0)); dims=1, alg)) == (1, 0)
+
+    # An operator that always throws for the element types: an error only where something is
+    # combined
+    throws(a, b) = throw(ArgumentError("never called"))
+    @test AK.reduce(throws, array_from_host(Int32[5]); alg) === Int32(5)
+    x5 = array_from_host(Int32[5])
+    @test AK.mapreduce(+, throws, x5, x5; alg) === Int32(10)
+    @test Array(AK.reduce(throws, array_from_host(Int32[5 6]); dims=1, alg)) == [5 6]
+    @test_throws ArgumentError AK.reduce(throws, array_from_host(Int32[5, 6]); alg)
+    @test_throws ArgumentError AK.reduce(throws, array_from_host(Int32[5, 6]); dims=1, alg)
+    # On the host, an abstract accumulator type with the caller's neutral element
+    if !TEST_KERNELS
+        @test AK.reduce(+, Real[1, 2.5, 3]; neutral=0, alg=AK.CPUThreads.Partitioned(max_tasks=2, min_elems=1)) == 6.5
+    end
+
+    # Operators without a known neutral element: partial results start from their first element
+    x = rand(Int32(-100):Int32(100), 10_001)
+    dx = array_from_host(x)
+    @test AK.reduce((a, b) -> a + b, dx; alg) == sum(x)
+    @test AK.reduce((a, b) -> min(a, b), dx; alg) == minimum(x)
+    @test AK.reduce((a, b) -> a + b, dx; init=Int32(10), alg) == sum(x) + 10
+    @test AK.reduce((a, b) -> a + b, array_from_host(Int32[7]); alg) === Int32(7)
+    m = rand(Int32(-100):Int32(100), 37, 300)
+    for dims in (1, 2, (1, 2), 3)
+        @test Array(AK.reduce((a, b) -> a + b, array_from_host(m); dims, alg)) == sum(m; dims)
+        @test Array(AK.mapreduce(abs, (a, b) -> max(a, b), array_from_host(m); dims, alg)) ==
+              maximum(abs, m; dims)
+    end
+
+    # Tuple and named-tuple accumulators, as GPUArrays uses for `findmin` and Missing-aware `==`
+    xs = rand(Float32, 5000)
+    ix = collect(Int32(1):Int32(5000))
+    findmin_op(a, b) = (a[1] < b[1] || (a[1] == b[1] && a[2] < b[2])) ? a : b
+    @test AK.mapreduce(tuple, findmin_op, array_from_host(xs), array_from_host(ix); alg) ==
+          (minimum(xs), Int32(argmin(xs)))
+    ms = rand(Float32, 20, 300)
+    im = reshape(collect(Int32(1):Int32(length(ms))), size(ms))
+    r = Array(AK.mapreduce(tuple, findmin_op, array_from_host(ms), array_from_host(im); dims=2, alg))
+    @test r == reshape([(minimum(ms[i, :]), im[i, argmin(ms[i, :])]) for i in 1:20], 20, 1)
+    eq_op(a, b) = (is_missing = a.is_missing | b.is_missing, is_equal = a.is_equal & b.is_equal)
+    @test AK.mapreduce(x -> (is_missing = false, is_equal = x > -101), eq_op, dx; alg) ==
+          (is_missing = false, is_equal = true)
+
+    # `mapreducedim!`: fold into the destination, overwrite it, or apply `init` once
+    A = array_from_host(Int32[1 3; 2 4])
+    R = array_from_host(Int32[10 20])
+    @test AK.mapreducedim!(identity, +, R, A; alg) === R
+    @test Array(R) == [13 27]
+    R = array_from_host(Int32[10 20])
+    @test Array(AK.mapreducedim!(identity, +, R, A; overwrite=true, alg)) == [3 7]
+    R = array_from_host(Int32[10 20])
+    @test Array(AK.mapreducedim!(identity, +, R, A; init=Int32(100), alg)) == [103 107]
+    R = array_from_host(Int32[10 20])
+    @test Array(AK.mapreducedim!(identity, (a, b) -> a + b, R, A; alg)) == [13 27]
+    R = array_from_host(Int32[10 20])
+    @test Array(AK.mapreducedim!(x -> 2x, +, R, A; alg)) == [16 34]
+    # A destination may leave off trailing singleton dimensions, and have extra ones
+    @test Array(AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 2)), A;
+                                 overwrite=true, alg)) == [4, 6]
+    @test Array(AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 1, 2, 1)), A;
+                                 overwrite=true, alg)) == reshape([3, 7], 1, 2, 1)
+    # No reduced dimension: every output reduces one element
+    R = array_from_host(Int32[1 1; 1 1])
+    @test Array(AK.mapreducedim!(identity, +, R, A; alg)) == [2 4; 3 5]
+    # Empty slices: `init`, else not written, when folding and overwriting alike
+    E = array_from_host(zeros(Int32, 0, 2))
+    R = array_from_host(Int32[10 20])
+    @test Array(AK.mapreducedim!(identity, +, R, E; alg)) == [10 20]
+    @test Array(AK.mapreducedim!(identity, +, R, E; overwrite=true, alg)) == [10 20]
+    @test Array(AK.mapreducedim!(identity, min, R, E; overwrite=true, alg)) == [10 20]
+    @test Array(AK.mapreducedim!(identity, min, R, E; init=Int32(5), alg)) == [5 5]
+    # The accumulator type starts from the destination's element type
+    R = array_from_host(zeros(Int16, 1, 3))
+    AK.mapreducedim!(identity, +, R, array_from_host(fill(Int8(100), 4, 3)); overwrite=true, alg)
+    @test Array(R) == fill(Int16(400), 1, 3)
+    # A Broadcasted source
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(*, A, Int32(2)))
+    R = array_from_host(zeros(Int32, 1, 2))
+    @test Array(AK.mapreducedim!(identity, +, R, bc; overwrite=true, alg)) == [6 14]
+    # Shapes and aliasing
+    @test_throws DimensionMismatch AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 3, 1)), A; alg)
+    @test_throws DimensionMismatch AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 1, 1, 2)), A; alg)
+    @test_throws ArgumentError AK.mapreducedim!(identity, +, view(A, 1:1, :), A; alg)
+    bc = Base.Broadcast.preprocess(nothing, Base.Broadcast.instantiate(
+        Base.Broadcast.broadcasted(identity, A)))
+    @test_throws ArgumentError AK.mapreducedim!(identity, +, view(A, 1:1, :), bc;
+                                                overwrite=true, alg)
+    # A preprocessed Broadcasted source (with `Extruded` arguments) keeps its element type
+    R = array_from_host(zeros(Int32, 1, 2))
+    @test Array(AK.mapreducedim!(identity, +, R, bc; overwrite=true, alg)) == [3 7]
+
+    # Kernels need a bits-type accumulator
+    if TEST_KERNELS
+        @test_throws ArgumentError AK.mapreduce(x -> x > 0 ? x : missing, +, dx; alg)
+    end
+
+    # A source whose wrappers `@Const` cannot rebuild on the device: a reshaped view
+    hr = rand(Int32(0):Int32(9), 50, 40)
+    dr = array_from_host(hr)
+    vr, hv = vec(view(dr, 1:40, 1:30)), vec(view(hr, 1:40, 1:30))
+    @test AK.reduce(+, vr; alg) == sum(hv)
+    @test AK.count(!iszero, vr; alg) == count(!iszero, hv)
+    rr, hrr = reshape(view(dr, 1:40, 1:30), 30, 40), reshape(view(hr, 1:40, 1:30), 30, 40)
+    for dims in (1, 2)
+        @test Array(AK.reduce(+, rr; dims, alg)) == sum(hrr; dims)
+    end
+
+    # A source of a bits-union element type, with every kernel shape (where the backend's arrays
+    # can hold one)
+    code(x) = x === missing ? 0x01 : x ? 0x02 : 0x00
+    # WORKAROUND(KernelAbstractions): `zeros`, which `array_from_host` uses, fails for these
+    # element types on KernelAbstractions 0.10's POCL backend (JuliaGPU/KernelAbstractions.jl#791),
+    # so `--cpu-ka` skips these tests; once fixed, only OpenCL.jl, whose arrays cannot hold them
+    # yet, should skip
+    unions = try
+        array_from_host(Union{Missing, Bool}[missing, true])
+        true
+    catch
+        false
+    end
+    unions && for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
+                          ((20_000, 2), (1, 2)), ((5, 3), 3))
+        hm = rand([true, false, missing], shape...)
+        dm = array_from_host(hm)
+        @test AK.mapreduce(code, max, dm; init=0x00, alg) === mapreduce(code, max, hm)
+        @test Array(AK.mapreduce(code, max, dm; dims, init=0x00, alg)) ==
+              mapreduce(code, max, hm; dims)
     end
 end
