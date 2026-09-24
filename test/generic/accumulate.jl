@@ -1,8 +1,33 @@
-ALGS = AK.AccumulateAlgorithm[AK.ScanPrefixes()]
+# The whole-array scan algorithms under test: each kernel algorithm the backend supports, or the
+# threaded host algorithm. `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for
+# the configuration from both kinds of settings; without settings they give `Auto()`, except in
+# the `--cpu-ka` configuration, whose point is to run AK's kernels on the host backend.
+SCAN_ALGS = if !TEST_KERNELS
+    [AK.CPUThreads.Partitioned]
+elseif TEST_DL
+    [AK.ScanPrefixes, AK.DecoupledLookback]
+else
+    [AK.ScanPrefixes]
+end
+scan_name(A) = A === AK.CPUThreads.Partitioned ? "threads" : string(nameof(A))
 
-TEST_DL && push!(ALGS, AK.DecoupledLookback())
+function scan_alg(A=nothing; block_size=nothing, items_per_thread=nothing,
+                  max_tasks=nothing, min_elems=nothing)
+    if A === nothing
+        Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
+            return HOST_KERNELS ? AK.ScanPrefixes() : AK.Auto()
+        A = TEST_KERNELS ? AK.ScanPrefixes : AK.CPUThreads.Partitioned
+    end
+    A === AK.CPUThreads.Partitioned ? A(; max_tasks, min_elems) : A(; block_size, items_per_thread)
+end
 
-@testset "accumulate_1d $(alg isa AK.DecoupledLookback ? "DL" : "SP")" for alg in ALGS
+function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
+    Base.all(isnothing, (block_size, max_tasks, min_elems)) &&
+        return HOST_KERNELS ? AK.SliceScan() : AK.Auto()
+    TEST_KERNELS ? AK.SliceScan(; block_size) : AK.CPUThreads.Partitioned(; max_tasks, min_elems)
+end
+
+@testset "accumulate_1d $(scan_name(A))" for A in SCAN_ALGS
 
     Random.seed!(0)
 
@@ -10,7 +35,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
     for num_elems in 1:256
         x = array_from_host(ones(Int32, num_elems))
         y = copy(x)
-        AK.accumulate!(+, y; prefer_threads, init=0, inclusive=false, block_size=128, alg)
+        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A; block_size=128))
         yh = Array(y)
         @test all(yh .== 0:length(yh) - 1)
     end
@@ -19,7 +44,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
     for num_elems in 1:256
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; prefer_threads, init=0, block_size=128, alg)
+        AK.accumulate!(+, y; init=0, alg=scan_alg(A; block_size=128))
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -28,7 +53,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         num_elems = rand(1:100_000)
         x = array_from_host(ones(Int32, num_elems))
         y = copy(x)
-        AK.accumulate!(+, y; prefer_threads, init=0, inclusive=false, alg)
+        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A))
         yh = Array(y)
         @test all(yh .== 0:length(yh) - 1)
     end
@@ -41,8 +66,8 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
             init = rand(Int32(-100):Int32(100))
             xh = rand(Int32(-9):Int32(9), num_elems)
             y = array_from_host(xh)
-            AK.accumulate!(+, y; prefer_threads, init, inclusive=false, block_size,
-                           items_per_thread, alg)
+            AK.accumulate!(+, y; init, inclusive=false,
+                           alg=scan_alg(A; block_size, items_per_thread))
             @test Array(y) == (cumsum(xh) .- xh) .+ init
         end
     end
@@ -51,7 +76,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
     if KernelAbstractions.supports_float64(BACKEND)
         xh = ComplexF64.(1:4097)
         y = array_from_host(xh)
-        AK.accumulate!(+, y; prefer_threads, init=0.0 + 0.0im, alg)
+        AK.accumulate!(+, y; init=0.0 + 0.0im, alg=scan_alg(A))
         @test Array(y) == cumsum(xh)
     end
 
@@ -60,7 +85,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         num_elems = rand(1:100_000)
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; prefer_threads, init=0, alg)
+        AK.accumulate!(+, y; init=0, alg=scan_alg(A))
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -69,7 +94,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         num_elems = rand(1:100_000)
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; prefer_threads, init=0, block_size=16, alg)
+        AK.accumulate!(+, y; init=0, alg=scan_alg(A; block_size=16))
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -80,7 +105,7 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         n3 = rand(1:100)
         vh = rand(Float32, n1, n2, n3)
         v = array_from_host(vh)
-        AK.accumulate!(+, v; prefer_threads, init=0, alg)
+        AK.accumulate!(+, v; init=0, alg=scan_alg(A))
         @test all(Array(v) .≈ accumulate(+, vh))
     end
 
@@ -90,37 +115,37 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = similar(x)
         init = rand(-1000:1000)
-        AK.accumulate!(+, y, x; prefer_threads, init=Int32(init), alg)
+        AK.accumulate!(+, y, x; init=Int32(init), alg=scan_alg(A))
         @test all(Array(y) .== accumulate(+, Array(x); init))
     end
 
     # Exclusive scan
     x = array_from_host(ones(Int32, 10))
     y = copy(x)
-    AK.accumulate!(+, y; prefer_threads, init=0, inclusive=false, alg)
+    AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A))
     @test all(Array(y) .== 0:9)
 
     # Test init value is respected with exclusive scan too
     x = array_from_host(ones(Int32, 10))
     y = copy(x)
     init = 10
-    AK.accumulate!(+, y; prefer_threads, init=Int32(init), inclusive=false, alg)
+    AK.accumulate!(+, y; init=Int32(init), inclusive=false, alg=scan_alg(A))
     @test all(Array(y) .== 10:19)
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.accumulate(+, y; prefer_threads, init=10, dims=2, inclusive=false, bad=:kwarg)
+    @test_throws MethodError AK.accumulate(+, y; init=10, dims=2, inclusive=false, bad=:kwarg,
+                                           alg=slice_alg())
 
     # Oversized temporaries are allowed.
     y = array_from_host(ones(Int32, 1000))
-    AK.accumulate!(+, y; init=0, inclusive=false, prefer_threads, block_size=128, alg,
-                   temp=array_from_host(zeros(Int32, 1000)),
-                   temp_flags=array_from_host(zeros(Int8, 1000)))
+    AK.accumulate!(+, y; init=0, inclusive=false, temp=array_from_host(zeros(Int32, 1000)),
+                   temp_flags=array_from_host(zeros(Int8, 1000)), alg=scan_alg(A; block_size=128))
     @test Array(y) == 0:999
 
     y = AK.accumulate(+, array_from_host(ones(Int32, 1000)); init=0, inclusive=false,
-                      prefer_threads, block_size=128, alg,
                       temp=array_from_host(zeros(Int64, 1000)),
-                      temp_flags=array_from_host(zeros(Int8, 1000)))
+                      temp_flags=array_from_host(zeros(Int8, 1000)),
+                      alg=scan_alg(A; block_size=128))
     @test Array(y) == 0:999
 
     # Cross-block coherence: small tiles (block_size 16-64, 1 item/thread) maximise the number of
@@ -133,14 +158,14 @@ TEST_DL && push!(ALGS, AK.DecoupledLookback())
         xh = rand(Int32(-9):Int32(9), num_elems)
 
         yi = array_from_host(xh)
-        AK.accumulate!(+, yi; prefer_threads, init=Int32(0), inclusive=true,
-                       block_size, items_per_thread=1, alg)
+        AK.accumulate!(+, yi; init=Int32(0), inclusive=true,
+                       alg=scan_alg(A; block_size, items_per_thread=1))
         @test Array(yi) == cumsum(xh)
 
         init = rand(Int32(-50):Int32(50))
         ye = array_from_host(xh)
-        AK.accumulate!(+, ye; prefer_threads, init, inclusive=false,
-                       block_size, items_per_thread=1, alg)
+        AK.accumulate!(+, ye; init, inclusive=false,
+                       alg=scan_alg(A; block_size, items_per_thread=1))
         @test Array(ye) == (cumsum(xh) .- xh) .+ init
     end
 end
@@ -185,7 +210,7 @@ function scan_reference(xh, dims; init, inclusive)
 end
 
 
-@testset "accumulate_1d non-commutative $(alg isa AK.DecoupledLookback ? "DL" : "SP")" for alg in ALGS
+@testset "accumulate_1d non-commutative $(scan_name(A))" for A in SCAN_ALGS
     Random.seed!(0)
 
     # Single and multiple blocks, and more blocks than one block can scan (block_size=16), so that
@@ -197,8 +222,8 @@ end
             xh = [scan_randmat() for _ in 1:n]
             init = scan_randmat()
             y = array_from_host(xh)
-            AK.accumulate!(scan_matmul, y; prefer_threads, max_tasks=4, init, neutral=SCAN_I2,
-                           inclusive, block_size, items_per_thread, alg)
+            AK.accumulate!(scan_matmul, y; init, neutral=SCAN_I2, inclusive,
+                           alg=scan_alg(A; max_tasks=4, block_size, items_per_thread))
             @test Array(y) == scan_reference(xh, 1; init, inclusive)
         end
     end
@@ -219,8 +244,8 @@ end
             xh = [scan_randmat() for _ in CartesianIndices(sz)]
             init = scan_randmat()
             y = array_from_host(xh)
-            AK.accumulate!(scan_matmul, y; prefer_threads, max_tasks=4, init, neutral=SCAN_I2,
-                           inclusive, dims, block_size)
+            AK.accumulate!(scan_matmul, y; init, neutral=SCAN_I2, inclusive, dims,
+                           alg=slice_alg(; max_tasks=4, block_size))
             @test Array(y) == scan_reference(xh, dims; init, inclusive)
         end
     end
@@ -237,7 +262,7 @@ end
                 for ksize in 0:3
                     sh = rand(Int32(1):Int32(100), isize, jsize, ksize)
                     s = array_from_host(sh)
-                    d = AK.accumulate(+, s; prefer_threads, init=Int32(0), dims)
+                    d = AK.accumulate(+, s; init=Int32(0), dims, alg=slice_alg())
 
                     dh = Array(d)
                     dhres = accumulate(+, sh; init=Int32(0), dims)
@@ -257,7 +282,7 @@ end
             vh = rand(Int32(1):Int32(100), n1, n2, n3)
             v = array_from_host(vh)
 
-            s = AK.accumulate(+, v; prefer_threads, init=Int32(0), dims)
+            s = AK.accumulate(+, v; init=Int32(0), dims, alg=slice_alg())
             sh = Array(s)
             @test sh == accumulate(+, vh; init=Int32(0), dims)
         end
@@ -271,7 +296,7 @@ end
             vh = rand(UInt32(1):UInt32(100), n1, n2, n3)
             v = array_from_host(vh)
 
-            s = AK.accumulate(+, v; prefer_threads, init=UInt32(0), dims)
+            s = AK.accumulate(+, v; init=UInt32(0), dims, alg=slice_alg())
             sh = Array(s)
             @test sh == accumulate(+, vh; init=UInt32(0), dims)
         end
@@ -285,7 +310,7 @@ end
             vh = rand(Float32, n1, n2, n3)
             v = array_from_host(vh)
 
-            s = AK.accumulate(+, v; prefer_threads, init=Float32(0), dims)
+            s = AK.accumulate(+, v; init=Float32(0), dims, alg=slice_alg())
             sh = Array(s)
             @test all(sh .≈ accumulate(+, vh; init=Float32(0), dims))
         end
@@ -300,7 +325,7 @@ end
             vh = rand(Float32, n1, n2, n3)
             v = array_from_host(vh)
             init = rand(-1000:1000)
-            s = AK.accumulate(+, v; prefer_threads, init=Float32(init), dims)
+            s = AK.accumulate(+, v; init=Float32(init), dims, alg=slice_alg())
             sh = Array(s)
             @test all(sh .≈ accumulate(+, vh; init=Float32(init), dims))
         end
@@ -309,19 +334,20 @@ end
     # Exclusive scan
     vh = ones(Int32, 10, 10)
     v = array_from_host(vh)
-    s = AK.accumulate(+, v; prefer_threads, init=0, dims=2, inclusive=false)
+    s = AK.accumulate(+, v; init=0, dims=2, inclusive=false, alg=slice_alg())
     sh = Array(s)
     @test all([sh[i, :] == 0:9 for i in 1:10])
 
     # Test init value is respected with exclusive scan too
     vh = ones(Int32, 10, 10)
     v = array_from_host(vh)
-    s = AK.accumulate(+, v; prefer_threads, init=10, dims=2, inclusive=false)
+    s = AK.accumulate(+, v; init=10, dims=2, inclusive=false, alg=slice_alg())
     sh = Array(s)
     @test all([sh[i, :] == 10:19 for i in 1:10])
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.accumulate(+, v; prefer_threads, init=10, dims=2, inclusive=false, bad=:kwarg)
+    @test_throws MethodError AK.accumulate(+, v; init=10, dims=2, inclusive=false, bad=:kwarg,
+                                           alg=slice_alg())
 
     # Test all options with bigger matrices
     for D in [(1_000_000,3), (3,1_000_000)], dims in [1,2]
@@ -335,26 +361,13 @@ end
     end
 
     # Testing different settings
-    AK.accumulate(
-        (x, y) -> x + 1,
-        array_from_host(rand(Int32, 3, 4, 5));
-        prefer_threads,
-        init=Int32(0),
-        neutral=Int32(0),
-        dims=2,
-        block_size=64,
-        temp=array_from_host(zeros(Int32, 3, 1, 5)),
-    )
-    AK.accumulate(
-        (x, y) -> x + 1,
-        array_from_host(rand(Int32, 3, 4, 5));
-        prefer_threads,
-        init=Int32(0),
-        neutral=Int32(0),
-        dims=3,
-        block_size=64,
-        temp=array_from_host(zeros(Int32, 3, 4, 1)),
-    )
+    AK.accumulate((x, y) -> x + 1, array_from_host(rand(Int32, 3, 4, 5)); init=Int32(0),
+                  neutral=Int32(0), dims=2, alg=slice_alg(; block_size=64))
+    AK.accumulate((x, y) -> x + 1, array_from_host(rand(Int32, 3, 4, 5)); init=Int32(0),
+                  neutral=Int32(0), dims=3, alg=slice_alg(; block_size=64))
+    # The temporaries only apply to whole-array scans
+    @test_throws ArgumentError AK.accumulate(+, array_from_host(rand(Int32, 3, 4)); init=Int32(0),
+                                             dims=2, temp=array_from_host(zeros(Int32, 3)))
 end
 @testset "cumsum" begin
 
@@ -363,14 +376,14 @@ end
     # Simple correctness tests
     v = array_from_host(1:100)
     vh = Array(v)
-    @test Array(AK.cumsum(v; prefer_threads)) == cumsum(vh)
+    @test Array(AK.cumsum(v; alg=scan_alg())) == cumsum(vh)
 
     # Fuzzy testing
     for _ in 1:100
         num_elems = rand(1:100_000)
         vh = rand(Float32, num_elems)
         v = array_from_host(vh)
-        @test all(Array(AK.cumsum(v; prefer_threads)) .≈ cumsum(vh))
+        @test all(Array(AK.cumsum(v; alg=scan_alg())) .≈ cumsum(vh))
     end
 
     for _ in 1:100
@@ -382,10 +395,10 @@ end
             v = array_from_host(vh)
 
             # Indexing into array as if linear; not supported in Base
-            # @test all(Array(AK.cumsum(v; prefer_threads)) .== cumsum(vh))
+            # @test all(Array(AK.cumsum(v; alg=scan_alg())) .== cumsum(vh))
 
             # Along dimensions
-            r = Array(AK.cumsum(v; prefer_threads, dims))
+            r = Array(AK.cumsum(v; dims, alg=slice_alg()))
             rh = cumsum(vh; dims)
 
             @test r == rh
@@ -395,14 +408,14 @@ end
     # Test promotion to op-dictated type
     xh = rand(Bool, 16)
     x = array_from_host(xh)
-    @test Array(AK.cumsum(x; prefer_threads)) == cumsum(xh)
+    @test Array(AK.cumsum(x; alg=scan_alg())) == cumsum(xh)
 
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
-    AK.cumsum(v; prefer_threads, block_size=64)
+    AK.cumsum(v; alg=scan_alg(; block_size=64))
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.cumsum(v; prefer_threads, init=10, bad=:kwarg)
+    @test_throws MethodError AK.cumsum(v; init=10, bad=:kwarg, alg=scan_alg())
 
     # The other settings are stress-tested in reduce
 end
@@ -415,11 +428,11 @@ end
     # Simple correctness tests
     v = array_from_host(1:100)
     vh = Array(v)
-    @test Array(AK.cumprod(v; prefer_threads)) == cumprod(vh)
+    @test Array(AK.cumprod(v; alg=scan_alg())) == cumprod(vh)
 
     vh = ones(Float32, 100_000)
     v = array_from_host(vh)
-    @test Array(AK.cumprod(v; prefer_threads)) == vh
+    @test Array(AK.cumprod(v; alg=scan_alg())) == vh
 
     # Fuzzy testing
     for _ in 1:100
@@ -431,10 +444,10 @@ end
             v = array_from_host(vh)
 
             # Indexing into array as if linear; not supported in Base
-            # @test all(Array(AK.cumprod(v; prefer_threads)) .== cumprod(vh))
+            # @test all(Array(AK.cumprod(v; alg=scan_alg())) .== cumprod(vh))
 
             # Along dimensions
-            r = Array(AK.cumprod(v; prefer_threads, dims))
+            r = Array(AK.cumprod(v; dims, alg=slice_alg()))
             rh = cumprod(vh; dims)
 
             @test r == rh
@@ -443,10 +456,10 @@ end
 
     # Testing different settings
     v = array_from_host(rand(-5:5, 100_000))
-    AK.cumprod(v; prefer_threads, block_size=64)
+    AK.cumprod(v; alg=scan_alg(; block_size=64))
 
     # Test that undefined kwargs are not accepted
-    @test_throws MethodError AK.cumprod(v; prefer_threads, init=10, bad=:kwarg)
+    @test_throws MethodError AK.cumprod(v; init=10, bad=:kwarg, alg=scan_alg())
 
     # The other settings are stress-tested in reduce
 end

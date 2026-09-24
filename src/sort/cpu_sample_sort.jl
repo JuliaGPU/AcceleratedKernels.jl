@@ -25,7 +25,8 @@ function _sample_sort_compute_offsets!(histograms, max_tasks)
                 offsets[j] += histograms[j, itask]
             end
         end
-        accumulate!(+, offsets, init=0, inclusive=false, max_tasks=1)
+        accumulate!(+, offsets; init=0, inclusive=false,
+                    alg=CPUThreads.Partitioned(max_tasks=1))
 
         # Compute each task's local offset into each bucket
         for itask in 1:max_tasks
@@ -33,7 +34,7 @@ function _sample_sort_compute_offsets!(histograms, max_tasks)
                 +, @view(histograms[itask, 1:max_tasks]),
                 init=0,
                 inclusive=false,
-                max_tasks=1,
+                alg=CPUThreads.Partitioned(max_tasks=1),
             )
         end
     end

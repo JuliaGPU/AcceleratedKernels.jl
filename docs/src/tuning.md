@@ -21,10 +21,11 @@ AcceleratedKernels._resolve_sort
 ```
 
 The other families follow the same steps, with a one-line selection: reductions resolve with
-`_resolve_reduce`.
+`_resolve_reduce`, scans with `_resolve_scan`.
 
 ```@docs
 AcceleratedKernels._resolve_reduce
+AcceleratedKernels._resolve_scan
 ```
 
 `Auto` and explicit algorithms share steps 3 and 4, so a tuning cannot make an invalid algorithm
@@ -40,6 +41,8 @@ AcceleratedKernels.SortTuning
 AcceleratedKernels.sort_tuning
 AcceleratedKernels.ReduceTuning
 AcceleratedKernels.reduce_tuning
+AcceleratedKernels.ScanTuning
+AcceleratedKernels.scan_tuning
 ```
 
 AcceleratedKernels defines the hook's generic method, whose values reproduce the library's
@@ -56,5 +59,6 @@ alike; tunings cannot change them.
 ```@docs
 AcceleratedKernels._runs_threads
 AcceleratedKernels._runs_kernels
+AcceleratedKernels._supports_lookback
 AcceleratedKernels._resolve_backend
 ```

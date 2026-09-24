@@ -52,6 +52,15 @@ Supertype of the reduction algorithms: [`BlockReduce`](@ref). Reductions also ac
 """
 abstract type ReduceAlgorithm <: Algorithm end
 
+"""
+    ScanAlgorithm <: Algorithm
+
+Supertype of the scan (`accumulate`) algorithms: [`ScanPrefixes`](@ref),
+[`DecoupledLookback`](@ref) and [`SliceScan`](@ref). Scans also accept
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type ScanAlgorithm <: Algorithm end
+
 
 """
     AcceleratedKernels.CPUThreads
@@ -118,6 +127,16 @@ backend of KernelAbstractions 0.10, which compiles kernels for PoCL. KernelAbstr
 """
 _runs_kernels(::Backend) = true
 _runs_kernels(::HostBackend) = nameof(HostBackend) !== :CPU
+
+"""
+    _supports_lookback(backend)
+
+Whether [`DecoupledLookback`](@ref) is correct on `backend`: it needs a device-scope memory fence
+(`_decoupled_fence`), atomic loads and stores of the block flags, and forward progress between
+workgroups, since a block spins until an earlier one publishes its prefix. AK's extensions
+declare it for the backends where all three are known to hold.
+"""
+_supports_lookback(::Backend) = false
 
 
 # Checks shared by the algorithm families

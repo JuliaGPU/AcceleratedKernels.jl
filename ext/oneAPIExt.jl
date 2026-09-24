@@ -12,6 +12,12 @@ oneAPI.@device_override AK._decoupled_fence() =
     SPIRV.atomic_work_item_fence(SPIRV.GLOBAL_MEM_FENCE, SPIRV.memory_order_seq_cst, SPIRV.memory_scope_device)
 
 
+# WORKAROUND(oneAPI): scans use 64-thread blocks, as oneAPI.jl did (1e70e3b), because they give
+# wrong results on Intel GPUs with blocks of 128 threads or more; the root cause is not known yet.
+# Once fixed, drop this method.
+AK.scan_tuning(::oneAPIBackend, ::Type) = AK.ScanTuning(block_size=64)
+
+
 # On oneAPI, use the MapReduce algorithm by default as on some Intel GPUs ConcurrentWrite hangs
 # the device.
 function AK.any(
