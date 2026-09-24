@@ -36,6 +36,7 @@ makedocs(;
             "Custom Structs" => "api/custom_structs.md",
             "Task Partitioning" => "api/task_partition.md",
             "Utilities" => "api/utilities.md",
+            "Differences from Base" => "api/differences.md",
         ],
         "Testing" => "testing.md",
         "Tuning and Capabilities" => "tuning.md",

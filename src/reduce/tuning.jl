@@ -71,7 +71,7 @@ function _resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) wher
     t = reduce_tuning(backend, T)
     a = alg isa Auto ? _select_reduce(backend) : alg
     a = _fill(a, t, T)
-    _check_reduce(a, backend, dims)
+    _check_reduce(a, backend, T, dims)
     return a
 end
 
@@ -95,9 +95,13 @@ _fill(a::CPUThreads.Partitioned, t::ReduceTuning, T) = _fill_threads(a, t)
 _fill(a::Algorithm, t::ReduceTuning, T) =
     throw(ArgumentError("$(_algname(a)) is not a reduction algorithm"))
 
-function _check_reduce(a::BlockReduce, backend, dims)
+function _check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
     _checkdomain(a)
     _require_kernels(a, backend)
+    # `Union{}`: no accumulator type, which only an empty reduction gets past
+    T === Union{} || isbitstype(T) || throw(ArgumentError(
+        "BlockReduce: the accumulator type $T is not a bits type; pass an `init` of the type " *
+        "to accumulate in, or make `f` and `op` inferable"))
     if _whole(dims)
         # Each pass reduces tiles of `block_size * items_per_thread` elements to one value: a tile
         # of one element never shrinks the input, and the bound keeps the kernels' index
@@ -110,7 +114,7 @@ function _check_reduce(a::BlockReduce, backend, dims)
     nothing
 end
 
-function _check_reduce(a::CPUThreads.Partitioned, backend, dims)
+function _check_reduce(a::CPUThreads.Partitioned, backend, T, dims)
     _checkdomain(a)
     _require_threads(a, backend)
 end
