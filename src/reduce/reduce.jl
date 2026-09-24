@@ -49,7 +49,7 @@ reduce(op, src::AbstractArray; kwargs...) = mapreduce(identity, op, src; kwargs.
         acctype=nothing,
         dims=:,
         alg::Algorithm=Auto(),
-        temp::Union{Nothing, AbstractArray}=nothing,
+        workspace=nothing,
     )
 
 Apply `f` to each element of `src` and reduce the results with the binary operator `op`. With
@@ -86,8 +86,9 @@ device's settings. On the host, multithreading reductions only improves performa
 operations that hide the memory latency and thread launch overhead, e.g. reductions of tuples or
 structs, or expensive operators.
 
-`temp` is scratch space for whole-array `BlockReduce` reductions: a vector with the accumulator
-element type and at least `2 * cld(length(src), block_size * items_per_thread)` elements.
+`workspace` takes the scratch memory of a [`workspace`](@ref) made for the same call, so that
+the reduction allocates none of its own (it still allocates its result along `dims`, and before
+Julia 1.12 a materialized source).
 
 # Examples
 Computing a sum of squares, reducing down to a scalar that is copied to host:
@@ -122,47 +123,102 @@ function mapreduce(
     acctype=nothing,
     dims=:,
     alg::Algorithm=Auto(),
-    temp::Union{Nothing, AbstractArray}=nothing,
+    workspace=nothing,
 )
-    if !isempty(srcs)
-        src isa AbstractArray ||
-            throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
-        _mapreduce_check_map_axes(src, srcs...)
-        bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
-        return _mapreduce(identity, op, bc, backend, init, neutral, acctype, dims, alg, temp)
-    end
-    return _mapreduce(f, op, src, backend, init, neutral, acctype, dims, alg, temp)
+    f, src = _mapreduce_fuse(f, src, srcs)
+    s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
+    bufs = _buffers(s.plan, workspace, src)
+    return _mapreduce_run(f, op, _mapreduce_source(src), s, init, bufs)
 end
 
-function _mapreduce(f, op, src, backend, init, neutral, acctype, dims, alg, temp)
-    backend = _resolve_backend(backend, src, temp)
+function _plan(
+    ::typeof(mapreduce), f, op, src::MapReduceSource, srcs::AbstractArray...;
+    backend=nothing, init=_NoInit(), neutral=nothing, acctype=nothing, dims=:,
+    alg::Algorithm=Auto(),
+)
+    f, src = _mapreduce_fuse(f, src, srcs)
+    return _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
+end
+
+_plan(::typeof(reduce), op, src::AbstractArray; kwargs...) =
+    _plan(mapreduce, identity, op, src; kwargs...)
+
+# The source of a reduction: several arrays become one `Broadcasted` object
+_mapreduce_fuse(f, src, ::Tuple{}) = (f, src)
+function _mapreduce_fuse(f, src, srcs::Tuple)
+    src isa AbstractArray ||
+        throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
+    _mapreduce_check_map_axes(src, srcs...)
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
+    return identity, bc
+end
+# Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
+# Julia 1.12, so earlier versions materialize it when the reduction runs (after the plan and the
+# workspace checks, which see the original arrays); the plan treats it as a dense array.
+_mapreduce_source(src) = src
+_mapreduce_source(src::Base.Broadcast.Broadcasted) =
+    VERSION < v"1.12-" ? _materialize_source(src) : src
+
+# The seed of the partial results (`_reduce_seed`), where an accumulator type exists
+_mapreduce_seed(op, ::Type{A}, neutral) where {A} =
+    A === Union{} ? nothing : _reduce_seed(op, A, neutral)
+
+# Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
+# plan), accumulator type and partial-result seed, and for reductions along `dims` the result
+function _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
+    backend = _resolve_backend(backend, src)
     M = _mapped_eltype(f, src)
+    # The accumulator type, from `init`'s type
+    A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
 
     if _whole(dims)
-        # Scalar reductions accumulate from `init`'s type
-        A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
         a = _resolve_reduce(alg, backend, A, dims)
-        return _mapreduce_whole(f, op, src, backend, a, A; init, neutral, temp)
+        seed = _mapreduce_seed(op, A, neutral)
+        # (the buffer's name does not depend on the length, so that results infer)
+        sizes = if a isa BlockReduce && seed !== nothing
+            n = _mapreduce_1d_partials(length(src), a.block_size, a.items_per_thread,
+                                       a.switch_below)
+            (; partials=_buffer(typeof(seed), n))
+        else
+            (;)
+        end
+        return (; plan=_Plan(backend, a, sizes), A=Val(A), seed)
     end
 
-    temp === nothing || throw(ArgumentError(
-        "`temp` only applies to whole-array reductions; to reduce into an existing array, " *
-        "use `mapreducedim!`"))
     dims_valid = _reduced_dims(dims, ndims(src))
+    # The result has the accumulator type; where there is none (`op` always throws), only an
+    # empty reduction can succeed
+    R_type = A !== Union{} ? A : !(init isa _NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in dims_valid ? 1 : _srcsize(src, d), ndims(src))
-    if init isa _NoInit && Base.any(d -> _srcsize(src, d) == 0, dims_valid) &&
-       Base.prod(dst_sizes) > 0
+    a = _resolve_reduce(alg, backend, A, dims_valid)
+    seed = _mapreduce_seed(op, A, neutral)
+    sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, Base.prod(dst_sizes))
+    return (; plan=_Plan(backend, a, sizes), A=Val(A), seed, dims_valid, R_type=Val(R_type),
+            dst_sizes)
+end
+
+# Run the reduction set up by `_mapreduce_setup`, with the plan's scratch buffers `bufs`
+function _mapreduce_run(f, op, src, s, init, bufs)
+    backend, a = s.plan.backend, s.plan.alg
+    if !haskey(s, :dims_valid)
+        return _mapreduce_whole(f, op, src, backend, a, _unval(s.A); init, neutral=s.seed,
+                                partials=get(bufs, :partials, nothing))
+    end
+    if init isa _NoInit && Base.any(d -> _srcsize(src, d) == 0, s.dims_valid) &&
+       Base.prod(s.dst_sizes) > 0
         throw(ArgumentError(
             "reducing over an empty dimension is not allowed without `init`; pass `init`"))
     end
-    # The result has the accumulator type; where there is none (`op` always throws), only an
-    # empty reduction can succeed
-    A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
-    R_type = A !== Union{} ? A : !(init isa _NoInit) ? typeof(init) : M === Union{} ? Nothing : M
-    dst = KernelAbstractions.allocate(backend, R_type, dst_sizes)
-    return _mapreducedim!(f, op, dst, src, backend, alg, dims_valid, A;
-                          init, neutral, overwrite=true)
+    dst = KernelAbstractions.allocate(backend, _unval(s.R_type), s.dst_sizes)
+    return mapreduce_nd!(f, op, dst, src, backend, a, _unval(s.A);
+                         init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
 end
+
+# A reduction nested in another operation, with the scratch buffers of its plan in the outer one
+_mapreduce_nested(f, op, src, bufs; backend, init=_NoInit(), neutral=nothing, dims=:, alg) =
+    _mapreduce_run(f, op, src,
+                   _mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
+                   init, bufs)
 
 
 """
@@ -174,6 +230,7 @@ end
         overwrite::Bool=false,
         acctype=nothing,
         alg::Algorithm=Auto(),
+        workspace=nothing,
     ) -> R
 
 Reduce `src` (an array or a `Broadcasted` object) into `R`: the dimensions along which `R` has
@@ -213,6 +270,8 @@ Base's (see [Differences from Base](@ref)):
   non-bits accumulator type for a kernel algorithm, and an algorithm that cannot run on the
   backend are `ArgumentError`s.
 
+`workspace` takes the scratch memory of a [`workspace`](@ref) made for the same call.
+
 ```julia
 import AcceleratedKernels as AK
 using CUDA
@@ -232,7 +291,21 @@ function mapreducedim!(
     overwrite::Bool=false,
     acctype=nothing,
     alg::Algorithm=Auto(),
+    workspace=nothing,
 )
+    s = _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
+    bufs = _buffers(s.plan, workspace, R, src)
+    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
+                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
+    return R
+end
+
+_plan(::typeof(mapreducedim!), f, op, R::AbstractArray, src::MapReduceSource;
+      backend=nothing, init=_NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
+      alg::Algorithm=Auto()) =
+    _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
+
+function _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
     backend = _resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
@@ -245,8 +318,11 @@ function mapreducedim!(
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)
     A = _acctype(op, eltype(dst), _mapped_eltype(f, src), acctype)
-    _mapreducedim!(f, op, dst, src, backend, alg, dims_valid, A; init, neutral, overwrite)
-    return R
+    a = _resolve_reduce(alg, backend, A, dims_valid)
+    seed = _mapreduce_seed(op, A, neutral)
+    sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
+    init = init isa _NoInit && !overwrite ? _Fold() : init
+    return (; plan=_Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
 end
 
 function _check_noalias(R, src::AbstractArray)
@@ -258,23 +334,9 @@ _check_noalias(R, src::Base.Broadcast.Broadcasted) = foreach(a -> _check_noalias
 _check_noalias(R, src::Base.Broadcast.Extruded) = _check_noalias(R, src.x)
 _check_noalias(R, src) = nothing
 
-# Reduce `src` into `dst`, which has `ndims(src)` dimensions and size 1 along `dims_valid`, with
-# accumulator type `A`.
-function _mapreducedim!(f, op, dst, src, backend, alg, dims_valid, ::Type{A};
-                        init, neutral, overwrite) where {A}
-    # scalar *linear* indexing into a multidimensional Broadcasted object is
-    # only available on Julia 1.12; on earlier version, materialize it first.
-    if VERSION < v"1.12-" && src isa Base.Broadcast.Broadcasted
-        src = _materialize_source(src)
-    end
-    a = _resolve_reduce(alg, backend, A, dims_valid)
-    init = init isa _NoInit && !overwrite ? _Fold() : init
-    mapreduce_nd!(f, op, dst, src, backend, a, A; init, neutral, dims_valid)
-    return dst
-end
-
-# Reduce all of `src` to a host value, with accumulator type `A`.
-function _mapreduce_whole(f, op, src, backend, alg, ::Type{A}; init, neutral, temp) where {A}
+# Reduce all of `src` to a host value, with accumulator type `A` and partial-result seed
+# `neutral`; `partials` is the plan's scratch
+function _mapreduce_whole(f, op, src, backend, alg, ::Type{A}; init, neutral, partials) where {A}
     if length(src) == 0
         init isa _NoInit || return init
         throw(ArgumentError(
@@ -285,25 +347,18 @@ function _mapreduce_whole(f, op, src, backend, alg, ::Type{A}; init, neutral, te
         return @allowscalar Base.mapreduce_first(f, op, src[first(eachindex(src))])
     end
     _check_acctype(op, f, A)
-    neutral = _reduce_seed(op, A, neutral)
-
-    # scalar *linear* indexing into a multidimensional Broadcasted object is
-    # only available on Julia 1.12; on earlier version, materialize it first.
-    if VERSION < v"1.12-" && src isa Base.Broadcast.Broadcasted
-        src = _materialize_source(src)
-    end
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type
-    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, temp))
+    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, partials))
 end
 
-function _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, temp)
+function _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, partials)
     if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;
             init, neutral,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
-            temp, switch_below=alg.switch_below,
+            partials, switch_below=alg.switch_below,
         )
     else
         mapreduce_1d_cpu(

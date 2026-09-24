@@ -44,24 +44,21 @@ prod(src::AbstractArray; kwargs...) = _reduce_or_empty(one, Base.mul_prod, src; 
 # applying it as an `init`, which would change results such as the sign of a sum of `-0.0`s
 function _reduce_or_empty(empty, op, src; init=_NoInit(), dims=:, acctype=nothing,
                           backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
-                          kwargs...)
-    init isa _NoInit || return reduce(op, src; init, dims, acctype, backend, alg, kwargs...)
+                          workspace=nothing, kwargs...)
+    kwargs = (; dims, acctype, backend, alg, kwargs...)
+    init isa _NoInit || return reduce(op, src; init, workspace, kwargs...)
     A = _acctype(op, Union{}, _mapped_eltype(identity, src), acctype)
-    if A !== Union{} && isempty(src)
-        # (the algorithm is checked as for any other input)
-        b = _resolve_backend(backend, src)
-        if _whole(dims)
-            _resolve_reduce(alg, b, A, dims)
-            return empty(A)
-        end
+    if A !== Union{} && isempty(src) &&
+       (_whole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))
+        # (the algorithm and the workspace are checked as for any other input)
+        p = _plan(reduce, op, src; kwargs...)
+        _buffers(p, workspace, src)
+        _whole(dims) && return empty(A)
         dims_valid = _reduced_dims(dims, ndims(src))
-        if Base.any(d -> size(src, d) == 0, dims_valid)
-            _resolve_reduce(alg, b, A, dims_valid)
-            dst_sizes = ntuple(d -> d in dims_valid ? 1 : size(src, d), ndims(src))
-            return fill!(KernelAbstractions.allocate(b, A, dst_sizes), empty(A))
-        end
+        dst_sizes = ntuple(d -> d in dims_valid ? 1 : size(src, d), ndims(src))
+        return fill!(KernelAbstractions.allocate(p.backend, A, dst_sizes), empty(A))
     end
-    return reduce(op, src; dims, acctype, backend, alg, kwargs...)
+    return reduce(op, src; workspace, kwargs...)
 end
 
 
@@ -121,6 +118,14 @@ count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
 count(f, src::AbstractArray; init=0, kwargs...) =
     mapreduce(_BoolValued(f), Base.add_sum, src; init, kwargs...)
 
+_plan(::typeof(sum), src::AbstractArray; kwargs...) = _plan(reduce, Base.add_sum, src; kwargs...)
+_plan(::typeof(prod), src::AbstractArray; kwargs...) = _plan(reduce, Base.mul_prod, src; kwargs...)
+_plan(::typeof(maximum), src::AbstractArray; kwargs...) = _plan(reduce, max, src; kwargs...)
+_plan(::typeof(minimum), src::AbstractArray; kwargs...) = _plan(reduce, min, src; kwargs...)
+_plan(::typeof(count), src::AbstractArray; kwargs...) = _plan(count, identity, src; kwargs...)
+_plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
+    _plan(mapreduce, _BoolValued(f), Base.add_sum, src; init, kwargs...)
+
 
 """
     cumsum(src::AbstractArray; kwargs...)
@@ -172,3 +177,6 @@ p = AK.cumprod(m, dims=1)
 ```
 """
 cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)
+
+_plan(::typeof(cumsum), src::AbstractArray; kwargs...) = _plan(accumulate, Base.add_sum, src; kwargs...)
+_plan(::typeof(cumprod), src::AbstractArray; kwargs...) = _plan(accumulate, Base.mul_prod, src; kwargs...)

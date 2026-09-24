@@ -33,6 +33,7 @@ makedocs(;
             "Reverse" => "api/reverse.md",
             "Predicates" => "api/predicates.md",
             "Arithmetics" => "api/arithmetics.md",
+            "Scratch Memory" => "api/workspace.md",
             "Custom Structs" => "api/custom_structs.md",
             "Task Partitioning" => "api/task_partition.md",
             "Utilities" => "api/utilities.md",

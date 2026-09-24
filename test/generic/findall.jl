@@ -70,7 +70,7 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
 
         if !TEST_KERNELS
             @test AK.findall(Any[true, false, true]) == findall(Any[true, false, true])
-            @test AK.findall(Any[true, false, true]; temp_bools=Vector{Bool}(undef, 3)) ==
+            @test with_workspace(AK.findall, Any[true, false, true]) ==
                   findall(Any[true, false, true])
             @test_throws ArgumentError AK.findall([1])
             @test_throws TypeError AK.findall(Any[true, missing];
@@ -204,24 +204,22 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
                   findall(x -> x > 0.5f0, h)
         end
 
+        # A workspace: the mask of the predicate form and the counts (and their scan)
         alg = findall_alg(block_size=64, items_per_thread=3, max_tasks=4)
-        temp = similar(v, Int, max(4, cld(length(v), 64 * 3)))
-        temp_bools = similar(v, Bool)
-        @test Array(AK.findall(x -> x > 0.5f0, v; alg, temp, temp_bools)) ==
+        @test Array(with_workspace(AK.findall, x -> x > 0.5f0, v; alg)) ==
               findall(x -> x > 0.5f0, h)
+        bools = array_from_host(rand(Bool, length(v)))
+        @test Array(with_workspace(AK.findall, bools; alg)) == findall(Array(bools))
+        @test haskey(AK.workspace_size(AK.findall, x -> x > 0.5f0, v; alg), :mask)
+        @test !haskey(AK.workspace_size(AK.findall, bools; alg), :mask)
+        # ... made for another call
+        @test_throws ArgumentError AK.findall(bools; alg,
+                                              workspace=AK.workspace(AK.findall, bools[1:1]; alg))
 
         @test_throws ArgumentError AK.findall(v; alg=OtherFindallAlgorithm())
-        @test_throws ArgumentError AK.findall(identity, temp_bools;
-                                               temp_bools)
-        @test_throws ArgumentError AK.findall(identity, v; temp_bools=reshape(similar(v, Bool), :, 1))
-
         if TEST_KERNELS
-            bools = array_from_host(rand(Bool, length(v)))
             @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(block_size=192))
             @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(items_per_thread=0))
-            @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(),
-                                                  temp=similar(v, Int32, 100))
-            @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(), temp=similar(v, Int, 1))
         end
     end
 end

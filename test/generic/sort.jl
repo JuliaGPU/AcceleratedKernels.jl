@@ -36,23 +36,19 @@ if TEST_KERNELS
 
     # Testing different settings
     v = array_from_host(1:10_000, Float32)
-    AK.sort!(v, lt=(>), by=abs, rev=true,
-             alg=AK.MergeSort(block_size=64), temp=array_from_host(1:10_000, Float32))
+    with_workspace(AK.sort!, v; lt=(>), by=abs, rev=true, alg=AK.MergeSort(block_size=64))
     @test issorted(Array(v))
 
     v = array_from_host(1:10_000, Int32)
-    AK.sort!(v, lt=(>), rev=true,
-             alg=AK.MergeSort(block_size=64), temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sort!, v; lt=(>), rev=true, alg=AK.MergeSort(block_size=64))
     @test issorted(Array(v))
 
     v = array_from_host(1:10_000, Float32)
-    v = AK.sort(v, lt=(>), by=abs, rev=true,
-                alg=AK.MergeSort(block_size=64), temp=array_from_host(1:10_000, Float32))
+    v = with_workspace(AK.sort, v; lt=(>), by=abs, rev=true, alg=AK.MergeSort(block_size=64))
     @test issorted(Array(v))
 
     v = array_from_host(1:10_000, Int32)
-    v = AK.sort(v, lt=(>), by=abs, rev=true,
-                alg=AK.MergeSort(block_size=64), temp=array_from_host(1:10_000, Int32))
+    v = with_workspace(AK.sort, v; lt=(>), by=abs, rev=true, alg=AK.MergeSort(block_size=64))
     @test issorted(Array(v))
 end
 
@@ -94,13 +90,12 @@ end
         @test Array(tmp) == sort(v_h; by=abs)
     end
 
-    # temp kwarg still forwarded correctly through hoisting path
+    # a workspace also serves the path that caches the `by` keys
     n    = 20_000
     v_h  = randn(Float32, n)
     v    = array_from_host(v_h)
     tmp  = copy(v)
-    temp = array_from_host(zeros(Float32, n))
-    AK.sort!(tmp; alg=AK.MergeSort(), by=abs, temp)
+    with_workspace(AK.sort!, tmp; alg=AK.MergeSort(), by=abs)
     @test Array(tmp) == sort(v_h; by=abs)
 
     # sort! (public API) routes through the same hoisting path
@@ -186,13 +181,12 @@ if AK._runs_threads(BACKEND)
 
     # Testing different settings
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    AK.sort!(v, lt=(>), by=abs, rev=true,
-             alg=AK.CPUThreads.SampleSort(max_tasks=64), temp=array_from_host(1:10_000, Float32))
+    with_workspace(AK.sort!, v;
+                   lt=(>), by=abs, rev=true, alg=AK.CPUThreads.SampleSort(max_tasks=64))
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    AK.sort!(v, lt=(>), rev=true,
-             alg=AK.CPUThreads.SampleSort(max_tasks=64), temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sort!, v; lt=(>), rev=true, alg=AK.CPUThreads.SampleSort(max_tasks=64))
     @test issorted(Array(v))
 end
 end
@@ -228,23 +222,19 @@ end
 
     # Testing different settings
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    AK.sort!(v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true,
-            temp=array_from_host(1:10_000, Float32))
+    with_workspace(AK.sort!, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    AK.sort!(v; alg=SETTINGS_ALG, lt=(>), rev=true,
-            temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sort!, v; alg=SETTINGS_ALG, lt=(>), rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    v = AK.sort(v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true,
-                temp=array_from_host(1:10_000, Float32))
+    v = with_workspace(AK.sort, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    v = AK.sort(v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true,
-                temp=array_from_host(1:10_000, Int32))
+    v = with_workspace(AK.sort, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 end
 
@@ -279,8 +269,7 @@ end
         for alg in (AK.MergeSort(), AK.MergeSort(lowmem=true))
             v = array_from_host(perm_h)
             ix = array_from_host(zeros(Int, length(perm_h)))
-            temp = array_from_host(zeros(Int, length(perm_h)))
-            AK.sortperm!(ix, v; alg, temp)
+            with_workspace(AK.sortperm!, ix, v; alg)
             @test is_valid_perm(perm_h, Int.(Array(ix)))
         end
 
@@ -358,21 +347,13 @@ end
     # Testing different settings
     k = array_from_host(1:10_000, Float32)
     v = array_from_host(1:10_000, Int32)
-    AK.sort_by_key!(k, v,
-                        lt=(>), by=abs, rev=true,
-                        alg=SETTINGS_ALG,
-                        temp_keys=array_from_host(1:10_000, Float32),
-                        temp_values=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg=SETTINGS_ALG)
     @test issorted(Array(k))
     @test issorted(Array(v))
 
     k = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    AK.sort_by_key!(k, v,
-                        lt=(>), by=abs, rev=true,
-                        alg=SETTINGS_ALG,
-                        temp_keys=array_from_host(1:10_000, Int32),
-                        temp_values=array_from_host(1:10_000, Float32))
+    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg=SETTINGS_ALG)
     @test issorted(Array(k))
     @test issorted(Array(v))
 
@@ -417,7 +398,12 @@ end
     kh = Int32[2, 1]
     k = array_from_host(kh)
     v = array_from_host(Int32[20, 10])
-    @test_throws ArgumentError AK.sort_by_key!(k, v; alg=SORT_ALG, temp_values=array_from_host(zeros(Int32, 1)))
+    # The scratch keywords are gone: scratch is a workspace
+    @test_throws MethodError AK.sort_by_key!(k, v; alg=SORT_ALG, temp_values=array_from_host(zeros(Int32, 1)))
+    k2, v2 = array_from_host(rand(Int32, 2000)), array_from_host(rand(Int32, 2000))
+    @test_throws ArgumentError AK.sort_by_key!(k2, v2; alg=SORT_ALG, workspace=AK.workspace(
+        AK.sort_by_key!, array_from_host(rand(Int32, 4000)), array_from_host(rand(Int32, 4000));
+        alg=SORT_ALG))
     @test Array(k) == kh
 
     # Mismatched sizes
@@ -464,20 +450,13 @@ if TEST_KERNELS
     # Testing different settings
     ix = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    AK.sortperm!(ix,
-                 v,
-                 lt=(>), by=abs, rev=true,
-                 alg=AK.MergeSort(block_size=64),
-                 temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sortperm!, ix, v; lt=(>), by=abs, rev=true, alg=AK.MergeSort(block_size=64))
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
 
     v = array_from_host(1:10_000, Float32)
-    ix = AK.sortperm(v,
-                     lt=(>), by=abs, rev=true,
-                     alg=AK.MergeSort(block_size=64),
-                     temp=array_from_host(1:10_000, Int))
+    ix = with_workspace(AK.sortperm, v; lt=(>), by=abs, rev=true, alg=AK.MergeSort(block_size=64))
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
@@ -524,11 +503,8 @@ if AK._runs_threads(BACKEND)
     # Testing different settings
     ix = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    AK.sortperm!(ix,
-                 v,
-                 lt=(>), by=abs, rev=true,
-                 alg=AK.CPUThreads.SampleSort(max_tasks=64),
-                    temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sortperm!, ix, v;
+                   lt=(>), by=abs, rev=true, alg=AK.CPUThreads.SampleSort(max_tasks=64))
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
@@ -574,20 +550,15 @@ if TEST_KERNELS
     # Testing different settings
     ix = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    AK.sortperm!(ix,
-                 v,
-                 lt=(>), by=abs, rev=true,
-                 alg=AK.MergeSort(lowmem=true, block_size=64),
-                            temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sortperm!, ix, v;
+                   lt=(>), by=abs, rev=true, alg=AK.MergeSort(lowmem=true, block_size=64))
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
 
     v = array_from_host(1:10_000, Float32)
-    ix = AK.sortperm(v,
-                     lt=(>), by=abs, rev=true,
-                     alg=AK.MergeSort(lowmem=true, block_size=64),
-                                temp=array_from_host(1:10_000, Int))
+    ix = with_workspace(AK.sortperm, v;
+                        lt=(>), by=abs, rev=true, alg=AK.MergeSort(lowmem=true, block_size=64))
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
@@ -632,20 +603,13 @@ end
     # Testing different settings
     ix = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    AK.sortperm!(ix,
-                v;
-                alg=SETTINGS_ALG,
-                lt=(>), by=abs, rev=true,
-                temp=array_from_host(1:10_000, Int32))
+    with_workspace(AK.sortperm!, ix, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
 
     v = array_from_host(1:10_000, Float32)
-    ix = AK.sortperm(v;
-                    alg=SETTINGS_ALG,
-                    lt=(>), by=abs, rev=true,
-                    temp=array_from_host(1:10_000, Int))
+    ix = with_workspace(AK.sortperm, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
@@ -721,16 +685,16 @@ if TEST_KERNELS
         @test res
     end
 
-    # ── temp kwarg: buffer reuse gives identical result ───────────────────────
+    # ── workspace: buffer reuse gives identical result ───────────────────────
     n = 20_000
     Random.seed!(321)
     v1   = array_from_host(rand(Float32, n))
     v2   = copy(v1)
     ix1  = array_from_host(zeros(Int, n))
     ix2  = array_from_host(zeros(Int, n))
-    temp = array_from_host(zeros(Int, n))
-    AK.sortperm!(ix1, v1; alg=SORT_ALG, temp)
-    AK.sortperm!(ix2, v2; alg=SORT_ALG, temp)
+    ws   = AK.workspace(AK.sortperm!, ix1, v1; alg=SORT_ALG)
+    AK.sortperm!(ix1, v1; alg=SORT_ALG, workspace=ws)
+    AK.sortperm!(ix2, v2; alg=SORT_ALG, workspace=ws)
     @test Array(ix1) == Array(ix2)
 
     # ── Exact match against Base.sortperm ────────────────────────────────────
@@ -845,12 +809,11 @@ end
         @test Array(AK.sort!(array_from_host(Int32[42]); alg=AK.RadixSort())) == Int32[42]
         @test Array(AK.sort!(array_from_host(Int32[2, 1]); alg=AK.RadixSort())) == Int32[1, 2]
 
-        # ── temp kwarg: preallocated buffer ───────────────────────────────────
+        # ── workspace: preallocated buffers ───────────────────────────────────
         n    = 50_000
         v_h  = rand(Float32, n)
         v    = array_from_host(v_h)
-        temp = similar(v)
-        AK.sort!(v; alg=AK.RadixSort(), temp)
+        with_workspace(AK.sort!, v; alg=AK.RadixSort())
         @test Array(v) == sort(v_h)
 
         # ── Out-of-place ──────────────────────────────────────────────────────
@@ -926,13 +889,13 @@ end
         @test Array(AK.sort(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sort(A_h; dims=2)
     end
 
-    # by, lt, order and temp act on the values within each slice
+    # by, lt, order and a workspace act on the values within each slice
     A_h = rand(Float32, 300, 700)
     A   = array_from_host(A_h)
     @test Array(AK.sort(A; alg=SORT_ALG, dims=1, by=x->-x)) == sort(A_h; dims=1, by=x->-x)
     @test Array(AK.sort(A; alg=SORT_ALG, dims=2, lt=(>))) == sort(A_h; dims=2, lt=(>))
     @test Array(AK.sort(A; alg=SORT_ALG, dims=2, order=Base.Order.Reverse)) == sort(A_h; dims=2, order=Base.Order.Reverse)
-    @test Array(AK.sort(A; alg=SORT_ALG, dims=2, temp=similar(A))) == sort(A_h; dims=2)
+    @test Array(with_workspace(AK.sort, A; alg=SORT_ALG, dims=2)) == sort(A_h; dims=2)
     if TEST_KERNELS
         @test Array(AK.sort(A; alg=AK.MergeSort(block_size=64), dims=1)) == sort(A_h; dims=1)
         @test_throws ArgumentError AK.sort(A; dims=1, alg=AK.RadixSort())
@@ -1003,12 +966,12 @@ end
         @test Array(AK.sortperm(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sortperm(A_h; dims=2)
     end
 
-    # by, order, temp and the low-memory GPU path
+    # by, order, a workspace and the low-memory GPU path
     A_h = rand(Float32, 300, 700)
     A   = array_from_host(A_h)
     @test Array(AK.sortperm(A; alg=SORT_ALG, dims=1, by=x->-x)) == sortperm(A_h; dims=1, by=x->-x)
     @test Array(AK.sortperm(A; alg=SORT_ALG, dims=2, order=Base.Order.Reverse)) == sortperm(A_h; dims=2, order=Base.Order.Reverse)
-    @test Array(AK.sortperm(A; alg=SORT_ALG, dims=2, temp=similar(A, Int))) == sortperm(A_h; dims=2)
+    @test Array(with_workspace(AK.sortperm, A; alg=SORT_ALG, dims=2)) == sortperm(A_h; dims=2)
     if TEST_KERNELS
         @test Array(AK.sortperm(A; dims=2, alg=AK.MergeSort(lowmem=true))) == sortperm(A_h; dims=2)
         @test Array(AK.sortperm(A; dims=1, alg=AK.MergeSort(lowmem=true, block_size=64))) == sortperm(A_h; dims=1)

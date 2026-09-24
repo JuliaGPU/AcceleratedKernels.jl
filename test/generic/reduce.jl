@@ -145,14 +145,8 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
     end
 
     # Testing different settings
-    AK.reduce(
-        (x, y) -> x + 1,
-        array_from_host(rand(Int32, 10_000));
-        alg=reduce_alg(block_size=64, switch_below=50, max_tasks=10, min_elems=100),
-        init=Int32(0),
-        neutral=Int64(0),
-        temp=array_from_host(zeros(Int64, 10_000)),
-    )
+    with_workspace(AK.reduce, (x, y) -> x + 1, array_from_host(rand(Int32, 10_000));
+                   alg=reduce_alg(block_size=64, switch_below=50, max_tasks=10, min_elems=100), init=Int32(0), neutral=Int64(0))
     AK.reduce(
         (x, y) -> x + 1,
         array_from_host(rand(Int32, 10_000));
@@ -591,18 +585,17 @@ end
     end
 
     # Testing different settings, enforcing change of type between f and op
-    f(s, temp) = AK.mapreduce(
+    f(s) = with_workspace(
+        AK.mapreduce,
         p -> (p.x, p.y),
         (a, b) -> (a[1] < b[1] ? a[1] : b[1], a[2] < b[2] ? a[2] : b[2]),
         s;
         alg=reduce_alg(block_size=64, switch_below=50, max_tasks=10, min_elems=100),
         init=(typemax(Float32), typemax(Float32)),
         neutral=(typemax(Float32), typemax(Float32)),
-        temp=temp,
     )
     v = array_from_host([Point(rand(Float32), rand(Float32)) for _ in 1:10_042])
-    temp = similar(v, Tuple{Float32, Float32})
-    f(v, temp)
+    f(v)
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.mapreduce(-, +, v; alg=REDUCE_ALG, init=10, bad=:kwarg)
