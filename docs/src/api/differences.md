@@ -21,3 +21,5 @@ GPU arrays on top of AcceleratedKernels and reproduces Base's results. The diffe
 | the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
 | `accumulate(op, A; dims, init)` with `dims > ndims(A)` | copies `A`, ignoring `init` | applies `init` to every element |
 | a non-associative `op` in a scan, such as `-` | works (a sequential recurrence) | unsupported |
+| `findall(pred, A)` of a 0-dimensional `A` | `Int` indices | `CartesianIndex{0}`, `keys(A)`'s, unless `items=LinearIndices(A)` |
+| `any`, `all` with a predicate that returns `missing` | three-valued logic | `ArgumentError`: the predicate must return a `Bool` |

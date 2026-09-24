@@ -2,12 +2,6 @@ function ispow2(x)
     count_ones(x) == 1
 end
 
-# Helper function to check whether the package cpu implementation of an algorithm should be used
-const CPU_BACKEND = get_backend([])
-@inline function use_gpu_algorithm(backend, prefer_threads)
-    return backend != CPU_BACKEND || !prefer_threads
-end
-
 # A kernel's input, marked for loads through the read-only cache as `@Const` does, where that
 # compiles: for a device array or a view of one, with a bits-type element type.
 # WORKAROUND(CUDA.jl): CUDA.jl's cached load (`const_arrayref`) has no path for a bits union such

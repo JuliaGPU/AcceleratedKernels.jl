@@ -18,36 +18,10 @@ oneAPI.@device_override AK._decoupled_fence() =
 AK.scan_tuning(::oneAPIBackend, ::Type) = AK.ScanTuning(block_size=64)
 
 
-# On oneAPI, use the MapReduce algorithm by default as on some Intel GPUs ConcurrentWrite hangs
-# the device.
-function AK.any(
-    pred, v::AbstractArray, backend::oneAPIBackend;
-
-    # Algorithm choice
-    alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-    kwargs...
-)
-    AK._any_impl(
-        pred, v, backend;
-        alg,
-        kwargs...
-    )
-end
-
-
-function AK.all(
-    pred, v::AbstractArray, backend::oneAPIBackend;
-
-    # Algorithm choice
-    alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-    kwargs...
-)
-    AK._all_impl(
-        pred, v, backend;
-        alg,
-        kwargs...
-    )
-end
+# WORKAROUND(oneAPI): some Intel GPUs hang when many threads write one global location, and the
+# affected devices are not known, so `any`/`all` use `ViaReduce` on every oneAPI device (as
+# oneAPI.jl did). Once the devices are known, declare only those.
+AK._supports_concurrent_write(::oneAPIBackend) = false
 
 
 end   # module oneAPIExt

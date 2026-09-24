@@ -27,7 +27,7 @@ const _testset_setup_code = quote
     global array_from_host
     array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
     function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
-        d_arr = d_arr = if prefer_threads # Don't use KA zeros if not using KA algorithms
+        d_arr = if !TEST_KERNELS    # host arrays for the threaded algorithms
             zeros(isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
         else
             KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
@@ -52,7 +52,6 @@ if in_test_env("CUDACore")
         using CUDACore
         global BACKEND = CUDABackend()
         global MAX_BLOCK_SIZE = Int(CUDACore.attribute(CUDACore.device(), CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK))
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = true
@@ -69,7 +68,6 @@ if in_test_env("AMDGPU")
         using AMDGPU
         global BACKEND = ROCBackend()
         global MAX_BLOCK_SIZE = 1024
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = true
@@ -85,7 +83,6 @@ if in_test_env("Metal")
         using Metal
         global BACKEND = MetalBackend()
         global MAX_BLOCK_SIZE = Int(Metal.device().maxThreadsPerThreadgroup.width)
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
@@ -101,7 +98,6 @@ if in_test_env("oneAPI")
         using oneAPI
         global BACKEND = oneAPIBackend()
         global MAX_BLOCK_SIZE = Int(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize)
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
@@ -118,7 +114,6 @@ if in_test_env("OpenCL")
         using OpenCL
         global BACKEND = OpenCLBackend()
         global MAX_BLOCK_SIZE = Int(OpenCL.cl.device().max_work_group_size)
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
         global TEST_DL = false
@@ -134,7 +129,6 @@ if args.custom["cpu-ka"] !== nothing
     push!(backends, "cpu-ka" => quote
         global BACKEND = get_backend([])
         global MAX_BLOCK_SIZE = 1024
-        global prefer_threads = false   # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = true      # ... on the host backend
         global TEST_DL = false
@@ -147,7 +141,6 @@ if args.custom["cpu"] !== nothing || isempty(backends)
     push!(backends, "cpu" => quote
         global BACKEND = get_backend([])
         global MAX_BLOCK_SIZE = 1024
-        global prefer_threads = true    # Also used to determine whether to run the CPU or GPU tests
         global TEST_KERNELS = false
         global HOST_KERNELS = false
         global TEST_DL = false

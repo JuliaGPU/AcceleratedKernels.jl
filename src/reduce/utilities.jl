@@ -1,3 +1,9 @@
+# `f`, required to return a `Bool` (Base's `_bool`), for `count` and the predicates
+struct _BoolValued{F} <: Function
+    f::F
+end
+@inline (c::_BoolValued)(x) = c.f(x)::Bool
+
 # The reduction contract's machinery (see `mapreducedim!`): the accumulator type, the value that
 # seeds partial results, and how a finished partial becomes an output value.
 

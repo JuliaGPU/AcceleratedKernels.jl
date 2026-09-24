@@ -61,6 +61,23 @@ Supertype of the scan (`accumulate`) algorithms: [`ScanPrefixes`](@ref),
 """
 abstract type ScanAlgorithm <: Algorithm end
 
+"""
+    FindallAlgorithm <: Algorithm
+
+Supertype of the stream-compaction (`findall`) algorithms: [`ScanScatter`](@ref). `findall`
+also accepts [`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type FindallAlgorithm <: Algorithm end
+
+"""
+    PredicateAlgorithm <: Algorithm
+
+Supertype of the algorithms of `any` and `all`: [`ConcurrentWrite`](@ref) and
+[`ViaReduce`](@ref). They also accept
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type PredicateAlgorithm <: Algorithm end
+
 
 """
     AcceleratedKernels.CPUThreads
@@ -137,6 +154,15 @@ workgroups, since a block spins until an earlier one publishes its prefix. AK's 
 declare it for the backends where all three are known to hold.
 """
 _supports_lookback(::Backend) = false
+
+"""
+    _supports_concurrent_write(backend)
+
+Whether [`ConcurrentWrite`](@ref) is safe on `backend`: many threads store the same value to one
+global flag. Some Intel GPUs hang on that, and the affected devices are not known, so the oneAPI
+extension declares it unsupported for every oneAPI device.
+"""
+_supports_concurrent_write(::Backend) = true
 
 
 # Checks shared by the algorithm families

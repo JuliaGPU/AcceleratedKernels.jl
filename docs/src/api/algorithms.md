@@ -12,7 +12,8 @@ AcceleratedKernels.CPUThreads
 ```
 
 The algorithm types of each operation are documented with it, for [sorting](sort.md),
-[reductions](reduce.md) and [scans](accumulate.md).
+[reductions](reduce.md), [scans](accumulate.md), [`findall`](findall.md) and
+[`any`/`all`](predicates.md).
 
 #### How `Auto` chooses
 
@@ -22,7 +23,9 @@ host backend it chooses the family's `CPUThreads` algorithm, which runs on Julia
 it follows per-device tuning values: for sorting, `BitonicSort` for short arrays and slices,
 `RadixSort` for long whole arrays of the element types it supports, and `MergeSort` otherwise,
 subject to `Auto`'s requirements (`stable=true` by default); for reductions, `BlockReduce`; for
-scans, `ScanPrefixes` for whole arrays and `SliceScan` along `dims`.
+scans, `ScanPrefixes` for whole arrays and `SliceScan` along `dims`; for `findall`,
+`ScanScatter`; for `any`/`all`, `ConcurrentWrite`, or `ViaReduce` where concurrent writes are
+unsafe.
 
 Algorithms carry their settings as fields, and a field left at `nothing` takes the device's
 tuned value:
