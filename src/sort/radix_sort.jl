@@ -455,7 +455,7 @@ function _radix_sort!(
 
         shift32 = UInt32(shift)
         hist_kern!(hist, p1, shift32, descending, vitems; ndrange)
-        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
+        accumulate!(+, hist; backend, init=UInt32(0), inclusive=false, temp=acc_temp)
         scat_kern!(p2, p1, hist, shift32, descending, vitems; ndrange)
 
         p1, p2 = p2, p1

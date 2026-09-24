@@ -1,28 +1,11 @@
 function accumulate_nd!(
-    op, v::AbstractArray, backend::Backend;
+    op, v::AbstractArray, backend::Backend, alg::Union{SliceScan, CPUThreads.Partitioned};
     init,
     neutral,
     dims::Int,
     inclusive::Bool,
-
-    # CPU settings
-    max_tasks::Int,
-    min_elems::Int,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int,
 )
-    # Correctness checks
-    @argcheck block_size > 0
-    @argcheck ispow2(block_size)
-
     # Degenerate cases begin; order of priority matters
-
-    # Invalid dims
-    if dims < 1
-        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
-    end
 
     # Nothing to accumulate
     vsizes = size(v)
@@ -35,9 +18,11 @@ function accumulate_nd!(
 
     # Degenerate cases end
 
-    if !use_gpu_algorithm(backend, prefer_threads)
-        _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive, max_tasks, min_elems)
+    if alg isa CPUThreads.Partitioned
+        _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive,
+                                     max_tasks=alg.max_tasks, min_elems=alg.min_elems)
     else
+        block_size = alg.block_size
         # On GPUs we have two parallelisation approaches, based on which dimension has more elements:
         #   - If the dimension we are accumulating along has more elements than the "outer" dimensions,
         #     (e.g. accumulate(+, rand(3, 1000), dims=2)), we use a block of threads per outer

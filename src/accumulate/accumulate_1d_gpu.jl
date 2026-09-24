@@ -273,25 +273,14 @@ end
 
 # DecoupledLookback algorithm
 function accumulate_1d_gpu!(
-    op, v::AbstractArray, backend::Backend, ::DecoupledLookback;
+    op, v::AbstractArray, backend::Backend, alg::DecoupledLookback;
     init,
     neutral,
     inclusive::Bool,
-
-    # CPU settings - not used
-    max_tasks::Int,
-    min_elems::Int,
-
-    # GPU settings
-    block_size::Int,
-    items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )
-    # Correctness checks
-    @argcheck block_size > 0
-    @argcheck ispow2(block_size)
-    @argcheck items_per_thread > 0
+    block_size, items_per_thread = alg.block_size, alg.items_per_thread
 
     # Nothing to accumulate
     if length(v) == 0
@@ -344,25 +333,14 @@ end
 
 # ScanPrefixes algorithm
 function accumulate_1d_gpu!(
-    op, v::AbstractArray, backend, ::ScanPrefixes;
+    op, v::AbstractArray, backend, alg::ScanPrefixes;
     init,
     neutral,
     inclusive::Bool,
-
-    # CPU settings - not used
-    max_tasks::Int,
-    min_elems::Int,
-
-    # GPU settings
-    block_size::Int,
-    items_per_thread::Int,
     temp::Union{Nothing, AbstractArray},
     temp_flags::Union{Nothing, AbstractArray},
 )
-    # Correctness checks
-    @argcheck block_size > 0
-    @argcheck ispow2(block_size)
-    @argcheck items_per_thread > 0
+    block_size, items_per_thread = alg.block_size, alg.items_per_thread
 
     # Nothing to accumulate
     if length(v) == 0

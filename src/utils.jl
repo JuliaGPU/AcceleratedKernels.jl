@@ -8,12 +8,6 @@ const CPU_BACKEND = get_backend([])
     return backend != CPU_BACKEND || !prefer_threads
 end
 
-# Backends may request more than the historical default of two items per thread.
-@inline default_items_per_thread(backend) = 1
-
-# Elements each thread scans in the GPU prefix-scan block kernel.
-@inline default_scan_items_per_thread(backend) = 8
-
 # Local memory that kernels with a tunable footprint may use: the minimum an OpenCL device must
 # provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
 const LOCAL_MEMORY_BUDGET = 32 * 1024
@@ -21,13 +15,6 @@ const LOCAL_MEMORY_BUDGET = 32 * 1024
 # The default of every `init` keyword: no initial value given. As in Base, this differs from
 # `init=nothing`, which is an explicit initial value.
 struct _NoInit end
-
-# Keep the default shared-memory use within the local-memory budget.
-@inline function default_scan_items_per_thread(backend, ::Type{T}, block_size) where T
-    block_size > 0 || return default_scan_items_per_thread(backend)
-    max_items = max(1, LOCAL_MEMORY_BUDGET ÷ (block_size * max(sizeof(T), 1)) - 1)
-    min(default_scan_items_per_thread(backend), max_items)
-end
 
 """
     struct TypeWrap{T} end

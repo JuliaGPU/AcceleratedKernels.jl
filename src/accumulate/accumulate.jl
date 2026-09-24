@@ -1,7 +1,4 @@
-# Available accumulation algorithms
-abstract type AccumulateAlgorithm end
-struct DecoupledLookback <: AccumulateAlgorithm end
-struct ScanPrefixes <: AccumulateAlgorithm end
+include("tuning.jl")
 
 
 # Helpers
@@ -28,51 +25,25 @@ include("accumulate_nd.jl")
 
 
 """
-    accumulate!(
-        op, v::AbstractArray, backend::Backend=get_backend(v);
-        init,
-        neutral=neutral_element(op, eltype(v)),
-        dims::Union{Nothing, Int}=nothing,
-        inclusive::Bool=true,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=2,
-
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        items_per_thread::Union{Nothing, Int}=nothing,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
+    accumulate!(op, v::AbstractArray; kwargs...) -> v
+    accumulate!(op, dst::AbstractArray, src::AbstractArray; kwargs...) -> dst
 
     accumulate!(
-        op, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(dst);
+        op, dst, src;
+        backend=nothing,
         init,
         neutral=neutral_element(op, eltype(dst)),
-        dims::Union{Nothing, Int}=nothing,
+        dims::Union{Nothing, Integer}=nothing,
         inclusive::Bool=true,
-
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=2,
-
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        items_per_thread::Union{Nothing, Int}=nothing,
+        alg::Algorithm=Auto(),
         temp::Union{Nothing, AbstractArray}=nothing,
         temp_flags::Union{Nothing, AbstractArray}=nothing,
     )
 
 Compute accumulated running totals along a sequence by applying a binary operator to all elements
 up to the current one; often used in GPU programming as a first step in finding / extracting
-subsets of data.
+subsets of data. The first form scans `v` in place; the second writes the scan of `src` to `dst`
+(which may be `src` itself).
 
 **Other names**: prefix sum, `thrust::scan`, cumulative sum; inclusive (or exclusive) if the first
 element is included in the accumulation (or not).
@@ -80,42 +51,25 @@ element is included in the accumulation (or not).
 The operator `op` must be associative, as elements are combined in parallel; it does not need to
 be commutative, as every combination keeps the elements in order (e.g. matrix products are fine).
 
-For compatibility with the `Base.accumulate!` function, we provide the two-array interface too, but
-we do not need the constraint of `dst` and `src` being different; to minimise memory use, we
-recommend using the single-array interface (the first one above).
+With `dims=nothing` the array is scanned in linear order, whatever its number of dimensions; with
+an integer `dims`, each slice along that dimension is scanned independently.
 
-## CPU
-Use at most `max_tasks` threads with at least `min_elems` elements per task.
+`alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
+AcceleratedKernels.CPUThreads.Partitioned) on the host, and on GPUs [`ScanPrefixes`](@ref) for
+whole arrays and [`SliceScan`](@ref) along `dims`, with the device's settings.
+[`DecoupledLookback`](@ref) is available on backends that support it. `backend` is derived from
+`dst` and `src`.
 
-Note that accumulation is typically a memory-bound operation, so multithreaded accumulation only
-becomes faster if it is a more compute-heavy operation to hide memory latency - that includes:
-- Accumulating more complex types, e.g. accumulation of tuples / structs / strings.
-- More complex operators, e.g. `op=custom_complex_function`.
+On the host, accumulation is typically a memory-bound operation, so multithreaded accumulation
+only becomes faster for more compute-heavy operations that hide memory latency, e.g. accumulating
+tuples or structs, or expensive operators.
 
-## GPU
-For the 1D case (`dims=nothing`), the `alg` can be one of the following:
-- `ScanPrefixes()`: the default algorithm that scans the prefixes of each block, with no lookback; it
-  has better performance than `DecoupledLookback()` for large block sizes, and small to medium arrays,
-  but poorer scaling for many blocks; there is no performance degradation below `block_size^2`
-  elements, but it remains fast well into millions of elements.
-- `DecoupledLookback()`: a more complex algorithm using opportunistic lookback to reuse earlier
-  blocks' results; requires device-level memory consistency guarantees (which Apple Metal does not
-  provide) and atomic orderings; theoretically more scalable for many blocks.
-
-A different, unique algorithm is used for the multi-dimensional case (`dims` is an integer).
-
-The `block_size` should be a power of 2 and greater than 0. `items_per_thread` controls how many
-elements each thread processes per block and does not need to be a power of 2. Its default is at
-most 8, reduced for wide element types to limit shared-memory use.
-
-The temporaries are only used for the 1D case (`dims=nothing`): `temp` stores per-block aggregates;
-`temp_flags` is only used for the `DecoupledLookback()` algorithm for flagging if blocks are ready;
-they should both have at least `cld(length(v), block_size * items_per_thread)` elements, using the
-effective default described above when `items_per_thread` is omitted.
-Also, `eltype(v) === eltype(temp)` is required; the elements in `temp_flags` can be any integers,
-but `UInt8` is used by default to reduce memory usage. Multi-block exclusive scans with
-`DecoupledLookback()` use two epilogue kernels to shift the result in place; they reuse `temp` for
-tile-boundary values and do not allocate a full-array copy.
+The temporaries only apply to whole-array GPU scans: `temp` stores per-block aggregates, with
+`eltype(temp) === eltype(dst)`; `temp_flags` stores `DecoupledLookback`'s block flags (any
+integer type). Both need at least `cld(length(dst), block_size * items_per_thread)` elements
+of the resolved algorithm. Multi-block exclusive scans with `DecoupledLookback` use two epilogue
+kernels to shift the result in place; they reuse `temp` for tile-boundary values and do not
+allocate a full-array copy.
 
 # Examples
 Example computing an inclusive prefix sum (the typical GPU "scan"):
@@ -124,126 +78,66 @@ import AcceleratedKernels as AK
 using oneAPI
 
 v = oneAPI.ones(Int32, 100_000)
-AK.accumulate!(+, v, init=0)
+AK.accumulate!(+, v; init=0)
 
-# Use a different algorithm
-AK.accumulate!(+, v, alg=AK.DecoupledLookback())
+# Choose the algorithm and its settings
+AK.accumulate!(+, v; init=0, alg=AK.ScanPrefixes(block_size=512))
 ```
 """
+function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
+    _accumulate_impl!(op, v, v, _resolve_backend(backend, v); kwargs...)
+end
+
 function accumulate!(
-    op, v::AbstractArray, backend::Backend=get_backend(v);
-    init,
+    op, dst::AbstractArray, src::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
     kwargs...
 )
-    _accumulate_impl!(
-        op, v, backend;
-        init,
-        kwargs...
-    )
+    _accumulate_impl!(op, dst, src, _resolve_backend(backend, dst, src); kwargs...)
 end
 
 
-function accumulate!(
-    op, dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(dst);
-    init,
-    kwargs...
-)
-    copyto!(dst, src)
-    _accumulate_impl!(
-        op, dst, backend;
-        init,
-        kwargs...
-    )
-end
-
-
+# Scan `src` into `v` (which may be `src`), after checking the algorithm
 function _accumulate_impl!(
-    op, v::AbstractArray, backend::Backend;
+    op, v::AbstractArray, src::AbstractArray, backend::Backend;
     init,
     neutral=neutral_element(op, eltype(v)),
-    dims::Union{Nothing, Int}=nothing,
+    dims::Union{Nothing, Integer}=nothing,
     inclusive::Bool=true,
-
-    alg::AccumulateAlgorithm=ScanPrefixes(),
-
-    # CPU settings
-    max_tasks::Int=Threads.nthreads(),
-    min_elems::Int=2,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int=256,
-    items_per_thread::Union{Nothing, Int}=nothing,
+    alg::Algorithm=Auto(),
     temp::Union{Nothing, AbstractArray}=nothing,
     temp_flags::Union{Nothing, AbstractArray}=nothing,
 )
-    if isnothing(dims)
-        return if use_gpu_algorithm(backend, prefer_threads)
-            items_per_thread = something(
-                items_per_thread,
-                default_scan_items_per_thread(backend, eltype(v), block_size),
-            )
-            accumulate_1d_gpu!(
-                op, v, backend, alg;
-                init, neutral, inclusive,
-                max_tasks, min_elems,
-                block_size, items_per_thread, temp, temp_flags,
-            )
+    dims isa Integer && dims < 1 &&
+        throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
+    a = _resolve_scan(alg, backend, eltype(v), dims)
+    if dims !== nothing && (temp !== nothing || temp_flags !== nothing)
+        throw(ArgumentError(
+            "`temp` and `temp_flags` only apply to whole-array scans (`dims=nothing`)"))
+    end
+    v === src || copyto!(v, src)
+    if dims === nothing
+        if a isa CPUThreads.Partitioned
+            accumulate_1d_cpu!(op, v, backend, a; init, neutral, inclusive)
         else
-            accumulate_1d_cpu!(
-                op, v, backend, alg;
-                init, neutral, inclusive,
-                max_tasks, min_elems,
-                block_size, temp, temp_flags,
-            )
+            accumulate_1d_gpu!(op, v, backend, a; init, neutral, inclusive, temp, temp_flags)
         end
     else
-        return accumulate_nd!(
-            op, v, backend;
-            init, neutral, dims, inclusive,
-            max_tasks, min_elems, prefer_threads,
-            block_size,
-        )
+        accumulate_nd!(op, v, backend, a; init, neutral, dims=Int(dims), inclusive)
     end
+    return v
 end
 
 
 """
-    accumulate(
-        op, v::AbstractArray, backend::Backend=get_backend(v);
-        init,
-        neutral=neutral_element(op, eltype(v)),
-        dims::Union{Nothing, Int}=nothing,
-        inclusive::Bool=true,
+    accumulate(op, v::AbstractArray; init, kwargs...)
 
-        # CPU settings
-        max_tasks::Int=Threads.nthreads(),
-        min_elems::Int=2,
-
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        items_per_thread::Union{Nothing, Int}=nothing,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Out-of-place version of [`accumulate!`](@ref).
+Out-of-place version of [`accumulate!`](@ref), with the same keywords; the result's element type
+is `Base.promote_op(op, eltype(v), typeof(init))`.
 """
-function accumulate(
-    op, v::AbstractArray, backend::Backend=get_backend(v);
-    init,
-    kwargs...
-)
+function accumulate(op, v::AbstractArray; init, kwargs...)
     dst_type = Base.promote_op(op, eltype(v), typeof(init))
     vcopy = similar(v, dst_type)
     copyto!(vcopy, v)
-    accumulate!(
-        op, vcopy, backend;
-        init,
-        kwargs...
-    )
-    vcopy
+    accumulate!(op, vcopy; init, kwargs...)
 end

@@ -1,27 +1,18 @@
 function accumulate_1d_cpu!(
-    op, v::AbstractArray, backend::Backend, alg;
+    op, v::AbstractArray, backend::Backend, alg::CPUThreads.Partitioned;
     init,
     neutral,
     inclusive::Bool,
-
-    # CPU settings
-    max_tasks::Int,
-    min_elems::Int,
-
-    # GPU settings - not used
-    block_size::Int,
-    temp::Union{Nothing, AbstractArray},
-    temp_flags::Union{Nothing, AbstractArray},
 )
     # Trivial case
     if length(v) == 0
         return v
     end
 
-    # Sanity checks - for exclusive accumulation, each task section / chunk must have at least 2
-    # elements to be correct (otherwise we have to include more complicated logic in the threaded
-    # code); it makes no sense to have each task accumulate only 1 element anyways
-    @argcheck min_elems >= 2
+    # For exclusive accumulation, each task section / chunk must have at least 2 elements to be
+    # correct (otherwise we have to include more complicated logic in the threaded code); the
+    # resolution checks `min_elems`
+    max_tasks, min_elems = alg.max_tasks, alg.min_elems
 
     # First accumulate chunks independently
     tp = TaskPartitioner(length(v), max_tasks, min_elems)

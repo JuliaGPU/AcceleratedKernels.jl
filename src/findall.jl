@@ -115,7 +115,7 @@ function findall_gpu(
     kernel! = findall_block!(backend, block_size)
     kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
             ndrange=num_blocks * block_size)
-    accumulate!(+, block_counts, backend; init=0)
+    accumulate!(+, block_counts; backend, init=0)
     n = @allowscalar block_counts[end]
 
     out = similar(bools, I, n)

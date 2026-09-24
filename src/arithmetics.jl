@@ -129,23 +129,10 @@ end
 
 
 """
-    cumsum(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=zero(eltype(src)),
-        neutral=zero(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+    cumsum(src::AbstractArray; init=zero(eltype(src)), neutral=zero(eltype(src)), kwargs...)
 
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Cumulative sum of elements of an array, with optional `init` and `dims`. Arguments are the same as
-for [`accumulate`](@ref).
+Cumulative sum of elements of an array, with optional `init` and `dims`. The keywords are those
+of [`accumulate`](@ref).
 
 # Examples
 Simple cumulative sum of elements in a vector:
@@ -163,39 +150,16 @@ m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.cumsum(m, dims=1)
 ```
 """
-function cumsum(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=zero(eltype(src)),
-    neutral=zero(eltype(src)),
-    kwargs...
-)
-    accumulate(
-        +, src, backend;
-        init, neutral,
-        inclusive=true,
-        kwargs...
-    )
+function cumsum(src::AbstractArray; init=zero(eltype(src)), neutral=zero(eltype(src)), kwargs...)
+    accumulate(+, src; init, neutral, inclusive=true, kwargs...)
 end
 
 
 """
-    cumprod(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=one(eltype(src)),
-        neutral=one(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+    cumprod(src::AbstractArray; init=one(eltype(src)), neutral=one(eltype(src)), kwargs...)
 
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Cumulative product of elements of an array, with optional `init` and `dims`. Arguments are the same
-as for [`accumulate`](@ref).
+Cumulative product of elements of an array, with optional `init` and `dims`. The keywords are
+those of [`accumulate`](@ref).
 
 # Examples
 Simple cumulative product of elements in a vector:
@@ -213,16 +177,6 @@ m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
 p = AK.cumprod(m, dims=1)
 ```
 """
-function cumprod(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=one(eltype(src)),
-    neutral=one(eltype(src)),
-    kwargs...
-)
-    accumulate(
-        *, src, backend;
-        init, neutral,
-        inclusive=true,
-        kwargs...
-    )
+function cumprod(src::AbstractArray; init=one(eltype(src)), neutral=one(eltype(src)), kwargs...)
+    accumulate(*, src; init, neutral, inclusive=true, kwargs...)
 end
