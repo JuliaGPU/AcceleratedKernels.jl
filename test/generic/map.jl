@@ -32,3 +32,36 @@
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.map(x -> x^2, x; prefer_threads, bad=:kwarg)
 end
+
+
+@testset "map multi-arg" begin
+    Random.seed!(0)
+
+    a = array_from_host(rand(Float32, 1000))
+    b = array_from_host(rand(Float32, 1000))
+    c = array_from_host(rand(Float32, 1000))
+    ah, bh, ch = Array(a), Array(b), Array(c)
+
+    # two and three source arrays, out-of-place
+    @test Array(AK.map((x, y) -> x + y, a, b; prefer_threads)) == map(+, ah, bh)
+    @test Array(AK.map((x, y, z) -> x * y + z, a, b, c; prefer_threads)) ==
+          map((x, y, z) -> x * y + z, ah, bh, ch)
+
+    # eltype-changing multi-arg map
+    @test Array(AK.map((x, y) -> x > y, a, b; prefer_threads)) == map((x, y) -> x > y, ah, bh)
+
+    # in-place, multiple sources
+    d = array_from_host(zeros(Float32, 1000))
+    AK.map!((x, y) -> x - y, d, a, b; prefer_threads)
+    @test Array(d) == map(-, ah, bh)
+
+    # explicit trailing backend argument
+    backend = get_backend(a)
+    @test Array(AK.map(+, a, b, backend; prefer_threads)) == map(+, ah, bh)
+    e = array_from_host(zeros(Float32, 1000))
+    AK.map!(+, e, a, b, backend; prefer_threads)
+    @test Array(e) == map(+, ah, bh)
+
+    # mismatched axes are rejected
+    @test_throws DimensionMismatch AK.map(+, a, array_from_host(rand(Float32, 999)); prefer_threads)
+end
