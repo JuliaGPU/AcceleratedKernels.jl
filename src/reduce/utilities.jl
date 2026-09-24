@@ -146,6 +146,24 @@ _AccOp{A}(op::OP) where {A, OP} = _AccOp{A, OP}(op)
 @inline _unlane(x) = x
 @inline _unlane(x::_Lane) = x.value
 
+# Scans keep elements and partial results in one array or tile: an element enters the seed's
+# representation with `_lift` (partials pass through), and a partial is stored in an array of
+# element type `E` with `_lower` (as a lane only in arrays of lanes).
+@inline _lift(neutral, x) = x
+@inline _lift(::_Lane{T}, x) where {T} = _Lane{T}(x)
+@inline _lift(::_Lane{T}, x::_Lane{T}) where {T} = x
+@inline _lower(::Type{E}, p) where {E} = _unlane(p)
+@inline _lower(::Type{E}, p) where {E <: _Lane} = p
+
+# Store the partial `p` in `v[i]`, except an empty lane where elements are stored (a scan's
+# carry pass fills that element later; its value field may not even be defined)
+@inline function _store!(v, i, p)
+    if !(p isa _Lane) || eltype(v) <: _Lane || _valid(p)
+        @inbounds v[i] = _lower(eltype(v), p)
+    end
+    return nothing
+end
+
 # The seed of every partial result with accumulator type `A`: the caller's `neutral`, else
 # GPUArraysCore's neutral element for `op` when it has one, else an empty lane. A seed that is not
 # a lane stands for the accumulator type, so an abstract one (only on the host) is a lane: holding

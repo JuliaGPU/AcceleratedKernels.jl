@@ -17,3 +17,7 @@ GPU arrays on top of AcceleratedKernels and reproduces Base's results. The diffe
 | an `init` that is not a neutral element of `op` | outside the contract: `init` must be neutral, and it is unspecified whether it is used for non-empty collections | any value, applied exactly once |
 | `reduce(op, A; dims)` for an `op` without `Base.reducedim_init`, such as a closure | `MethodError` | works |
 | a non-commutative `op` in a reduction | works (elements keep their order) | unsupported |
+| the running-value type of `accumulate!(op, B, A)` | depends on the code path: the fold type from `init` or the elements for vectors and `dims=1`, `eltype(B)` along `dims ≥ 2` | the fold type from `eltype(B)` joined with `init`'s type and the elements (unless `acctype` is given), so for the usual operators not narrower than `eltype(B)` |
+| the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
+| `accumulate(op, A; dims, init)` with `dims > ndims(A)` | copies `A`, ignoring `init` | applies `init` to every element |
+| a non-associative `op` in a scan, such as `-` | works (a sequential recurrence) | unsupported |

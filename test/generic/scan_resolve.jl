@@ -100,6 +100,10 @@ end
         @test resolve_scan(AK.DecoupledLookback()) === AK.DecoupledLookback(256, 8)
     end
 
+    # Tiles of partial results: lanes (a Bool and a value) are wider than elements, so fewer fit
+    @test resolve_scan(AK.Auto(); T=Int64) === AK.ScanPrefixes(256, 8)
+    @test AK._resolve_scan(AK.Auto(), SRB, Int64, nothing, AK._Lane{Int64}) === AK.ScanPrefixes(256, 7)
+
     # Kernels need a bits-type element
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); T=String)
     @test_throws ArgumentError resolve_scan(AK.Auto(); T=Union{Missing, Int}, dims=1)
