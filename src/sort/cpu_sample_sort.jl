@@ -199,7 +199,9 @@ function _sample_sort!(
     end
     max_tasks = min(max_tasks, num_elements ÷ min_elems)
     if max_tasks <= 1 || num_elements < oversampling_factor * max_tasks
-        return Base.sort!(v; lt, by, rev, order)
+        # `temp` (a workspace's) is Base's scratch then
+        return temp isa Vector{eltype(v)} && length(temp) >= num_elements ?
+            Base.sort!(v; lt, by, rev, order, scratch=temp) : Base.sort!(v; lt, by, rev, order)
     end
 
     # Create a temporary buffer for the sorted output
@@ -306,26 +308,22 @@ end
 
 # Key/value sort on Julia threads: find the stable sorting permutation of the keys (of each slice
 # along `dims`), then gather keys and values through it.
-function _sample_sort_by_key!(keys, values, ord, dims; max_tasks, min_elems, temp_keys, temp_values)
-    for (v, temp) in ((keys, temp_keys), (values, temp_values))
-        isnothing(temp) && continue
-        @argcheck length(temp) == length(v)
-        @argcheck eltype(temp) === eltype(v)
-    end
-    ix = similar(keys, Int)
+function _sample_sort_by_key!(keys, values, ord, dims, bufs; max_tasks, min_elems)
+    ix = bufs.ix
     if dims isa Colon
-        _sample_sortperm!(vec(ix), vec(keys); order=ord, max_tasks, min_elems)
+        _sample_sortperm!(vec(ix), vec(keys); order=ord, max_tasks, min_elems,
+                          temp=get(bufs.perm, :temp, nothing))
     else
         _sample_sortperm_dims!(ix, keys, ord, dims; max_tasks, min_elems)
     end
-    _gather_through!(keys, ix, temp_keys; max_tasks, min_elems)
-    _gather_through!(values, ix, temp_values; max_tasks, min_elems)
+    _gather_through!(keys, ix, bufs.keys; max_tasks, min_elems)
+    _gather_through!(values, ix, bufs.values; max_tasks, min_elems)
     keys, values
 end
 
 # v[i] = v_old[ix[i]] for every linear index i
-function _gather_through!(v, ix, temp; max_tasks, min_elems)
-    old = isnothing(temp) ? copy(v) : copyto!(temp, v)
+function _gather_through!(v, ix, old; max_tasks, min_elems)
+    copyto!(old, v)
     task_partition(length(v), max_tasks, min_elems) do irange
         @inbounds for i in irange
             v[i] = old[ix[i]]
@@ -333,3 +331,8 @@ function _gather_through!(v, ix, temp; max_tasks, min_elems)
     end
     v
 end
+
+
+# The scratch of `_sample_sort!` over `n` elements of type `T`: the sorted output when the sort is
+# parallel, `Base.sort!`'s scratch when it is not
+_sample_sort_sizes(a::CPUThreads.SampleSort, ::Type{T}, n) where {T} = (; temp=_buffer(T, n))

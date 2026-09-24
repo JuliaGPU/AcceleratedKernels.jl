@@ -36,6 +36,11 @@ const _testset_setup_code = quote
         d_arr
     end
 
+    global with_workspace
+    # Call `op` with the workspace made for the same call
+    with_workspace(op, args...; kwargs...) =
+        op(args...; kwargs..., workspace=AK.workspace(op, args...; kwargs...))
+
     global valid_backend_eltypes
     valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
 end

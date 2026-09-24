@@ -125,7 +125,7 @@ end
 
 
 """
-    any(pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto())
+    any(pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto(), workspace=nothing)
 
 Check if any element of `v` satisfies the predicate `pred` (i.e. some `pred(v[i]) == true`); `pred`
 must return a `Bool`. Optimised differently to `mapreduce` due to shortcircuiting behaviour of
@@ -137,7 +137,8 @@ reduction.
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and on GPUs [`ConcurrentWrite`](@ref), or
 [`ViaReduce`](@ref) on backends where concurrent writes are unsafe (oneAPI). `backend` is derived
-from `v`; pass it for inputs that do not determine it, such as index ranges.
+from `v`; pass it for inputs that do not determine it, such as index ranges. `workspace` takes
+the scratch memory of a [`workspace`](@ref) made for the same call.
 
 On the host, multithreaded parallelisation is only worth it for large arrays, relatively expensive
 predicates, and/or rare occurrence of true; use `CPUThreads.Partitioned(; max_tasks, min_elems)`
@@ -165,11 +166,13 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 ```
 """
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
-             alg::Algorithm=Auto())
-    _check_bool_result(pred, v)
-    backend = _resolve_backend(backend, v)
-    _any(pred, v, backend, _resolve_predicate(alg, backend, eltype(v)))
+             alg::Algorithm=Auto(), workspace=nothing)
+    p = _predicate_plan(pred, |, v, backend, alg)
+    _any(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
 end
+
+_plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+    _predicate_plan(pred, |, v, backend, alg)
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # before launching, with an `ArgumentError` instead of the kernel's `TypeError`.
@@ -184,18 +187,36 @@ function _check_bool_result(pred, v)
     nothing
 end
 
-function _any(pred, v, backend, alg::ConcurrentWrite)
+# The plan of `any`/`all` (whose `ViaReduce` reduces with `op`): the flag of `ConcurrentWrite`,
+# or the scratch of the reduction
+function _predicate_plan(pred, op, v, backend, alg)
+    _check_bool_result(pred, v)
+    backend = _resolve_backend(backend, v)
+    a = _resolve_predicate(alg, backend, eltype(v))
+    sizes = if a isa ConcurrentWrite
+        (; flag=_buffer(Int8, 1))
+    elseif a isa ViaReduce
+        (; reduce=_mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
+                                   nothing, nothing, :, a.reduce).plan.sizes)
+    else
+        (;)
+    end
+    return _Plan(backend, a, sizes)
+end
+
+function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
     # `ndrange` must not be zero
     isempty(v) && return false
-    out = KernelAbstractions.zeros(backend, Int8, 1)
+    out = bufs.flag
+    fill!(out, Int8(0))
     _any_global!(backend, alg.block_size)(out, pred, v, ndrange=length(v))
     return @allowscalar(out[1]) != 0
 end
 
-_any(pred, v, backend, alg::ViaReduce) =
-    mapreduce(_BoolValued(pred), |, v; backend, init=false, alg=alg.reduce)
+_any(pred, v, backend, alg::ViaReduce, bufs) =
+    _mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
-function _any(pred, v, backend, alg::CPUThreads.Partitioned)
+function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
     overall = Ref(false)
     task_partition(length(v), alg.max_tasks, alg.min_elems) do irange
         for i in irange
@@ -212,7 +233,7 @@ end
 
 
 """
-    all(pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto())
+    all(pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto(), workspace=nothing)
 
 Check if all elements of `v` satisfy the predicate `pred` (i.e. all `pred(v[i]) == true`); `pred`
 must return a `Bool`. The keywords are those of [`any`](@ref).
@@ -238,13 +259,15 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 ```
 """
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
-             alg::Algorithm=Auto())
-    _check_bool_result(pred, v)
-    backend = _resolve_backend(backend, v)
-    _all(pred, v, backend, _resolve_predicate(alg, backend, eltype(v)))
+             alg::Algorithm=Auto(), workspace=nothing)
+    p = _predicate_plan(pred, &, v, backend, alg)
+    _all(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
 end
 
-_all(pred, v, backend, alg::ConcurrentWrite) = !_any(!pred, v, backend, alg)
-_all(pred, v, backend, alg::ViaReduce) =
-    mapreduce(_BoolValued(pred), &, v; backend, init=true, alg=alg.reduce)
-_all(pred, v, backend, alg::CPUThreads.Partitioned) = !_any(!pred, v, backend, alg)
+_plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+    _predicate_plan(pred, &, v, backend, alg)
+
+_all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
+_all(pred, v, backend, alg::ViaReduce, bufs) =
+    _mapreduce_nested(_BoolValued(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
+_all(pred, v, backend, alg::CPUThreads.Partitioned, bufs) = !_any(!pred, v, backend, alg, bufs)

@@ -40,14 +40,15 @@ end
 
 
 # Reduce the non-empty `src` to a host value; `neutral` is the partial-result seed of
-# `_reduce_seed`, and `init` is a value or `_NoInit()`.
+# `_reduce_seed`, `init` is a value or `_NoInit()`, and `partials` holds `_mapreduce_1d_partials`
+# partial results (`nothing` if none are needed).
 function mapreduce_1d_gpu(
     f, op, src::MapReduceSource, backend::Backend;
     init,
     neutral,
     block_size::Int,
     items_per_thread::Int,
-    temp::Union{Nothing, AbstractArray},
+    partials::Union{Nothing, AbstractArray},
     switch_below::Int,
 )
     @argcheck 1 <= block_size <= 1024
@@ -72,17 +73,7 @@ function mapreduce_1d_gpu(
     num_per_block = items_per_thread * block_size
     blocks = (len + num_per_block - 1) ÷ num_per_block
 
-    if !isnothing(temp)
-        neutral isa _Lane && throw(ArgumentError(
-            "`temp` needs a neutral element of the operator; pass `neutral`"))
-        @argcheck get_backend(temp) === backend
-        eltype(temp) === P || throw(ArgumentError(
-            "`temp` must have the reduction's accumulator element type $P, got $(eltype(temp))"))
-        @argcheck length(temp) >= blocks * 2
-        dst = temp
-    else
-        dst = KernelAbstractions.allocate(backend, P, blocks * 2)
-    end
+    dst = partials
 
     # Later the kernel will be compiled for views anyways, so use same types for arrays.
     src_view = _mapreduce_1d_src_view(src)
@@ -126,7 +117,22 @@ function mapreduce_1d_gpu(
 end
 
 _host_copy(src::AbstractArray) = Array(src)
-_host_copy(src::Base.Broadcast.Broadcasted) = Array(Base.Broadcast.materialize(src))
+# A `Broadcasted` source is evaluated on the host from host copies of its arrays, so that it needs
+# no device memory
+_host_copy(src::Base.Broadcast.Broadcasted) = Base.Broadcast.materialize(_on_host(src))
+_on_host(bc::Base.Broadcast.Broadcasted) =
+    Base.Broadcast.Broadcasted(bc.f, Base.map(_on_host, bc.args), bc.axes)
+_on_host(x::Base.Broadcast.Extruded) = _on_host(x.x)
+_on_host(x::AbstractArray) = Array(x)
+_on_host(x::AbstractRange) = x
+_on_host(x) = x
 
 _mapreduce_1d_src_view(src::AbstractArray) = @view src[1:end]
 _mapreduce_1d_src_view(src::Base.Broadcast.Broadcasted) = src
+
+# The number of partial results of `mapreduce_1d_gpu` over `len` elements (two buffers of one per
+# block of the first pass), or 0 when it needs none
+function _mapreduce_1d_partials(len, block_size, items_per_thread, switch_below)
+    (len <= 1 || len < switch_below) && return 0
+    return 2 * cld(len, block_size * items_per_thread)
+end

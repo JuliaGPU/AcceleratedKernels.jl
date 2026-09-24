@@ -164,10 +164,13 @@ end
 
 
 # GPU merge sort of `keys` (or of each slice along `dims`), permuting `values` alike.
+# GPU merge sort of `keys` (or of each slice along `dims`) carrying `values` along, in place, with
+# the scratch buffers of `_merge_by_key_sizes`.
 function _merge_sort_by_key!(
     keys::AbstractArray,
     values::AbstractArray,
-    backend::Backend=get_backend(keys);
+    backend::Backend,
+    bufs::NamedTuple;
 
     lt=isless,
     by=identity,
@@ -175,8 +178,6 @@ function _merge_sort_by_key!(
     order::Base.Order.Ordering=Base.Order.Forward,
 
     block_size::Int=256,
-    temp_keys::Union{Nothing, AbstractArray}=nothing,
-    temp_values::Union{Nothing, AbstractArray}=nothing,
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
@@ -185,14 +186,6 @@ function _merge_sort_by_key!(
     layout = slice_layout(keys, dims)
     if !(dims isa Colon)
         @argcheck axes(keys) == axes(values)
-    end
-    if !isnothing(temp_keys)
-        @argcheck length(temp_keys) == length(keys)
-        @argcheck eltype(temp_keys) === eltype(keys)
-    end
-    if !isnothing(temp_values)
-        @argcheck length(temp_values) == length(values)
-        @argcheck eltype(temp_values) === eltype(values)
     end
 
     # Construct comparator
@@ -213,10 +206,10 @@ function _merge_sort_by_key!(
     size_group = half_size_group * 2
     if len > half_size_group
         pk1 = keys
-        pk2 = isnothing(temp_keys) ? similar(keys) : temp_keys
+        pk2 = bufs.temp_keys
 
         pv1 = values
-        pv2 = isnothing(temp_values) ? similar(values) : temp_values
+        pv2 = bufs.temp_values
 
         kernel! = _merge_sort_by_key_global!(backend, block_size)
 
@@ -244,3 +237,10 @@ function _merge_sort_by_key!(
 
     keys, values
 end
+
+
+# The scratch of `_merge_sort_by_key!` over slices `layout` of keys of size `ksize` and type `K`,
+# with values of size `vsize` and type `V`: swap buffers, if the tiles need merging
+_merge_by_key_sizes(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
+    layout.len > 2 * a.block_size ?
+        (; temp_keys=_buffer(K, ksize), temp_values=_buffer(V, vsize)) : (;)

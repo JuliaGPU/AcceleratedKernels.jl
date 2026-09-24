@@ -115,7 +115,7 @@ end
                                                     zeros(Int32, 4, 4), RRB,
                                                     AK.BlockReduce(256, 2, 0), Int32;
                                                     init=AK._NoInit(), neutral=nothing,
-                                                    dims_valid=(1,))
+                                                    dims_valid=(1,), bufs=(;))
     end
 end
 

@@ -62,10 +62,10 @@ AK.sort!(A; dims=1)             # each column sorted
 ix = AK.sortperm(A; dims=2)     # A[ix] has each row sorted
 ```
 
-As GPU memory is more expensive, the sorts accept their temporary arrays (`temp`, and `temp_keys`
-and `temp_values` for `sort_by_key!`), so that you can supply your own buffers, e.g.:
+The sorts' scratch memory (the merge and radix sorts' swap buffers, radix sort's histograms) can
+be allocated once and reused with a [workspace](workspace.md):
 ```julia
 v = ROCArray(rand(Float32, 100_000))
-temp = similar(v)
-AK.sort!(v; temp)
+ws = AK.workspace(AK.sort!, v)
+AK.sort!(v; workspace=ws)
 ```

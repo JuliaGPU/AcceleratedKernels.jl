@@ -129,9 +129,10 @@ end
 end
 
 
-# GPU merge sort of `v` (or of each slice along `dims`), in place.
+# GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
+# `_sort_sizes(::MergeSort, ...)`.
 function _merge_sort!(
-    v::AbstractArray, backend::Backend=get_backend(v);
+    v::AbstractArray, backend::Backend, bufs::NamedTuple;
 
     lt=isless,
     by=identity,
@@ -139,29 +140,20 @@ function _merge_sort!(
     order::Base.Order.Ordering=Base.Order.Forward,
 
     block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
     @argcheck block_size > 0
     layout = slice_layout(v, dims)
     ord = Base.Order.ord(lt, by, rev, order)
-    if !isnothing(temp)
-        @argcheck length(temp) == length(v)
-        @argcheck eltype(temp) === eltype(v)
-    end
     (isempty(v) || layout.len <= 1) && return v
 
     # Compute keys once instead of evaluating `by` in every comparison, into an array of the
     # keys' type (broadcasting would make a `BitArray` of `Bool` keys on the host)
     if by !== identity
-        keys = similar(v, Base.promote_op(by, eltype(v)))
+        keys = bufs.keys
         map!(by, keys, v; backend, block_size)
-        _merge_sort_by_key!(
-            keys, v, backend;
-            lt, rev, order, block_size, dims,
-            temp_values=temp,   # temp was for v swap buffer; maps to temp_values here
-        )
+        _merge_sort_by_key!(keys, v, backend, bufs; lt, rev, order, block_size, dims)
         return v
     end
 
@@ -181,7 +173,7 @@ function _merge_sort!(
     size_group = half_size_group * 2
     if len > half_size_group
         p1 = v
-        p2 = isnothing(temp) ? similar(v) : temp
+        p2 = bufs.temp
 
         kernel! = _merge_sort_global!(backend, block_size)
 

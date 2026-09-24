@@ -136,16 +136,13 @@ end
     @test_throws MethodError AK.accumulate(+, y; init=10, dims=2, inclusive=false, bad=:kwarg,
                                            alg=slice_alg())
 
-    # Oversized temporaries are allowed.
+    # A workspace, reused
     y = array_from_host(ones(Int32, 1000))
-    AK.accumulate!(+, y; init=Int32(0), inclusive=false, temp=array_from_host(zeros(Int32, 1000)),
-                   temp_flags=array_from_host(zeros(Int8, 1000)), alg=scan_alg(A; block_size=128))
+    with_workspace(AK.accumulate!, +, y; init=Int32(0), inclusive=false, alg=scan_alg(A; block_size=128))
     @test Array(y) == 0:999
 
-    y = AK.accumulate(+, array_from_host(ones(Int32, 1000)); init=0, inclusive=false,
-                      temp=array_from_host(zeros(Int64, 1000)),
-                      temp_flags=array_from_host(zeros(Int8, 1000)),
-                      alg=scan_alg(A; block_size=128))
+    y = with_workspace(AK.accumulate, +, array_from_host(ones(Int32, 1000));
+                       init=0, inclusive=false, alg=scan_alg(A; block_size=128))
     @test Array(y) == 0:999
 
     # Cross-block coherence: small tiles (block_size 16-64, 1 item/thread) maximise the number of
@@ -368,9 +365,9 @@ end
                   neutral=Int32(0), dims=2, alg=slice_alg(; block_size=64))
     AK.accumulate((x, y) -> x + 1, array_from_host(rand(Int32, 3, 4, 5)); init=Int32(0),
                   neutral=Int32(0), dims=3, alg=slice_alg(; block_size=64))
-    # The temporaries only apply to whole-array scans
-    @test_throws ArgumentError AK.accumulate(+, array_from_host(rand(Int32, 3, 4)); init=Int32(0),
-                                             dims=2, temp=array_from_host(zeros(Int32, 3)))
+    # The scratch keywords are gone: scratch is a workspace
+    @test_throws MethodError AK.accumulate(+, array_from_host(rand(Int32, 3, 4)); init=Int32(0),
+                                           dims=2, temp=array_from_host(zeros(Int32, 3)))
 end
 @testset "cumsum" begin
 

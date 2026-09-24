@@ -282,18 +282,6 @@ end
 end
 
 
-# The partial-result buffers of a whole-array scan: the tiles' totals, and DecoupledLookback's
-# block flags
-function _scan_prefixes(v, neutral, num_blocks, temp)
-    isnothing(temp) && return similar(v, typeof(neutral), num_blocks)
-    neutral isa _Lane && throw(ArgumentError(
-        "`temp` needs a neutral element of the operator; pass `neutral`"))
-    eltype(temp) === eltype(v) || throw(ArgumentError(
-        "`temp` must have the scanned element type $(eltype(v)), got $(eltype(temp))"))
-    @argcheck length(temp) >= num_blocks
-    return view(temp, 1:num_blocks)
-end
-
 # The first block's seed: `init` in the element type, else the neutral seed
 _scan_first_seed(v, init, neutral) = _lift(neutral, convert(eltype(v), init))
 _scan_first_seed(v, ::_NoInit, neutral) = neutral
@@ -305,8 +293,8 @@ function accumulate_1d_gpu!(
     init,
     neutral,
     inclusive::Bool,
-    temp::Union{Nothing, AbstractArray},
-    temp_flags::Union{Nothing, AbstractArray},
+    prefixes::Union{Nothing, AbstractArray},
+    flags::Union{Nothing, AbstractArray},
 )
     block_size, items_per_thread = alg.block_size, alg.items_per_thread
 
@@ -318,16 +306,7 @@ function accumulate_1d_gpu!(
     elems_per_block = block_size * items_per_thread
     num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
     items = Val(items_per_thread)
-    prefixes = _scan_prefixes(v, neutral, num_blocks, temp)
     seed = _scan_first_seed(v, init, neutral)
-
-    if isnothing(temp_flags)
-        flags = similar(v, UInt8, num_blocks)
-    else
-        @argcheck eltype(temp_flags) <: Integer
-        @argcheck length(temp_flags) >= num_blocks
-        flags = view(temp_flags, 1:num_blocks)
-    end
 
     shift_to_exclusive = !inclusive && num_blocks > 1
     block_inclusive = inclusive || shift_to_exclusive
@@ -359,8 +338,8 @@ function accumulate_1d_gpu!(
     init,
     neutral,
     inclusive::Bool,
-    temp::Union{Nothing, AbstractArray},
-    temp_flags::Union{Nothing, AbstractArray},
+    prefixes::Union{Nothing, AbstractArray},
+    flags::Union{Nothing, AbstractArray},
 )
     block_size, items_per_thread = alg.block_size, alg.items_per_thread
 
@@ -372,7 +351,6 @@ function accumulate_1d_gpu!(
     elems_per_block = block_size * items_per_thread
     num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
     items = Val(items_per_thread)
-    prefixes = _scan_prefixes(v, neutral, num_blocks, temp)
     seed = _scan_first_seed(v, init, neutral)
 
     kernel1! = _accumulate_block!(backend, block_size)

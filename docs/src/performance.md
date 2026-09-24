@@ -16,13 +16,14 @@ Similarly, for performance on the CPU the overhead of spawning threads should be
 ```
 
 
-### Temporary Arrays
+### Scratch Memory
 
-As GPU memory is more expensive, all functions in AcceleratedKernels.jl expose any temporary arrays they will use (the `temp` argument); you can supply your own buffers to make the algorithms not allocate additional GPU storage, e.g.:
+As GPU memory is more expensive, every operation that needs scratch memory can take it from a
+workspace, allocated once for a kind of call and reused (see [Scratch Memory](api/workspace.md)):
 ```julia
 v = ROCArray(rand(Float32, 100_000))
-temp = similar(v)
-AK.sort!(v, temp=temp)
+ws = AK.workspace(AK.sort!, v)
+AK.sort!(v; workspace=ws)
 ```
 
 

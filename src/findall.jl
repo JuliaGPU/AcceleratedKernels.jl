@@ -142,22 +142,9 @@ end
 end
 
 
-function findall_temp(bools, backend, len, temp)
-    if isnothing(temp)
-        return KernelAbstractions.allocate(backend, Int, len)
-    end
-
-    @argcheck get_backend(temp) === backend
-    @argcheck eltype(temp) === Int
-    @argcheck length(temp) >= len
-    @argcheck !Base.mightalias(temp, bools)
-    view(temp, 1:len)
-end
-
-
 function findall_gpu(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg::ScanScatter;
-    temp,
+    bufs,
 ) where I
     block_size = alg.block_size
     items_per_thread = alg.items_per_thread
@@ -167,14 +154,14 @@ function findall_gpu(
 
     elems_per_block = block_size * items_per_thread
     num_blocks = cld(length(bools), elems_per_block)
-    block_counts = findall_temp(bools, backend, num_blocks, temp)
+    block_counts = bufs.counts
     input_indices = eachindex(bools)
     items = Val(items_per_thread)
 
     kernel! = findall_block!(backend, block_size)
     kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
             ndrange=num_blocks * block_size)
-    accumulate!(+, block_counts; backend, init=0)
+    _accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
     out = KernelAbstractions.allocate(backend, I, n)
@@ -189,7 +176,7 @@ end
 function findall_cpu(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend,
     alg::CPUThreads.Partitioned;
-    temp,
+    bufs,
 ) where I
     input_indices = eachindex(bools)
     tp = TaskPartitioner(length(bools), alg.max_tasks, alg.min_elems)
@@ -199,7 +186,7 @@ function findall_cpu(
         return out
     end
 
-    task_counts = findall_temp(bools, backend, tp.num_tasks, temp)
+    task_counts = bufs.counts
     itask_partition(tp) do itask, positions
         task_counts[itask] = Base.count(
             position -> @inbounds(bools[findall_index(input_indices, position)]), positions,
@@ -228,13 +215,12 @@ end
 
 
 function findall_impl(
-    bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg;
-    temp::Union{Nothing, AbstractArray},
+    bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg; bufs,
 ) where I
     if alg isa ScanScatter
-        findall_gpu(bools, I, output_indices, backend, alg; temp)
+        findall_gpu(bools, I, output_indices, backend, alg; bufs)
     else
-        findall_cpu(bools, I, output_indices, backend, alg; temp)
+        findall_cpu(bools, I, output_indices, backend, alg; bufs)
     end
 end
 
@@ -243,17 +229,7 @@ end
 _findall_launch(a::ScanScatter) = (; block_size=a.block_size)
 _findall_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
 
-function findall_bools(pred, v::AbstractArray, backend::Backend, alg, temp_bools)
-    bools = if isnothing(temp_bools)
-        # On the resolved backend, which a range does not determine
-        KernelAbstractions.allocate(backend, Bool, size(v))
-    else
-        @argcheck get_backend(temp_bools) === backend
-        @argcheck eltype(temp_bools) === Bool
-        @argcheck axes(temp_bools) == axes(v)
-        @argcheck !Base.mightalias(temp_bools, v)
-        temp_bools
-    end
+function findall_bools!(bools, pred, v::AbstractArray, backend::Backend, alg)
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
     _foreachindex(Base.OneTo(length(v)), backend; _findall_launch(alg)...) do position
@@ -266,10 +242,8 @@ end
 
 
 """
-    findall(A::AbstractArray; items=keys(A), backend=nothing, alg=Auto(), temp=nothing,
-            temp_bools=nothing)
-    findall(pred, A::AbstractArray; items=keys(A), backend=nothing, alg=Auto(), temp=nothing,
-            temp_bools=nothing)
+    findall(A::AbstractArray; items=keys(A), backend=nothing, alg=Auto(), workspace=nothing)
+    findall(pred, A::AbstractArray; items=keys(A), backend=nothing, alg=Auto(), workspace=nothing)
 
 Stream compaction: select, in order, the elements of `items` at the positions where `A` is `true`,
 or where `pred` returns `true` for `A`'s elements. Values used as conditions, and `pred`'s results,
@@ -290,13 +264,9 @@ The supported inputs are arrays. Dictionaries, other iterables, and scalar input
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host and [`ScanScatter`](@ref) on GPUs, with
-the device's settings. `backend` is derived from `A` and `items`.
-
-`temp` may provide the `Int` buffer used for block or task counts: at least
-`cld(length(A), block_size * items_per_thread)` elements for `ScanScatter`, one per task on the
-host. `temp_bools` may provide the Bool mask for the predicate form or for a mask whose element
-type is not `Bool`; it must have the same axes as `A` and must not alias it. Omitted buffers are
-allocated automatically.
+the device's settings. `backend` is derived from `A` and `items`. `workspace` takes the scratch
+memory of a [`workspace`](@ref) made for the same call (the mask of the predicate form and the
+counts), so that `findall` allocates only its result.
 
 # Examples
 ```julia
@@ -312,44 +282,55 @@ AK.findall(m)                           # [CartesianIndex(1, 1), CartesianIndex(
 AK.findall(m; items=LinearIndices(m))   # [1, 4]
 ```
 """
-function findall(
-    values::AbstractArray;
-    items::AbstractArray=keys(values),
-    backend::Union{Nothing, Backend}=nothing,
-    alg::Algorithm=Auto(),
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_bools::Union{Nothing, AbstractArray}=nothing,
-)
+function findall(values::AbstractArray; items::AbstractArray=keys(values),
+                 backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
+                 workspace=nothing)
     values isa AbstractArray{Bool} || _check_bool_result(identity, values)
-    _check_findall_items(values, items)
-    backend = _resolve_backend(backend, values, items)
-    a = _resolve_findall(alg, backend, eltype(values))
-    bools = if values isa AbstractArray{Bool}
-        isnothing(temp_bools) ||
-            throw(ArgumentError("temp_bools is not used for a Bool mask"))
-        values
-    else
-        findall_bools(identity, values, backend, a, temp_bools)
-    end
-    findall_impl(bools, eltype(items), items, backend, a; temp)
+    s = _findall_setup(values, items, false, backend, alg)
+    _findall_run(identity, values, items, s, _buffers(s.plan, workspace, values, items))
 end
 
-
-function findall(
-    pred, v::AbstractArray;
-    items::AbstractArray=keys(v),
-    backend::Union{Nothing, Backend}=nothing,
-    alg::Algorithm=Auto(),
-    temp::Union{Nothing, AbstractArray}=nothing,
-    temp_bools::Union{Nothing, AbstractArray}=nothing,
-)
+function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
+                 backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
+                 workspace=nothing)
     _check_bool_result(pred, v)
-    _check_findall_items(v, items)
+    s = _findall_setup(v, items, true, backend, alg)
+    _findall_run(pred, v, items, s, _buffers(s.plan, workspace, v, items))
+end
+
+_plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
+      backend=nothing, alg::Algorithm=Auto()) =
+    _findall_setup(values, items, false, backend, alg).plan
+_plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
+      alg::Algorithm=Auto()) =
+    _findall_setup(v, items, true, backend, alg).plan
+
+# The plan of `findall` over `v`: its scratch is a mask of `pred(v[i])` for the predicate form
+# and for non-Bool values, the counts of the blocks or tasks, and the scan of the block counts
+function _findall_setup(v, items, predicate::Bool, backend, alg)
+    length(items) == length(v) || throw(DimensionMismatch(
+        "`items` must have the length of the array, $(length(v)), got $(length(items))"))
     backend = _resolve_backend(backend, v, items)
     a = _resolve_findall(alg, backend, eltype(v))
-    bools = findall_bools(pred, v, backend, a, temp_bools)
-    findall_impl(bools, eltype(items), items, backend, a; temp)
+    n = length(v)
+    mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=_buffer(Bool, size(v))) : (;)
+    counts, nested = if a isa ScanScatter
+        num_blocks = cld(n, a.block_size * a.items_per_thread)
+        scan = _accumulate_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
+        (; counts=_buffer(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
+    else
+        num_tasks = TaskPartitioner(n, a.max_tasks, a.min_elems).num_tasks
+        (; counts=_buffer(Int, num_tasks)), (;)
+    end
+    return (; plan=_Plan(backend, a, nested, merge(mask, counts)))
 end
 
-_check_findall_items(v, items) = length(items) == length(v) || throw(DimensionMismatch(
-    "`items` must have the length of the array, $(length(v)), got $(length(items))"))
+function _findall_run(pred, v, items, s, bufs)
+    backend, a = s.plan.backend, s.plan.alg
+    bools = if haskey(bufs, :mask)
+        findall_bools!(bufs.mask, pred, v, backend, a)
+    else
+        v
+    end
+    findall_impl(bools, eltype(items), items, backend, a; bufs)
+end

@@ -297,7 +297,7 @@ end
     @test AK._backend_free(reshape(1:6, 2, 3)) && !AK._backend_free(NoBackendTestArray())
 
     # The sorting entry points resolve from all their arrays, and accept only backends
-    @test_throws ArgumentError AK.sort!(d; temp=h)
+    @test_throws MethodError AK.sort!(d; temp=h)      # no scratch keywords: see `workspace`
     @test_throws ArgumentError AK.sortperm!(zeros(Int, 4), d)
     @test_throws ArgumentError AK.sort_by_key!(d, h)
     @test_throws TypeError AK.sort!(h; backend=:cpu)
