@@ -77,6 +77,9 @@ subsets of data.
 **Other names**: prefix sum, `thrust::scan`, cumulative sum; inclusive (or exclusive) if the first
 element is included in the accumulation (or not).
 
+The operator `op` must be associative, as elements are combined in parallel; it does not need to
+be commutative, as every combination keeps the elements in order (e.g. matrix products are fine).
+
 For compatibility with the `Base.accumulate!` function, we provide the two-array interface too, but
 we do not need the constraint of `dst` and `src` being different; to minimise memory use, we
 recommend using the single-array interface (the first one above).
