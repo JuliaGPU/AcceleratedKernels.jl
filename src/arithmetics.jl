@@ -129,10 +129,11 @@ end
 
 
 """
-    cumsum(src::AbstractArray; init=zero(eltype(src)), neutral=zero(eltype(src)), kwargs...)
+    cumsum(src::AbstractArray; kwargs...)
 
-Cumulative sum of elements of an array, with optional `init` and `dims`. The keywords are those
-of [`accumulate`](@ref).
+Cumulative sum of elements of an array, as `Base.cumsum` (Base's `add_sum`, so small integers are
+summed as `Int`), except that without `dims` a multidimensional array is summed in linear order.
+The keywords are those of [`accumulate`](@ref).
 
 # Examples
 Simple cumulative sum of elements in a vector:
@@ -150,16 +151,15 @@ m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.cumsum(m, dims=1)
 ```
 """
-function cumsum(src::AbstractArray; init=zero(eltype(src)), neutral=zero(eltype(src)), kwargs...)
-    accumulate(+, src; init, neutral, inclusive=true, kwargs...)
-end
+cumsum(src::AbstractArray; kwargs...) = accumulate(Base.add_sum, src; kwargs...)
 
 
 """
-    cumprod(src::AbstractArray; init=one(eltype(src)), neutral=one(eltype(src)), kwargs...)
+    cumprod(src::AbstractArray; kwargs...)
 
-Cumulative product of elements of an array, with optional `init` and `dims`. The keywords are
-those of [`accumulate`](@ref).
+Cumulative product of elements of an array, as `Base.cumprod` (Base's `mul_prod`), except that
+without `dims` a multidimensional array is multiplied in linear order. The keywords are those of
+[`accumulate`](@ref).
 
 # Examples
 Simple cumulative product of elements in a vector:
@@ -177,6 +177,4 @@ m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
 p = AK.cumprod(m, dims=1)
 ```
 """
-function cumprod(src::AbstractArray; init=one(eltype(src)), neutral=one(eltype(src)), kwargs...)
-    accumulate(*, src; init, neutral, inclusive=true, kwargs...)
-end
+cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)

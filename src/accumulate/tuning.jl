@@ -69,25 +69,29 @@ end
 """
     scan_tuning(backend, T) -> ScanTuning
 
-The scan tuning for element type `T` (the destination's) on `backend`'s current device; see
-[`sort_tuning`](@ref) for the conventions.
+The scan tuning for element type `T` (the running-value type the scan computes in; see
+[`accumulate!`](@ref)) on `backend`'s current device; see [`sort_tuning`](@ref) for the
+conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
 
 
 """
-    _resolve_scan(alg, backend, T, dims) -> Algorithm
+    _resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
 
 Resolve `alg` for a scan of element type `T` along `dims` (`nothing` for the whole array in
-linear order) on `backend`. Returns `ScanPrefixes`, `DecoupledLookback`, `SliceScan` or
-`CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
+linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (a
+lane type when the operator has no known neutral element). Returns `ScanPrefixes`,
+`DecoupledLookback`, `SliceScan` or `CPUThreads.Partitioned` with every field set, or throws an
+`ArgumentError`.
 """
-function _resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims) where {T}
+function _resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
+                       ::Type{S}=T) where {T, S}
     _checkdomain(alg)
     t = scan_tuning(backend, T)
     a = alg isa Auto ? _select_scan(backend, t, dims) : alg
-    a = _fill(a, t, T)
-    _check_scan(a, backend, T, dims)
+    a = _fill(a, t, S)
+    _check_scan(a, backend, S, dims)
     return a
 end
 

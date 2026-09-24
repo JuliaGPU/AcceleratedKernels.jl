@@ -18,8 +18,9 @@ function accumulate_nd!(
 
     # Degenerate cases end
 
+    seed = _scan_first_seed(v, init, neutral)
     if alg isa CPUThreads.Partitioned
-        _accumulate_nd_cpu_sections!(op, v; init, dims, inclusive,
+        _accumulate_nd_cpu_sections!(op, v; seed, neutral, dims, inclusive,
                                      max_tasks=alg.max_tasks, min_elems=alg.min_elems)
     else
         block_size = alg.block_size
@@ -38,7 +39,7 @@ function accumulate_nd!(
             blocks = (length_outer + block_size - 1) ÷ block_size
             kernel1! = _accumulate_nd_by_thread!(backend, block_size)
             kernel1!(
-                v, op, init, dims, inclusive,
+                v, op, seed, neutral, dims, inclusive,
                 ndrange=(block_size * blocks,),
             )
         else
@@ -46,7 +47,7 @@ function accumulate_nd!(
             blocks = length_outer
             kernel2! = _accumulate_nd_by_block!(backend, block_size)
             kernel2!(
-                v, op, init, neutral, dims, inclusive,
+                v, op, seed, neutral, dims, inclusive,
                 ndrange=(block_size, blocks),
             )
         end
@@ -56,13 +57,18 @@ function accumulate_nd!(
 end
 
 
+# The kernels index `v` linearly, so they step through it with the strides of a column-major array
+# of its size (`Base.size_to_strides`), not with `strides(v)`: a wrapper's storage layout, such as a
+# `PermutedDimsArray`'s, differs from its linear indices.
+
 function _accumulate_nd_cpu_sections!(
     op, v::AbstractArray;
-    init, dims, inclusive,
+    seed, neutral, dims, inclusive,
     max_tasks, min_elems,
 )
+    _, op = _lanefuncs(_Partials(), op, neutral)
     vsizes = size(v)
-    vstrides = strides(v)
+    vstrides = Base.size_to_strides(1, vsizes...)
 
     ndims = length(vsizes)
 
@@ -85,18 +91,16 @@ function _accumulate_nd_cpu_sections!(
             end
 
             # Go over each element in the accumulated dimension
-            if inclusive
-                running = init
-                for i in 0:length_dims - 1
-                    v_idx = input_base_idx + i * vstrides[dims]
-                    running = op(running, v[v_idx + 1])
-                    v[v_idx + 1] = running
-                end
-            else
-                running = init
-                for i in 0:length_dims - 1
-                    v_idx = input_base_idx + i * vstrides[dims]
-                    v[v_idx + 1], running = running, op(running, v[v_idx + 1])
+            running = seed
+            for i in 0:length_dims - 1
+                v_idx = input_base_idx + i * vstrides[dims]
+                x = _lift(neutral, v[v_idx + 1])
+                if inclusive
+                    running = op(running, x)
+                    v[v_idx + 1] = _unlane(running)
+                else
+                    v[v_idx + 1] = _unlane(running)
+                    running = op(running, x)
                 end
             end
         end
@@ -107,13 +111,14 @@ end
 
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _accumulate_nd_by_thread!(
-    v, op, init, dims, inclusive,
+    v, op, seed, neutral, dims, inclusive,
 )
+    _, op = _lanefuncs(_Partials(), op, neutral)
     # One thread per outer dimension element, when there are more outer elements than in the
     # reduced dim e.g. accumulate(+, rand(3, 1000), dims=1) => only 3 elements in the accumulated
     # dim
     vsizes = size(v)
-    vstrides = strides(v)
+    vstrides = Base.size_to_strides(1, vsizes...)
 
     ndims = length(vsizes)
 
@@ -148,18 +153,16 @@ end
         # Go over each element in the accumulated dimension; this implementation assumes that there
         # are so many outer elements (each processed by an independent thread) that we afford to
         # loop sequentially over the accumulated dimension (e.g. reduce(+, rand(3, 1000), dims=1))
-        if inclusive
-            running = init
-            for i in 0x0:length_dims - 0x1
-                v_idx = input_base_idx + i * vstrides[dims]
-                running = op(running, v[v_idx + 0x1])
-                v[v_idx + 0x1] = running
-            end
-        else
-            running = init
-            for i in 0x0:length_dims - 0x1
-                v_idx = input_base_idx + i * vstrides[dims]
-                v[v_idx + 0x1], running = running, op(running, v[v_idx + 0x1])
+        running = seed
+        for i in 0x0:length_dims - 0x1
+            v_idx = input_base_idx + i * vstrides[dims]
+            x = _lift(neutral, v[v_idx + 0x1])
+            if inclusive
+                running = op(running, x)
+                v[v_idx + 0x1] = _unlane(running)
+            else
+                v[v_idx + 0x1] = _unlane(running)
+                running = op(running, x)
             end
         end
     end
@@ -167,7 +170,7 @@ end
 
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _accumulate_nd_by_block!(
-    v, op, init, neutral, dims, inclusive,
+    v, op, seed, neutral, dims, inclusive,
 )
     # NOTE: shmem_size MUST be greater than 2 * block_size
     # NOTE: block_size MUST be a power of 2
@@ -176,7 +179,7 @@ end
     # than in outer dimensions, e.g. accumulate(+, rand(3, 1000), dims=2) => only 3 elements in
     # outer dimensions
     vsizes = size(v)
-    vstrides = strides(v)
+    vstrides = Base.size_to_strides(1, vsizes...)
 
     ndims = length(vsizes)
 
@@ -185,8 +188,9 @@ end
 
     @uniform block_size = @groupsize()[1]
 
-    temp = @localmem eltype(v) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
-    running_prefix = @localmem eltype(v) (1,)
+    temp = @localmem typeof(neutral) (0x2 * block_size + conflict_free_offset(0x2 * block_size),)
+    running_prefix = @localmem typeof(neutral) (1,)
+    _, op = _lanefuncs(_Partials(), op, neutral)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
     # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
@@ -211,13 +215,13 @@ end
     end
 
     # We have a block of threads to accumulate along the dims axis; do it in chunks of
-    # 2 * block_size and carry the total of all previous chunks (seeded with `init`) into each one.
+    # 2 * block_size and carry the total of all previous chunks (seeded with `seed`) into each one.
     # Operands are combined in element order, so `op` need not be commutative.
     ichunk = typeof(iblock)(0)
     num_chunks = (length_dims + (0x2 * block_size) - 0x1) ÷ (0x2 * block_size)
 
     if ithread == 0x0
-        running_prefix[0x1] = init
+        running_prefix[0x1] = seed
     end
 
     while ichunk < num_chunks
@@ -231,20 +235,20 @@ end
         bank_offset_b = conflict_free_offset(bi)
 
         xa = if block_offset + ai < length_dims
-            v[
+            _lift(neutral, v[
                 input_base_idx +                            # Outer element axis starting index
                 (block_offset + ai) * vstrides[dims] +      # Move along dims axis in strides
                 0x1                                         # - to 1-indexing
-            ]
+            ])
         else
             neutral
         end
         xb = if block_offset + bi < length_dims
-            v[
+            _lift(neutral, v[
                 input_base_idx +
                 (block_offset + bi) * vstrides[dims] +
                 0x1
-            ]
+            ])
         else
             neutral
         end
@@ -312,14 +316,14 @@ end
                 input_base_idx +
                 (block_offset + ai) * vstrides[dims] +
                 0x1
-            ] = op(carry, ra)
+            ] = _unlane(op(carry, ra))
         end
         if block_offset + bi < length_dims
             v[
                 input_base_idx +
                 (block_offset + bi) * vstrides[dims] +
                 0x1
-            ] = op(carry, rb)
+            ] = _unlane(op(carry, rb))
         end
 
         # Every thread has read the carry; the last thread extends it by this chunk's total (the

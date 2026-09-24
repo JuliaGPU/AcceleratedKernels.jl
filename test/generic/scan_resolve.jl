@@ -100,6 +100,13 @@ end
         @test resolve_scan(AK.DecoupledLookback()) === AK.DecoupledLookback(256, 8)
     end
 
+    # Tiles of partial results: lanes (a Bool and a value) are wider than elements, so fewer fit.
+    # NTuple{3, Int32} is 4-byte aligned everywhere, so its lanes take 16 bytes on every platform
+    # (Int64 lanes take 12 on 32-bit x86)
+    @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
+    @test AK._resolve_scan(AK.Auto(), SRB, NTuple{3, Int32}, nothing,
+                           AK._Lane{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
+
     # Kernels need a bits-type element
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); T=String)
     @test_throws ArgumentError resolve_scan(AK.Auto(); T=Union{Missing, Int}, dims=1)
