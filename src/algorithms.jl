@@ -61,6 +61,23 @@ Supertype of the scan (`accumulate`) algorithms: [`ScanPrefixes`](@ref),
 """
 abstract type ScanAlgorithm <: Algorithm end
 
+"""
+    FindallAlgorithm <: Algorithm
+
+Supertype of the stream-compaction (`findall`) algorithms: [`ScanScatter`](@ref). `findall`
+also accepts [`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type FindallAlgorithm <: Algorithm end
+
+"""
+    PredicateAlgorithm <: Algorithm
+
+Supertype of the algorithms of `any` and `all`: [`ConcurrentWrite`](@ref) and
+[`ViaReduce`](@ref). They also accept
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned).
+"""
+abstract type PredicateAlgorithm <: Algorithm end
+
 
 """
     AcceleratedKernels.CPUThreads

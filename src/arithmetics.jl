@@ -119,13 +119,7 @@ c = AK.count(CuArray(rand(Bool, 10, 100_000)); init=Int32(0), dims=2)
 """
 count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
 count(f, src::AbstractArray; init=0, kwargs...) =
-    mapreduce(_CountBool(f), Base.add_sum, src; init, kwargs...)
-
-# `f`, required to return a `Bool` (Base's `_bool`)
-struct _CountBool{F} <: Function
-    f::F
-end
-@inline (c::_CountBool)(x) = c.f(x)::Bool
+    mapreduce(_BoolValued(f), Base.add_sum, src; init, kwargs...)
 
 
 """

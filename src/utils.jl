@@ -2,12 +2,6 @@ function ispow2(x)
     count_ones(x) == 1
 end
 
-# Helper function to check whether the package cpu implementation of an algorithm should be used
-const CPU_BACKEND = get_backend([])
-@inline function use_gpu_algorithm(backend, prefer_threads)
-    return backend != CPU_BACKEND || !prefer_threads
-end
-
 # Local memory that kernels with a tunable footprint may use: the minimum an OpenCL device must
 # provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
 const LOCAL_MEMORY_BUDGET = 32 * 1024

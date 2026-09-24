@@ -12,36 +12,10 @@ oneAPI.@device_override AK._decoupled_fence() =
     SPIRV.atomic_work_item_fence(SPIRV.GLOBAL_MEM_FENCE, SPIRV.memory_order_seq_cst, SPIRV.memory_scope_device)
 
 
-# On oneAPI, use the MapReduce algorithm by default as on some Intel GPUs ConcurrentWrite hangs
-# the device.
-function AK.any(
-    pred, v::AbstractArray, backend::oneAPIBackend;
-
-    # Algorithm choice
-    alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-    kwargs...
-)
-    AK._any_impl(
-        pred, v, backend;
-        alg,
-        kwargs...
-    )
-end
-
-
-function AK.all(
-    pred, v::AbstractArray, backend::oneAPIBackend;
-
-    # Algorithm choice
-    alg::AK.PredicatesAlgorithm=AK.MapReduce(),
-    kwargs...
-)
-    AK._all_impl(
-        pred, v, backend;
-        alg,
-        kwargs...
-    )
-end
+# Some Intel GPUs (reportedly Intel UHD Graphics) hang when many threads write one global location,
+# as `ConcurrentWrite` does. An Iris Xe does not, but the affected devices are not known, so `Auto`
+# keeps using `ViaReduce` for `any`/`all` on oneAPI; an explicit `ConcurrentWrite` is allowed.
+AK.predicate_tuning(::oneAPIBackend, ::Type) = AK.PredicateTuning(prefer_concurrent_write=false)
 
 
 end   # module oneAPIExt

@@ -9,4 +9,18 @@ AcceleratedKernels.any
 AcceleratedKernels.all
 ```
 
-**Note on the `cooperative` keyword**: some older platforms crash when multiple threads write to the same memory location in a global array (e.g. old Intel Graphics); if all threads were to write the same value, it is well-defined on others (e.g. CUDA F4.2 says "If a non-atomic instruction executed by a warp writes to the same location in global memory for more than one of the threads of the warp, only one thread performs a write and which thread does it is undefined."). This "cooperative" thread behaviour allows for a faster implementation; if you have a platform - the only one I know is Intel UHD Graphics - that crashes, set `cooperative=false` to use a safer `mapreduce`-based implementation.
+[`Auto()`](@ref AcceleratedKernels.Auto) uses
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned) on the host and
+[`ConcurrentWrite`](@ref AcceleratedKernels.ConcurrentWrite) on GPUs, in which many threads write
+the same value to one memory location. That is well-defined (CUDA F4.2: "If a non-atomic
+instruction executed by a warp writes to the same location in global memory for more than one of
+the threads of the warp, only one thread performs a write and which thread does it is
+undefined."), but some older platforms (Intel UHD Graphics) have been reported to hang on it, so
+on oneAPI `Auto` uses the `mapreduce`-based [`ViaReduce`](@ref AcceleratedKernels.ViaReduce)
+instead. An explicit `alg=ConcurrentWrite()` runs on every GPU.
+
+```@docs
+AcceleratedKernels.PredicateAlgorithm
+AcceleratedKernels.ConcurrentWrite
+AcceleratedKernels.ViaReduce
+```
