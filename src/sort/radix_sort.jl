@@ -349,8 +349,6 @@ _rs_supported(::Type{T}) where T =
     T === UInt32 || T === Int32 || T === Float32 ||
     T === UInt64 || T === Int64 || T === Float64
 
-const _RS_LOCAL_MEMORY_LIMIT = 32 * 1024
-
 @inline function _rs_portable_local_memory(::Type{T}, block_size::Int) where T
     block_size * (sizeof(T) + sizeof(UInt32)) + Int(_RS_SIZE) * sizeof(UInt32)
 end
@@ -404,16 +402,16 @@ function _radix_sort!(
 
     @argcheck ispow2(block_size) && block_size >= 1
     @argcheck items_per_thread >= 1
-    @argcheck _rs_portable_local_memory(T, block_size) <= _RS_LOCAL_MEMORY_LIMIT
+    @argcheck _rs_portable_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET
 
     has_atomics = KernelAbstractions.supports_atomics(backend)
     use_fast    = has_atomics && block_size % _RS_CHUNK == 0 &&
-                  _rs_fast_local_memory(T, block_size, items_per_thread) <= _RS_LOCAL_MEMORY_LIMIT
+                  _rs_fast_local_memory(T, block_size, items_per_thread) <= LOCAL_MEMORY_BUDGET
     items       = use_fast ? items_per_thread : 1
 
     n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)
 
-    if use_fast && _rs_block_local_memory(T, block_size) <= _RS_LOCAL_MEMORY_LIMIT &&
+    if use_fast && _rs_block_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET &&
        n <= 2 * block_size
         _radix_sort_block!(backend, block_size)(
             v, descending, Val(n_passes); ndrange=block_size)

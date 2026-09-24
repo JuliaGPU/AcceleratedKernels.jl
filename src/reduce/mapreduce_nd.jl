@@ -694,7 +694,7 @@ end
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, N, ithread)
+        @inline reduce_group!(@context, op, sdata, ithread)
 
         if ithread == 0x0
             dst[iout + 0x1] = op(init, sdata[0x1])
@@ -752,7 +752,7 @@ end
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, N, ithread)
+        @inline reduce_group!(@context, op, sdata, ithread)
 
         if ithread == 0x0
             dst[iout + 0x1] = op(init, sdata[0x1])
@@ -801,7 +801,7 @@ end
     sdata[ithread + 0x1] = acc
     @synchronize()
 
-    @inline reduce_group!(@context, op, sdata, N, ithread)
+    @inline reduce_group!(@context, op, sdata, ithread)
 
     if ithread == 0x0
         partial[iout + igroup * output_size + 0x1] = sdata[0x1]
@@ -835,7 +835,7 @@ end
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, N, ithread)
+        @inline reduce_group!(@context, op, sdata, ithread)
 
         if ithread == 0x0
             dst[iblock + 0x1] = op(init, sdata[0x1])

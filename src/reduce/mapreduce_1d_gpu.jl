@@ -28,7 +28,7 @@
 
     @synchronize()
 
-    @inline reduce_group!(@context, op, sdata, NI, ithread)
+    @inline reduce_group!(@context, op, sdata, ithread)
 
     if ithread == 0x0
         dst[iblock + 0x1] = sdata[0x1]

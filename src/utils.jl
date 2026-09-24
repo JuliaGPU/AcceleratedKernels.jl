@@ -14,10 +14,14 @@ end
 # Elements each thread scans in the GPU prefix-scan block kernel.
 @inline default_scan_items_per_thread(backend) = 8
 
-# Keep the default shared-memory use within the 32 KiB OpenCL/Metal baseline.
+# Local memory that kernels with a tunable footprint may use: the minimum an OpenCL device must
+# provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
+const LOCAL_MEMORY_BUDGET = 32 * 1024
+
+# Keep the default shared-memory use within the local-memory budget.
 @inline function default_scan_items_per_thread(backend, ::Type{T}, block_size) where T
     block_size > 0 || return default_scan_items_per_thread(backend)
-    max_items = max(1, 32 * 1024 ÷ (block_size * max(sizeof(T), 1)) - 1)
+    max_items = max(1, LOCAL_MEMORY_BUDGET ÷ (block_size * max(sizeof(T), 1)) - 1)
     min(default_scan_items_per_thread(backend), max_items)
 end
 
