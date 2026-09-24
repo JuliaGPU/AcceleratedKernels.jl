@@ -870,7 +870,9 @@ end
     @test Array(AK.sort(A; prefer_threads, dims=2, temp=similar(A))) == sort(A_h; dims=2)
     if !prefer_threads
         @test Array(AK.sort(A; prefer_threads, dims=1, block_size=64)) == sort(A_h; dims=1)
-        @test_throws ArgumentError AK.sort(A; prefer_threads, dims=1, alg=AK.RadixSort())
+        # RadixSort supports dims=1 (segmented radix) but no other dimension
+        @test Array(AK.sort(A; prefer_threads, dims=1, alg=AK.RadixSort())) == sort(A_h; dims=1)
+        @test_throws ArgumentError AK.sort(A; prefer_threads, dims=2, alg=AK.RadixSort())
     end
 
     # NaNs, infinities and signed zeros order like Base
@@ -1174,5 +1176,22 @@ end
         @test Array(v) == h
 
         @test_throws ArgumentError AK.sort!(array_from_host(h); prefer_threads, dims=3, alg)
+    end
+end
+
+@testset "radix_sort_dims" begin
+    if !prefer_threads                 # RadixSort is a GPU-backend algorithm
+        # RadixSort along dim 1 uses the segmented radix path (slices of any length)
+        for T in (Int32, UInt32, Float32, Int64, UInt64)
+            for (L, S) in ((256, 50), (16384, 8), (65536, 4), (300_000, 2))
+                vh = T <: AbstractFloat ? rand(T, L, S) : rand(T(1):T(1000), L, S)
+                @test Array(AK.sort(array_from_host(vh); prefer_threads, dims=1, alg=AK.RadixSort())) == sort(vh; dims=1)
+                @test Array(AK.sort(array_from_host(vh); prefer_threads, dims=1, alg=AK.RadixSort(), rev=true)) == sort(vh; dims=1, rev=true)
+            end
+        end
+        vh = rand(Float32, 20_000, 3, 2)   # N-D along dim 1
+        @test Array(AK.sort(array_from_host(vh); prefer_threads, dims=1, alg=AK.RadixSort())) == sort(vh; dims=1)
+        # RadixSort only supports dim 1
+        @test_throws ArgumentError AK.sort!(array_from_host(rand(Float32, 64, 64)); prefer_threads, dims=2, alg=AK.RadixSort())
     end
 end
