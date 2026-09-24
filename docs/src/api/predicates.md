@@ -9,4 +9,20 @@ AcceleratedKernels.any
 AcceleratedKernels.all
 ```
 
-**Note on the `cooperative` keyword**: some older platforms crash when multiple threads write to the same memory location in a global array (e.g. old Intel Graphics); if all threads were to write the same value, it is well-defined on others (e.g. CUDA F4.2 says "If a non-atomic instruction executed by a warp writes to the same location in global memory for more than one of the threads of the warp, only one thread performs a write and which thread does it is undefined."). This "cooperative" thread behaviour allows for a faster implementation; if you have a platform - the only one I know is Intel UHD Graphics - that crashes, set `cooperative=false` to use a safer `mapreduce`-based implementation.
+[`Auto()`](@ref AcceleratedKernels.Auto) uses
+[`CPUThreads.Partitioned`](@ref AcceleratedKernels.CPUThreads.Partitioned) on the host and
+[`ConcurrentWrite`](@ref AcceleratedKernels.ConcurrentWrite) on GPUs, except where concurrent
+writes to one location are unsafe: some older platforms (old Intel Graphics) hang when many
+threads write the same memory location, even with the same value, which is well-defined on others
+(CUDA F4.2: "If a non-atomic instruction executed by a warp writes to the same location in global
+memory for more than one of the threads of the warp, only one thread performs a write and which
+thread does it is undefined."). The oneAPI extension declares concurrent writes unsafe on every
+oneAPI device, where `Auto` uses the `mapreduce`-based
+[`ViaReduce`](@ref AcceleratedKernels.ViaReduce) instead; other backends, including OpenCL on Intel
+GPUs, use `ConcurrentWrite` unless an extension says otherwise.
+
+```@docs
+AcceleratedKernels.PredicateAlgorithm
+AcceleratedKernels.ConcurrentWrite
+AcceleratedKernels.ViaReduce
+```

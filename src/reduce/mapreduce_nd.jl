@@ -15,10 +15,6 @@
 #        - by_block:      one block per output, grid-stride over outputs (few outputs, large reduction)
 #        - multigroup:    several blocks per output, two-pass (dst_size==1 or very small dst_size)
 
-# Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
-# few output elements can still fill the GPU. A heuristic GPU-occupancy target.
-const TARGET_BLOCKS = 256
-
 # Below this many output elements, splitting a single output's reduction across multiple
 # blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
 # too few blocks cannot fill the GPU on its own. At or above this, by_block grid-strides.
@@ -71,142 +67,35 @@ function _canonicalize_dims(src_sizes, src_strides, dims_valid)
     return Tuple(reduce_segs), Tuple(outer_segs)
 end
 
-# Main entry point
-
-function mapreduce_nd(
-    f, op, src::MapReduceSource, backend::Backend;
-    init,
-    neutral=neutral_element(op, typeof(init)),
-    dims,
-
-    # CPU settings
-    max_tasks::Int,
-    min_elems::Int,
-    prefer_threads::Bool=true,
-
-    # GPU settings
-    block_size::Int,
-    temp::Union{Nothing, AbstractArray},
-)
-    @argcheck 1 <= block_size <= 1024
-    @argcheck ispow2(block_size)
-
-    dims_src = dims isa Number ? (dims,) : dims
-    dims_buf = Int[]
-    for d in dims_src
-        d isa Integer || throw(ArgumentError("reduced dimension(s) must be integers"))
-        dim = Int(d)
-        dim < 1 && throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
-        push!(dims_buf, dim)
-    end
-
-    # Match Base: duplicate dims are ignored, e.g. dims=(2,2) behaves like dims=2.
-    dims_all = Tuple(Base.unique(dims_buf))
-
-    src_sizes = size(src)
-    ndim      = length(src_sizes)
-
-    dims_valid = Tuple(d for d in dims_all if d <= ndim)
-
-    # Degenerate cases begin; order of priority matters
-
-    # All reduced dims are beyond ndims: just map each element through f and add init, e.g.:
-    #   julia> x = rand(Float64, 3, 5);
-    #   julia> mapreduce(x -> -x, +, x, dims=3, init=Float32(0))     # 3×5 Matrix{Float32}
-    if isempty(dims_valid)
-        dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
-        return dst
-    end
-
-    # The per-dimension sizes of the destination array; construct tuple without allocations
-    dst_sizes = unrolled_map_index(src_sizes) do i
-        i in dims_valid ? 1 : src_sizes[i]
-    end
-
-    # If any kept dimension is zero, return empty array (reduced dims become 1), e.g.:
-    #   julia> x = rand(3, 0, 5);  reduce(+, x, dims=3)     # 3×0×1 Array{Float64, 3}
-    for isize in eachindex(src_sizes)
-        isize in dims_valid && continue
-        if src_sizes[isize] == 0
-            return _alloc_or_temp(backend, temp, init, dst_sizes)
-        end
-    end
-
-    len = Base.prod(src_sizes[d] for d in dims_valid)
-
-    # If a reduced dimension is zero, return array filled with init, e.g.:
-    #   julia> x = rand(3, 0, 5);  mapreduce(+, x, dims=2)     # 3×1×5 of zeros
-    if len == 0
-        dst = _alloc_or_temp(backend, temp, init, dst_sizes)
-        fill!(dst, init)
-        return dst
-    end
-
-    # If the reduced extent is 1, just map each element through f (keep init's type)
-    if len == 1
-        dst = _alloc_or_temp(backend, temp, init, src_sizes)
-        _mapreduce_nd_apply_init!(f, op, dst, src, backend; init, max_tasks, min_elems, block_size)
-        return dst
-    end
-
-    # Degenerate cases end
-
-    dst = _alloc_or_temp(backend, temp, init, dst_sizes)
-    dst_size = length(dst)
-
-    if backend == CPU_BACKEND
-        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, max_tasks, min_elems)
-        return dst
-    end
-
-    # The stride-based fast paths below index a flat buffer at
-    # `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`. This works for any source backed
-    # by a single dense column-major buffer (dense arrays, but also strided views,
-    # adjoints, permuted dims, and reshapes over one). Sources without such a buffer
-    # — `Broadcasted`, lazy/computed arrays — take the generic Cartesian-indexed
-    # fallback, which makes no layout assumption (and crucially does not wrap the
-    # source in `@Const`, which is what makes e.g. PermutedDimsArray uncompilable).
-    layout = _mapreduce_strided_layout(src)
-    if isnothing(layout)
-        blocks = cld(dst_size, block_size)
-        kernel! = _mapreduce_nd_generic!(backend, block_size)
-        kernel!(
-            src, dst, f, op, init,
-            CartesianIndices(dst), _mapreduce_reduce_indices(src, dst), dst_size,
-            ndrange=(block_size * blocks,),
-        )
-        return dst
-    end
-
-    buffer, base_offset, src_strides = layout
+# The reduced and kept dimensions of a strided source, as `(strides, sizes)` of their merged
+# segments.
+function _mapreduce_segments(src_sizes, src_strides, dims_valid)
     reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
+    return (Tuple(str for (str, _) in reduce_segs), Tuple(s for (_, s) in reduce_segs)),
+           (Tuple(str for (str, _) in outer_segs), Tuple(s for (_, s) in outer_segs))
+end
 
-    outer_strides  = Tuple(str for (str, _) in outer_segs)
-    outer_sizes    = Tuple(s   for (_, s)   in outer_segs)
-    reduce_strides = Tuple(str for (str, _) in reduce_segs)
-    reduce_sizes   = Tuple(s   for (_, s)   in reduce_segs)
-    reduce_size    = len
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Dispatch decision (see header comment for the four paths):
-    #
-    #   - square-like, contiguous output with strided input -> tiled_strided
-    #   - dst_size >= reduce_size                          -> by_thread
-    #   - dst_size == 1, or dst_size < GS_DST_CUTOFF
-    #     (and dst_size < reduce_size)                     -> multigroup (split one
-    #                                                          reduction across blocks,
-    #                                                          needs a 2nd-pass combine)
-    #   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size) -> by_block, grid-striding
-    #                                                            over outputs, single pass
-    #
-    # Rationale: grid-striding by_block launches `min(dst_size, TARGET_BLOCKS)` blocks;
-    # for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
-    # the (large) reduction itself across many blocks via multigroup is still better.
-    # For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
-    # option regardless of GS_DST_CUTOFF.
-    # ─────────────────────────────────────────────────────────────────────────
-
+# The launch shape of a strided reduction along `dims`, and the number of blocks per output of a
+# `:multigroup` reduction:
+#   - square-like, contiguous output with strided input -> :tiled_strided
+#   - dst_size >= reduce_size                          -> :by_thread
+#   - dst_size == 1, or dst_size < GS_DST_CUTOFF
+#     (and dst_size < reduce_size)                     -> :multigroup (split one reduction
+#                                                          across blocks, needs a second-pass
+#                                                          combine and `partials` scratch), or
+#                                                          :by_block_each when that is one block
+#   - otherwise (GS_DST_CUTOFF <= dst_size < reduce_size) -> :by_block, grid-striding over
+#                                                            outputs, single pass
+#
+# Rationale: grid-striding by_block launches `min(dst_size, target_blocks)` blocks;
+# for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
+# the (large) reduction itself across many blocks via multigroup is still better.
+# For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
+# option regardless of GS_DST_CUTOFF.
+function _mapreduce_nd_shape(
+    dst_size, reduce_size, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
+    block_size, target_blocks,
+)
     # by_block override 1: when the reduced dimension is the fastest-varying one
     # (reduce_strides==(1,)), by_thread's per-thread strided access is badly
     # uncoalesced, while by_block lets consecutive threads read consecutive elements.
@@ -223,7 +112,7 @@ function mapreduce_nd(
     # coalescing is better than a strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
-        cld(dst_size, block_size) < TARGET_BLOCKS &&
+        cld(dst_size, block_size) < target_blocks &&
         length(reduce_sizes) == 1 && reduce_sizes[1] != 0
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
@@ -235,6 +124,144 @@ function mapreduce_nd(
         ispow2(block_size ÷ TILED_STRIDED_ROWS_PER_BLOCK)
 
     if use_tiled_strided
+        return :tiled_strided, 0
+    elseif dst_size >= reduce_size && !use_by_block
+        return :by_thread, 0
+    elseif use_by_block
+        return :by_block, 0
+    elseif dst_size == 1 || dst_size < GS_DST_CUTOFF
+        reduce_groups = min(
+            cld(reduce_size, block_size),
+            block_size,
+            cld(target_blocks, dst_size),
+            cld(reduce_size, block_size * MIN_ITEMS_PER_THREAD),
+        )
+        return reduce_groups > 1 ? (:multigroup, reduce_groups) : (:by_block_each, 0)
+    else
+        return :by_block, 0
+    end
+end
+
+# The scratch of a reduction along `dims` into `dst_size` outputs: the partial results of a
+# `:multigroup` reduction, with the partial-result type of the seed `neutral` (see `_reduce_seed`)
+function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, dst_size) where {A}
+    alg isa BlockReduce && A !== Union{} || return (;)
+    src_sizes = size(src)
+    len = Base.prod(src_sizes[d] for d in dims_valid; init=1)
+    (len <= 1 || dst_size == 0) && return (;)
+    layout = _mapreduce_strided_layout(src)
+    isnothing(layout) && return (;)
+    target_blocks = reduce_tuning(backend, A).target_blocks
+    (reduce_strides, reduce_sizes), (outer_strides, outer_sizes) =
+        _mapreduce_segments(src_sizes, layout[3], dims_valid)
+    shape, reduce_groups = _mapreduce_nd_shape(
+        dst_size, len, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
+        alg.block_size, target_blocks,
+    )
+    shape === :multigroup || return (;)
+    return (; partials=_buffer(typeof(neutral), dst_size, reduce_groups))
+end
+
+# Main entry point
+
+# The reduced dimensions `dims` (an integer or a collection of integers), as Base validates them:
+# duplicates are ignored, and dimensions beyond `ndims` reduce nothing.
+function _reduced_dims(dims, ndim::Int)
+    dims_src = dims isa Number ? (dims,) : dims
+    dims_buf = Int[]
+    for d in dims_src
+        d isa Integer || throw(ArgumentError("reduced dimension(s) must be integers"))
+        dim = Int(d)
+        dim < 1 && throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
+        push!(dims_buf, dim)
+    end
+    return Tuple(d for d in Base.unique(dims_buf) if d <= ndim)
+end
+
+# Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
+# dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
+# `_Fold()` (see `_finish`).
+function mapreduce_nd!(
+    f, op, dst::AbstractArray, src::MapReduceSource, backend::Backend,
+    alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
+    init,
+    neutral,
+    dims_valid::Tuple,
+    bufs::NamedTuple,
+) where {A}
+    # Launch settings of the elementwise passes, and of the reduction kernels
+    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
+                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
+    block_size = alg isa BlockReduce ? alg.block_size : 256
+
+    # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
+    # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
+    target_blocks = reduce_tuning(backend, A).target_blocks
+    target_blocks >= 1 || throw(ArgumentError(
+        "the reduction tuning's `target_blocks` must be positive, got $target_blocks"))
+
+    src_sizes = size(src)
+
+    # Degenerate cases begin; order of priority matters
+
+    len = Base.prod(src_sizes[d] for d in dims_valid; init=1)
+
+    # Empty reductions, e.g. reduce(+, rand(3, 0, 5), dims=2): `init`, else nothing is written
+    if len == 0
+        init isa Union{_NoInit, _Fold} || fill!(dst, init)
+        return dst
+    end
+
+    # Nothing to write, e.g. reduce(+, rand(3, 0, 5), dims=3), a 3×0×1 array
+    isempty(dst) && return dst
+    # (overwriting with single elements combines nothing, even when `op` always throws)
+    len == 1 && init isa _NoInit || _check_acctype(op, f, A)
+
+    # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
+    # dimensions, or only ones of size 1
+    if len == 1
+        _mapreduce_nd_single!(f, op, dst, src, backend, A; init, launch...)
+        return dst
+    end
+
+    # Degenerate cases end
+
+    dst_size = length(dst)
+
+    if alg isa CPUThreads.Partitioned
+        _mapreduce_nd_cpu_sections!(f, op, dst, src; init, neutral, launch...)
+        return dst
+    end
+
+    # The stride-based fast paths below index a flat buffer at
+    # `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`. This works for any source backed
+    # by a single dense column-major buffer (dense arrays, but also strided views,
+    # adjoints, permuted dims, and reshapes over one). Sources without such a buffer
+    # — `Broadcasted`, lazy/computed arrays — take the generic Cartesian-indexed
+    # fallback, which makes no layout assumption (and crucially does not wrap the
+    # source in `@Const`, which is what makes e.g. PermutedDimsArray uncompilable).
+    layout = _mapreduce_strided_layout(src)
+    if isnothing(layout)
+        blocks = cld(dst_size, block_size)
+        kernel! = _mapreduce_nd_generic!(backend, block_size)
+        kernel!(
+            src, dst, f, op, neutral, init,
+            CartesianIndices(dst), _mapreduce_reduce_indices(src, dst), dst_size,
+            ndrange=(block_size * blocks,),
+        )
+        return dst
+    end
+
+    buffer, base_offset, src_strides = layout
+    (reduce_strides, reduce_sizes), (outer_strides, outer_sizes) =
+        _mapreduce_segments(src_sizes, src_strides, dims_valid)
+    reduce_size = len
+    shape, reduce_groups = _mapreduce_nd_shape(
+        dst_size, reduce_size, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
+        block_size, target_blocks,
+    )
+
+    if shape === :tiled_strided
         # Narrow layout-specific path: square-like row reductions with contiguous
         # outputs and strided input reads, e.g. size=(1024,1024), dims=2. Several
         # outputs share a block: small lane groups reduce one output each, preserving
@@ -245,78 +272,49 @@ function mapreduce_nd(
         blocks = cld(dst_size, rows_per_block)
         kernel! = _mapreduce_nd_by_thread_tiled_strided!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
             ndrange=(block_size * blocks,),
         )
-    elseif dst_size >= reduce_size && !use_by_block
+    elseif shape === :by_thread
         # Many outputs, small reduction: one thread per output reduces sequentially
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_by_thread!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
         )
-    elseif use_by_block
-        # Grid-stride by_block: one full block cooperates on each output, then
-        # grid-strides across remaining outputs if fewer blocks than outputs were
-        # launched.
-        launch_blocks = min(dst_size, TARGET_BLOCKS)
-        _launch_mapreduce_nd_by_block!(
-            backend, block_size, buffer, dst, f, op, init, neutral,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, launch_blocks,
-        )
-    elseif dst_size == 1 || dst_size < GS_DST_CUTOFF
+    elseif shape === :multigroup
         # Very few outputs, large reduction: split each output's reduction across
-        # `reduce_groups` blocks (multigroup), combine partials in a second pass.
-        reduce_groups = min(
-            cld(reduce_size, block_size),
-            block_size,
-            cld(TARGET_BLOCKS, dst_size),
-            cld(reduce_size, block_size * MIN_ITEMS_PER_THREAD),
+        # `reduce_groups` blocks, combine the partials in a second pass
+        partial = bufs.partials
+        kernel! = _mapreduce_nd_multigroup!(backend, block_size)
+        kernel!(
+            buffer, partial, f, op, neutral,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            Val(dst_size), reduce_size, reduce_groups,
+            ndrange=(block_size * dst_size * reduce_groups,),
         )
-        reduce_groups = max(reduce_groups, 1)
 
-        if reduce_groups > 1
-            partial = KernelAbstractions.allocate(backend, typeof(init), (dst_size, reduce_groups))
-
-            kernel! = _mapreduce_nd_multigroup!(backend, block_size)
-            kernel!(
-                buffer, partial, f, op, neutral,
-                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-                Val(dst_size), reduce_size, reduce_groups,
-                ndrange=(block_size * dst_size * reduce_groups,),
-            )
-
-            # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block
-            # per output. reduce_groups is small (<=block_size by construction), so use
-            # a small block size for this pass to avoid an oversubscribed tree-reduce.
-            pass2_block_size = _pass2_block_size(reduce_groups)
-            kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
-            kernel2!(
-                partial, dst, op, init, neutral,
-                dst_size, reduce_groups,
-                ndrange=(pass2_block_size * dst_size,),
-            )
-        else
-            # reduce_groups collapsed to 1 (e.g. reduce_size <= block_size): just do a
-            # single-block-per-output reduction directly, no partial array needed.
-            _launch_mapreduce_nd_by_block!(
-                backend, block_size, buffer, dst, f, op, init, neutral,
-                base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-                dst_size, reduce_size, dst_size,
-            )
-        end
+        # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block
+        # per output. reduce_groups is small (<=block_size by construction), so use
+        # a small block size for this pass to avoid an oversubscribed tree-reduce.
+        pass2_block_size = _pass2_block_size(reduce_groups)
+        kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
+        kernel2!(
+            partial, dst, op, neutral, init,
+            dst_size, reduce_groups,
+            ndrange=(pass2_block_size * dst_size,),
+        )
     else
-        # GS_DST_CUTOFF <= dst_size < reduce_size: grid-stride over outputs, one pass.
-        # Cap launched blocks at TARGET_BLOCKS; each block handles
-        # ceil(dst_size / launch_blocks) outputs sequentially.
-        launch_blocks = min(dst_size, TARGET_BLOCKS)
+        # One block per output: grid-striding over the outputs with at most
+        # `target_blocks` blocks, or (a multigroup reduction that collapsed to one group,
+        # e.g. reduce_size <= block_size) one block for each of the few outputs
+        launch_blocks = shape === :by_block ? min(dst_size, target_blocks) : dst_size
         _launch_mapreduce_nd_by_block!(
-            backend, block_size, buffer, dst, f, op, init, neutral,
+            backend, block_size, buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size, launch_blocks,
         )
@@ -345,7 +343,8 @@ function _mapreduce_strided_layout(src::AbstractArray)
     s = try
         strides(src)
     catch err
-        err isa MethodError || rethrow()
+        # (an `ArgumentError` for a reshape of a non-contiguous view, on some Julia versions)
+        err isa Union{MethodError, ArgumentError} || rethrow()
         return nothing
     end
 
@@ -362,13 +361,17 @@ function _mapreduce_strided_layout(src::AbstractArray)
     return (p, base, s)
 end
 
-_mapreduce_strided_layout(::Base.Broadcast.Broadcasted) = nothing
+# (before Julia 1.12 a `Broadcasted` source reaches the kernels materialized, as a dense array:
+# see `_mapreduce_source`)
+_mapreduce_strided_layout(src::Base.Broadcast.Broadcasted) =
+    VERSION < v"1.12-" ? (nothing, 0, _mapreduce_dense_strides(size(src))) : nothing
 
 function _mapreduce_is_dense_buffer(p::AbstractArray)
     try
         return strides(p) == _mapreduce_dense_strides(size(p))
     catch err
-        err isa MethodError || rethrow()
+        # (an `ArgumentError` for a reshape of a non-contiguous view, on some Julia versions)
+        err isa Union{MethodError, ArgumentError} || rethrow()
         return false
     end
 end
@@ -417,7 +420,7 @@ function _contiguous_vector_width(
 end
 
 function _launch_mapreduce_nd_by_block!(
-    backend, block_size, buffer, dst, f, op, init, neutral,
+    backend, block_size, buffer, dst, f, op, neutral, init,
     base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
 )
@@ -427,7 +430,7 @@ function _launch_mapreduce_nd_by_block!(
     if W == 4
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(4),
             ndrange=(block_size * num_blocks,),
@@ -435,7 +438,7 @@ function _launch_mapreduce_nd_by_block!(
     elseif W == 2
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(2),
             ndrange=(block_size * num_blocks,),
@@ -443,7 +446,7 @@ function _launch_mapreduce_nd_by_block!(
     else
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
         kernel!(
-            buffer, dst, f, op, init, neutral,
+            buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             output_size, reduce_size, num_blocks,
             ndrange=(block_size * num_blocks,),
@@ -469,33 +472,25 @@ _mapreduce_reduce_indices(src, dst) =
 end
 
 
-# Allocate a destination array, or validate and reuse a user-provided `temp`.
-function _alloc_or_temp(backend, temp, init, sizes)
-    isnothing(temp) && return KernelAbstractions.allocate(backend, typeof(init), sizes)
-    @argcheck get_backend(temp) == backend
-    @argcheck size(temp) == sizes
-    @argcheck eltype(temp) == typeof(init)
-    temp
-end
-
 # CPU path
 
 function _mapreduce_nd_cpu_sections!(
     f, op, dst, src;
-    init, max_tasks, min_elems,
+    init, neutral, max_tasks, min_elems,
 )
     Rother  = CartesianIndices(dst)
     Rreduce = _mapreduce_reduce_indices(src, dst)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
-    foreachindex(dst, max_tasks=max_tasks, min_elems=min_elems) do idst
+    _foreachindex(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
         @inbounds begin
             Iother = Rother[idst]
-            res = init
+            res = neutral
             for Ireduce in Rreduce
                 J = max(Iother, Ireduce)
-                res = op(res, f(src[J]))
+                res = op_lanes(res, f_lanes(src[J]))
             end
-            dst[idst] = res
+            dst[idst] = _finish(op, init, dst, idst, res)
         end
     end
     dst
@@ -552,9 +547,10 @@ end
 # being elided, leaving a `throw` that the GPU backends cannot compile.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_generic!(
     src, dst,
-    f, op, init,
+    f, op, neutral, init,
     Rother, Rreduce, output_size,
 )
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -562,25 +558,27 @@ end
 
     if tid < output_size
         Iother = Rother[tid + 0x1]
-        res = init
+        res = neutral
         for Ireduce in Rreduce
             J = max(Iother, Ireduce)
-            res = op(res, f(src[J]))
+            res = op_lanes(res, f_lanes(src[J]))
         end
-        dst[Iother] = res
+        dst[Iother] = _finish(op, init, dst, Iother, res)
     end
 end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread_tiled_strided!(
-    @Const(src), dst,
-    f, op, init, neutral,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset, reduce_stride,
     output_size, reduce_size,
     ::Val{rows},
 ) where {rows}
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
     @uniform reduce_threads = N ÷ rows
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -598,7 +596,7 @@ end
         sbase = base_offset + iout
         j = lane
         while j < reduce_size
-            acc = op(acc, f(src[sbase + j * reduce_stride + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[sbase + j * reduce_stride + 0x1]))
             j += reduce_threads
         end
     end
@@ -611,14 +609,14 @@ end
         if lane < step
             dst_lane = row + lane * rows
             src_lane = row + (lane + step) * rows
-            sdata[dst_lane + 0x1] = op(sdata[dst_lane + 0x1], sdata[src_lane + 0x1])
+            sdata[dst_lane + 0x1] = op_lanes(sdata[dst_lane + 0x1], sdata[src_lane + 0x1])
         end
         @synchronize()
         step ÷= 2
     end
 
     if lane == 0x0 && iout < output_size
-        dst[iout + 0x1] = op(init, sdata[row + 0x1])
+        dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[row + 0x1])
     end
 end
 
@@ -627,13 +625,15 @@ end
 # e.g. reduce(+, rand(3, 1000), dims=1) — only 3 elements to reduce per output.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_thread!(
-    @Const(src), dst,
-    f, op, init,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
 )
+    src = _const_source(src_arg)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
     # NOTE: index calculations use zero-indexing (fewer ops, matches the CUDA / ROCm / oneAPI /
     # Metal code this is transpiled to), converting to one-indexing only at memory accesses.
     # `base_offset` (the source's element offset within its dense buffer; 0 for a dense
@@ -646,13 +646,13 @@ end
     if tid < output_size
         input_base = base_offset + _outer_decode(tid, outer_strides, outer_sizes)
 
-        res = init
+        res = neutral
         for j in 0x0:reduce_size - 0x1
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
-            res = op(res, f(src[input_base + off + 0x1]))
+            res = op_lanes(res, f_lanes(src[input_base + off + 0x1]))
         end
 
-        dst[tid + 0x1] = res
+        dst[tid + 0x1] = _finish(op, init, dst, tid + 0x1, res)
     end
 end
 
@@ -662,20 +662,22 @@ end
 # non-striding behavior) at zero extra cost — the while loop runs once.
 #
 # Used for GS_DST_CUTOFF <= dst_size < reduce_size (grid-stride, num_blocks ==
-# min(dst_size, TARGET_BLOCKS) < dst_size in general), and also for the
+# min(dst_size, target_blocks) < dst_size in general), and also for the
 # reduce_groups==1 fallback inside the multigroup branch (num_blocks == dst_size,
 # so the loop runs exactly once per block — identical to the pre-grid-stride kernel).
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block!(
-    @Const(src), dst,
-    f, op, init, neutral,
+    src_arg, dst,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
 )
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -687,17 +689,17 @@ end
         j   = ithread
         while j < reduce_size
             off = _reduce_offset(j, reduce_strides, reduce_sizes)
-            acc = op(acc, f(src[input_base + off + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[input_base + off + 0x1]))
             j  += N
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = op(init, sdata[0x1])
+            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -718,7 +720,7 @@ end
 # The host launcher verifies the pointer, row alignment, and UInt32 index bound.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_by_block_contiguous!(
     src, dst,
-    f, op, init, neutral,
+    f, op, neutral, init,
     base_offset,
     outer_strides, outer_sizes,
     output_size, reduce_size, num_blocks,
@@ -727,7 +729,8 @@ end
     @uniform N = @groupsize()[1]
     @uniform T = eltype(src)
     @uniform W = _unval(valW)
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -741,21 +744,21 @@ end
         stridew = UInt32(N) * UInt32(W)
         while jw + UInt32(W - 1) < rs
             v = vloada(Vec{W, T}, pointer(src, input_base + jw + 0x1))
-            acc = _acc_lanes(f, op, acc, v)
+            acc = _acc_lanes(f_lanes, op_lanes, acc, v)
             jw += stridew
         end
         while jw < rs
-            acc = op(acc, f(src[input_base + jw + 0x1]))
+            acc = op_lanes(acc, f_lanes(src[input_base + jw + 0x1]))
             jw += UInt32(1)
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = op(init, sdata[0x1])
+            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -771,15 +774,17 @@ end
 # into partial[iout, igroup]. The second pass combines the groups.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_multigroup!(
-    @Const(src), partial,
+    src_arg, partial,
     f, op, neutral,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     ::Val{output_size}, reduce_size, reduce_groups,
 ) where {output_size}
+    src = _const_source(src_arg)
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(partial) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -794,14 +799,14 @@ end
     j   = ithread + igroup * N
     while j < reduce_size
         off = _reduce_offset(j, reduce_strides, reduce_sizes)
-        acc = op(acc, f(src[input_base + off + 0x1]))
+        acc = op_lanes(acc, f_lanes(src[input_base + off + 0x1]))
         j  += N * reduce_groups
     end
 
     sdata[ithread + 0x1] = acc
     @synchronize()
 
-    @inline reduce_group!(@context, op, sdata, ithread)
+    @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
     if ithread == 0x0
         partial[iout + igroup * output_size + 0x1] = sdata[0x1]
@@ -809,17 +814,18 @@ end
 end
 
 # GPU kernel: multi-group second pass — one block per output reduces over the `reduce_groups`
-# partials and folds in `init`. Launched with a block size sized to `reduce_groups`
+# partials and applies `init` (see `_finish`). Launched with a block size sized to `reduce_groups`
 # (see _pass2_block_size), avoiding an oversubscribed tree-reduce when reduce_groups
 # is much smaller than 256.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_partial_to_dst!(
     @Const(partial), dst,
-    op, init, neutral,
+    op, neutral, init,
     output_size, reduce_groups,
 )
     @uniform N = @groupsize()[1]
-    sdata = @localmem eltype(dst) (N,)
+    sdata = @localmem typeof(neutral) (N,)
+    _, op_lanes = _lanefuncs(_Partials(), op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -828,17 +834,17 @@ end
         acc = neutral
         g = ithread
         while g < reduce_groups
-            acc = op(acc, partial[iblock + g * output_size + 0x1])
+            acc = op_lanes(acc, partial[iblock + g * output_size + 0x1])
             g += N
         end
 
         sdata[ithread + 0x1] = acc
         @synchronize()
 
-        @inline reduce_group!(@context, op, sdata, ithread)
+        @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iblock + 0x1] = op(init, sdata[0x1])
+            dst[iblock + 0x1] = _finish(op, init, dst, iblock + 0x1, sdata[0x1])
         end
     end
 end

@@ -1,9 +1,9 @@
 ### Binary Search
 
-Find the indices where some elements `x` should be inserted into a sorted sequence `v` to maintain the sorted order. Effectively applying the Julia.Base functions in parallel on a GPU using `foreachindex`.
-- `searchsortedfirst!` (in-place), `searchsortedfirst` (allocating): index of first element in `v` >= `x[j]`.
-- `searchsortedlast!`, `searchsortedlast`: index of last element in `v` <= `x[j]`.
-- **Other names**: `thrust::upper_bound`, `std::lower_bound`.
+Find the indices where many elements `x[j]` would be inserted into a sorted sequence `v` to maintain the sorted order: the Julia Base functions applied to each query in parallel. There are no allocating forms, because `Base.searchsortedfirst(v, x)` treats a vector `x` as one value.
+- `searchsortedfirst!`: index of the first element of `v` not ordered before `x[j]` (`>= x[j]` by default).
+- `searchsortedlast!`: index of the last element of `v` not ordered after `x[j]` (`<= x[j]` by default).
+- **Other names**: `thrust::lower_bound`, `thrust::upper_bound`, `std::lower_bound`.
 
 
 Example:
@@ -13,7 +13,7 @@ using Metal
 
 # Sorted array
 v = MtlArray(rand(Float32, 100_000))
-AK.sort!(v; alg=AK.MergeSort())
+AK.sort!(v)
 
 # Elements `x` to place within `v` at indices `ix`
 x = MtlArray(rand(Float32, 10_000))
@@ -25,7 +25,5 @@ AK.searchsortedfirst!(ix, v, x)
 
 ```@docs
 AcceleratedKernels.searchsortedfirst!
-AcceleratedKernels.searchsortedfirst
 AcceleratedKernels.searchsortedlast!
-AcceleratedKernels.searchsortedlast
 ```

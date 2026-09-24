@@ -12,7 +12,7 @@ module AcceleratedKernels
 
 # Internal dependencies
 using ArgCheck: @argcheck
-using GPUArraysCore: AnyGPUArray, @allowscalar
+using GPUArraysCore: AnyGPUArray, @allowscalar, neutral_element
 using KernelAbstractions
 using KernelAbstractions: @context
 using SIMD: Vec, vloada
@@ -26,6 +26,8 @@ const get_backend = KernelAbstractions.get_backend
 
 # Include code from other files
 include("utils.jl")
+include("algorithms.jl")
+include("workspace.jl")
 include("task_partitioner.jl")
 include("foreachindex.jl")
 include("map.jl")

@@ -1,0 +1,25 @@
+### Differences from Base
+
+AcceleratedKernels' functions with Base's names take the arguments Base's do, but follow
+contracts of their own, modelled on GPU libraries such as CUB: `init` is applied once, empty
+inputs have no implicit result, and results have one documented type. Base's rules that exist for
+Base's own reasons (empty results chosen per operator, `typeof(init)` as the result type along
+`dims`, and so on) are left to front-ends: GPUArrays.jl, for example, implements Base's API for
+GPU arrays on top of AcceleratedKernels and reproduces Base's results. The differences:
+
+| Call | Base | AcceleratedKernels |
+|---|---|---|
+| `reduce(op, A)`, `mapreduce(f, op, A)` of an empty `A`, no `init` | `Base.mapreduce_empty`: e.g. `sum(Int[]) == 0`, an error for `maximum` and for most mapped reductions | `ArgumentError` (`sum` and `prod` give zero and one) |
+| `mapreduce(f, op, A; dims)` with an empty reduced dimension, no `init` | `Base.reducedim_init`: e.g. `[0 0]` for `x -> x + 1` with `+`, an error for `max` | `ArgumentError` where there are outputs (`sum`, `prod` and `count` give zero or one) |
+| a one-element reduction, e.g. `reduce((a, b) -> a + b, [true])` | `true` (`Base.mapreduce_first`) | `1`, the accumulator type |
+| the element type of `mapreduce(f, op, A; dims, init)` | `typeof(init)` | the accumulator type: `sum(Int8[1 2]; dims=1, init=Int16(0))` is a `Matrix{Int}` |
+| the accumulator type of reductions into an array (`sum!`, reductions along `dims`) | depends on the code path, e.g. on the reduced dimension | one rule, the fold type from `eltype(R)` (see [`mapreducedim!`](@ref AcceleratedKernels.mapreducedim!)) |
+| an `init` that is not a neutral element of `op` | outside the contract: `init` must be neutral, and it is unspecified whether it is used for non-empty collections | any value, applied exactly once |
+| `reduce(op, A; dims)` for an `op` without `Base.reducedim_init`, such as a closure | `MethodError` | works |
+| a non-commutative `op` in a reduction | works (elements keep their order) | unsupported |
+| the running-value type of `accumulate!(op, B, A)` | depends on the code path: the fold type from `init` or the elements for vectors and `dims=1`, `eltype(B)` along `dims ≥ 2` | the fold type from `eltype(B)` joined with `init`'s type and the elements (unless `acctype` is given), so for the usual operators not narrower than `eltype(B)` |
+| the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
+| `accumulate(op, A; dims, init)` with `dims > ndims(A)` | copies `A`, ignoring `init` | applies `init` to every element |
+| a non-associative `op` in a scan, such as `-` | works (a sequential recurrence) | unsupported |
+| `findall(pred, A)` of a 0-dimensional `A` | `Int` indices | `CartesianIndex{0}`, `keys(A)`'s, unless `items=LinearIndices(A)` |
+| `any`, `all` with a predicate that returns `missing` | three-valued logic | `ArgumentError`: the predicate must return a `Bool` |

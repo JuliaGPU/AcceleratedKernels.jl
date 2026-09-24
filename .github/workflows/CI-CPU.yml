@@ -93,26 +93,37 @@ jobs:
       - name: Promote OpenCL to test dependency
         run: julia test/promote.jl opencl
       - uses: julia-actions/julia-runtest@v1
-  # cpuKA:
-  #   name: KA CPU Backend
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 60
-  #   permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
-  #     actions: write
-  #     contents: read
-  #   strategy:
-  #     fail-fast: true
-  #   steps:
-  #     - uses: actions/checkout@v7
-  #     - uses: julia-actions/setup-julia@v3
-  #       with:
-  #         version: 1
-  #         arch: x64
-  #     - uses: julia-actions/cache@v3
-  #     - uses: julia-actions/julia-buildpkg@v1
-  #     - uses: julia-actions/julia-runtest@v1
-  #       with:
-  #         test_args: '--cpu-ka'
+  cpuKA:
+    # KernelAbstractions 0.10 (unreleased, `main`) runs AcceleratedKernels' kernels on the host
+    # backend, through PoCL; `--cpu-ka` tests them there.
+    name: KA 0.10 host kernels - Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
+      actions: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.10'
+          - '1.13'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.version }}
+          arch: x64
+      - uses: julia-actions/cache@v3
+      - name: Develop AcceleratedKernels and KernelAbstractions main into the test environment
+        run: |
+          julia --project=test -e '
+            using Pkg
+            Pkg.develop([PackageSpec(path="."),
+                         PackageSpec(url="https://github.com/JuliaGPU/KernelAbstractions.jl")])'
+      - name: Run tests
+        # only the generic tests: the others, Aqua included, do not depend on the backend
+        run: julia --project=test test/runtests.jl --cpu-ka cpu-ka/
   docs:
     name: Documentation
     runs-on: ubuntu-latest
