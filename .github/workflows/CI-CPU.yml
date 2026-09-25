@@ -44,6 +44,11 @@ jobs:
           - JULIA_NUM_THREADS: 1
           - JULIA_NUM_THREADS: 2
         exclude:
+          # single-threaded runs only on one platform
+          - { env: { JULIA_NUM_THREADS: 1 }, os: macOS-latest }
+          - { env: { JULIA_NUM_THREADS: 1 }, os: macOS-15-intel }
+          - { env: { JULIA_NUM_THREADS: 1 }, os: windows-latest }
+          - { env: { JULIA_NUM_THREADS: 1 }, arch: x86 }
           - os: macOS-15-intel
             arch: x86
           - os: macOS-15-intel
@@ -56,6 +61,10 @@ jobs:
             arch: aarch64
           - os: windows-latest
             arch: aarch64
+        include:
+          - { version: nightly, os: ubuntu-latest, arch: x64, env: { JULIA_NUM_THREADS: 2 } }
+          - { version: nightly, os: macOS-latest, arch: aarch64, env: { JULIA_NUM_THREADS: 2 } }
+          - { version: nightly, os: windows-latest, arch: x64, env: { JULIA_NUM_THREADS: 2 } }
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
