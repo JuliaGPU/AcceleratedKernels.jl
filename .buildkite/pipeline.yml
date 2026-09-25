@@ -1,3 +1,7 @@
+# Tests on GPU back-ends. The CPU tests on GitHub Actions cover every supported Julia version,
+# so the back-ends are only tested on the oldest and newest release. Draft pull requests skip
+# them, unless selected by name in the last commit message: `[only cuda]`, `[only metal, oneapi]`
+# or `[only tests]` for all of them. `[skip amdgpu]` or `[skip tests]` does the opposite.
 steps:
 
   # CUDA
@@ -6,8 +10,6 @@ steps:
       setup:
         version:
           - "1.10"
-          - "1.11"
-          - "1.12"
           - "1.13"
     plugins:
       - JuliaCI/julia#v1:
@@ -21,7 +23,10 @@ steps:
                 Pkg.test("AcceleratedKernels")'
     agents:
       queue: "cuda"
-    if: build.message !~ /\[skip tests\]/
+    if: |
+      build.message !~ /\[skip [^\]]*(tests|cuda)/ &&
+      (build.message =~ /\[only [^\]]*(tests|cuda)/ ||
+       build.message !~ /\[only / && !build.pull_request.draft)
     timeout_in_minutes: 60
 
   # AMDGPU
@@ -30,8 +35,6 @@ steps:
       setup:
         version:
           - "1.10"
-          - "1.11"
-          - "1.12"
           - "1.13"
     plugins:
       - JuliaCI/julia#v1:
@@ -46,7 +49,10 @@ steps:
     agents:
       queue: "rocm"
       rocmgpu: "*"
-    if: build.message !~ /\[skip tests\]/
+    if: |
+      build.message !~ /\[skip [^\]]*(tests|amdgpu)/ &&
+      (build.message =~ /\[only [^\]]*(tests|amdgpu)/ ||
+       build.message !~ /\[only / && !build.pull_request.draft)
     timeout_in_minutes: 60
 
   # oneAPI
@@ -55,8 +61,6 @@ steps:
       setup:
         version:
           - "1.10"
-          - "1.11"
-          - "1.12"
           - "1.13"
     plugins:
       - JuliaCI/julia#v1:
@@ -70,7 +74,10 @@ steps:
                 Pkg.test("AcceleratedKernels")'
     agents:
       queue: "oneapi"
-    if: build.message !~ /\[skip tests\]/
+    if: |
+      build.message !~ /\[skip [^\]]*(tests|oneapi)/ &&
+      (build.message =~ /\[only [^\]]*(tests|oneapi)/ ||
+       build.message !~ /\[only / && !build.pull_request.draft)
     timeout_in_minutes: 60
 
   # Metal
@@ -79,8 +86,6 @@ steps:
       setup:
         version:
           - "1.10"
-          - "1.11"
-          - "1.12"
           - "1.13"
     plugins:
       - JuliaCI/julia#v1:
@@ -94,7 +99,10 @@ steps:
                 Pkg.test("AcceleratedKernels")'
     agents:
       queue: "metal"
-    if: build.message !~ /\[skip tests\]/
+    if: |
+      build.message !~ /\[skip [^\]]*(tests|metal)/ &&
+      (build.message =~ /\[only [^\]]*(tests|metal)/ ||
+       build.message !~ /\[only / && !build.pull_request.draft)
     timeout_in_minutes: 60
 
 env:
