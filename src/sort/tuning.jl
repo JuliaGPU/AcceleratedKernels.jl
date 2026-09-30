@@ -158,8 +158,6 @@ function _check(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) wher
     _require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "RadixSort does not support $(_sort_opname(perm, pairs))"))
-    layout isa FlatLayout || throw(ArgumentError(
-        "RadixSort does not support sorting along `dims`"))
     _rs_supported(T) || throw(ArgumentError(
         "RadixSort does not support element type $T; it supports 32- and 64-bit integers " *
         "and floats"))

@@ -27,13 +27,18 @@ end
 """
     RadixSort(; block_size=nothing, items_per_thread=nothing)
 
-GPU LSD radix sort for whole arrays of 32- and 64-bit integers and floats (`UInt32`, `Int32`,
-`Float32`, `UInt64`, `Int64`, `Float64`) under the default ordering or its reverse; it is stable
-and orders floats like `isless`. It does not support `dims`, custom `lt`/`by`, `sortperm!` or
-`sort_by_key!`. `block_size` must be a power of two up to 1024, `items_per_thread` between 1 and
-64. `items_per_thread` applies where radix sort's chunked kernels run, which needs atomics and a
-`block_size` that is a multiple of 32 whose tiles fit local memory; elsewhere its portable kernels
-sort one item per thread.
+GPU LSD radix sort for 32- and 64-bit integers and floats (`UInt32`, `Int32`, `Float32`,
+`UInt64`, `Int64`, `Float64`) under the default ordering or its reverse, for whole arrays and
+`dims`; it is stable and orders floats like `isless`. It does not support custom `lt`/`by`,
+`sortperm!` or `sort_by_key!`. `block_size` must be a power of two up to 1024, `items_per_thread`
+between 1 and 64. `items_per_thread` applies where radix sort's chunked kernels run, which needs
+atomics and a `block_size` that is a multiple of 32 whose tiles fit local memory; elsewhere its
+portable kernels sort one item per thread.
+
+Along `dims`, each pass sorts all slices at once. It pays off for long slices: every slice takes
+at least one block of the passes, so short ones leave most threads idle, and slices along other
+dimensions than the first are read with a stride. Where the chunked kernels run and a slice of up
+to `2 * block_size` elements fits in local memory, one block sorts each slice there instead.
 """
 Base.@kwdef struct RadixSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing

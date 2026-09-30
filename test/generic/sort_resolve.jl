@@ -165,8 +165,6 @@ end
     @test rejects(AK.RadixSort(items_per_thread=0))
     @test rejects(AK.RadixSort(); perm=true)
     @test rejects(AK.RadixSort(); pairs=true)
-    @test rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=1)
-    @test rejects(AK.RadixSort(), zeros(Float32, 16); dims=1)
     @test rejects(AK.RadixSort(), zeros(Int16, 16))
     @test rejects(AK.RadixSort(), Vector{Tuple{Int32, Int32}}(undef, 16))
     @test rejects(AK.RadixSort(); ord=Base.Order.ord(isless, abs, nothing))
@@ -179,6 +177,9 @@ end
         @test !rejects(AK.RadixSort(), zeros(T, 16); ord)
     end
     @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4))             # dims=: sorts flat
+    @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=1)
+    @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=2)
+    @test !rejects(AK.RadixSort(), zeros(Float32, 16); dims=1)
 
     # BitonicSort
     @test rejects(AK.BitonicSort(block_size=100))
@@ -224,10 +225,10 @@ end
         rt = only(Base.return_types(AK._resolve_sort,
                                     (AK.Auto, typeof(AK.HOST_BACKEND), A, D, Base.Order.ForwardOrdering)))
         @test rt === AK.CPUThreads.SampleSort
-        # An explicit algorithm resolves to itself, or always throws (no radix sort along `dims`)
+        # An explicit algorithm resolves to itself
         rt = only(Base.return_types(AK._resolve_sort,
                                     (AK.RadixSort, ResolveTestBackend, A, D, Base.Order.ForwardOrdering)))
-        @test rt === (D === Colon ? AK.RadixSort : Union{})
+        @test rt === AK.RadixSort
     end
 end
 
