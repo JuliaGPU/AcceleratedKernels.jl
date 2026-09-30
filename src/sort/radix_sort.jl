@@ -366,17 +366,23 @@ end
 end
 
 
-# Return the extrema of the transformed sort keys.
-function _rs_key_range(v::AbstractArray{T}, descending::Bool) where T
+# The extrema of the transformed sort keys, as a reduction over `(key, key)` pairs
+struct _RSKeyPair end
+@inline (::_RSKeyPair)(x) = (k = _to_sort_key(x); (k, k))
+struct _RSMinMax end
+@inline (::_RSMinMax)(a, b) = (min(a[1], b[1]), max(a[2], b[2]))
+
+function _rs_key_range_setup(v::AbstractArray{T}, backend::Backend) where T
     K = typeof(_to_sort_key(zero(T)))
     ident = (typemax(K), typemin(K))
-    min_k, max_k = mapreduce(
-        x -> (k = _to_sort_key(x); (k, k)),
-        (a, b) -> (min(a[1], b[1]), max(a[2], b[2])),
-        v;
-        init=ident,
-        neutral=ident,
-    )
+    return _mapreduce_setup(_RSKeyPair(), _RSMinMax(), v, backend, ident, ident, nothing, :,
+                            Auto()), ident
+end
+
+# Return the extrema of the transformed sort keys, with the scratch of `_rs_key_range_setup`
+function _rs_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool, bufs) where T
+    s, ident = _rs_key_range_setup(v, backend)
+    min_k, max_k = _mapreduce_run(_RSKeyPair(), _RSMinMax(), v, s, ident, bufs)
     if descending
         UInt64(~max_k), UInt64(~min_k)
     else
@@ -385,17 +391,47 @@ function _rs_key_range(v::AbstractArray{T}, descending::Bool) where T
 end
 
 
-"""
-    _radix_sort!(v, backend; descending, block_size, temp)
+# The launch configuration of `_radix_sort!`: whether it uses the chunked kernels, the items per
+# thread they get, and whether a single block sorts everything in local memory
+function _rs_config(::Type{T}, n, backend, block_size, items_per_thread) where T
+    has_atomics = KernelAbstractions.supports_atomics(backend)
+    use_fast    = has_atomics && block_size % _RS_CHUNK == 0 &&
+                  _rs_fast_local_memory(T, block_size, items_per_thread) <= LOCAL_MEMORY_BUDGET
+    items       = use_fast ? items_per_thread : 1
+    one_block   = use_fast && _rs_block_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET &&
+                  n <= 2 * block_size
+    return (; has_atomics, use_fast, items, one_block)
+end
 
-In-place GPU radix sort for supported 32- and 64-bit integers and floats.
+# The scratch of `_radix_sort!`, and the algorithms of the operations it calls: the output of
+# every other pass, the digit histograms of every block, and the histograms' scan and the key
+# range reduction
+function _radix_plan(a, v::AbstractArray{T}, backend) where T
+    n = length(v)
+    n <= 1 && return (;), (;)
+    c = _rs_config(T, n, backend, a.block_size, a.items_per_thread)
+    c.one_block && return (;), (;)
+    num_blocks = cld(n, a.block_size * c.items)
+    hist_len = Int(_RS_SIZE) * num_blocks
+    scan = _accumulate_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
+                             inclusive=false).plan
+    key_range = first(_rs_key_range_setup(v, backend)).plan
+    return (; temp=_buffer(T, size(v)), hist=_buffer(UInt32, hist_len), scan=scan.sizes,
+            key_range=key_range.sizes), (; scan=scan.alg, key_range=key_range.alg)
+end
+
+
+"""
+    _radix_sort!(v, backend, bufs; descending, block_size, items_per_thread)
+
+In-place GPU radix sort for supported 32- and 64-bit integers and floats, with the scratch
+buffers of `_radix_plan`.
 """
 function _radix_sort!(
-    v::AbstractArray{T}, backend::Backend=get_backend(v);
+    v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;
     descending::Bool=false,
     block_size::Int=256,
     items_per_thread::Int=2,
-    temp::Union{Nothing, AbstractArray}=nothing,
 ) where T
     n = length(v)
     n <= 1 && return v
@@ -404,15 +440,11 @@ function _radix_sort!(
     @argcheck items_per_thread >= 1
     @argcheck _rs_portable_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET
 
-    has_atomics = KernelAbstractions.supports_atomics(backend)
-    use_fast    = has_atomics && block_size % _RS_CHUNK == 0 &&
-                  _rs_fast_local_memory(T, block_size, items_per_thread) <= LOCAL_MEMORY_BUDGET
-    items       = use_fast ? items_per_thread : 1
+    (; has_atomics, use_fast, items, one_block) = _rs_config(T, n, backend, block_size, items_per_thread)
 
     n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)
 
-    if use_fast && _rs_block_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET &&
-       n <= 2 * block_size
+    if one_block
         _radix_sort_block!(backend, block_size)(
             v, descending, Val(n_passes); ndrange=block_size)
         KernelAbstractions.synchronize(backend)
@@ -420,22 +452,13 @@ function _radix_sort!(
     end
 
     num_blocks = cld(n, block_size * items)
-
-    hist = similar(v, UInt32, Int(_RS_SIZE) * num_blocks)
-
-    acc_temp = similar(v, UInt32, cld(length(hist), 512))
-
+    hist = bufs.hist
     p1 = v
-    p2 = if !isnothing(temp)
-        @argcheck length(temp) >= n && eltype(temp) === T
-        temp
-    else
-        similar(v)
-    end
+    p2 = bufs.temp
 
     ndrange = (block_size * num_blocks,)
 
-    min_key, max_key = _rs_key_range(p1, descending)
+    min_key, max_key = _rs_key_range(p1, backend, descending, bufs.key_range)
 
     vitems = Val(items)
     hist_kern! = has_atomics ?
@@ -454,7 +477,7 @@ function _radix_sort!(
 
         shift32 = UInt32(shift)
         hist_kern!(hist, p1, shift32, descending, vitems; ndrange)
-        accumulate!(+, hist, backend; init=UInt32(0), inclusive=false, temp=acc_temp)
+        _accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
         scat_kern!(p2, p1, hist, shift32, descending, vitems; ndrange)
 
         p1, p2 = p2, p1

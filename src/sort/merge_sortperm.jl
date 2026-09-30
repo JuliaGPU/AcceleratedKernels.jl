@@ -1,37 +1,16 @@
-"""
-    merge_sortperm!(
-        ix::AbstractArray,
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        inplace::Bool=false,
-        block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractArray}=nothing,
-        temp_v::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm!(
+# GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
+function _merge_sortperm!(
     ix::AbstractArray,
     v::AbstractArray,
-    backend::Backend=get_backend(v);
+    backend::Backend,
+    bufs::NamedTuple;
 
     lt=isless,
     by=identity,
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
 
-    inplace::Bool=false,
     block_size::Int=256,
-    temp_ix::Union{Nothing, AbstractArray}=nothing,
-    temp_v::Union{Nothing, AbstractArray}=nothing,
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
@@ -40,85 +19,27 @@ function merge_sortperm!(
     dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
     Base.Order.ord(lt, by, rev, order)      # validate the ordering keywords before touching ix
-    if !isnothing(temp_ix)
-        @argcheck length(temp_ix) == length(ix)
-        @argcheck eltype(temp_ix) === eltype(ix)
-    end
-
-    if !isnothing(temp_v)
-        @argcheck length(temp_v) == length(v)
-        @argcheck eltype(temp_v) === eltype(v)
-    end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, block_size=block_size) do i
+    _foreachindex(eachindex(ix), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
-    keys = inplace ? v : copy(v)
+    # (a range, for instance, has no backend: collected on the host first)
+    keys = copyto!(bufs.keys, _backend_free(v) ? collect(v) : v)
 
-    merge_sort_by_key!(
-        keys, ix, backend;
-        lt, by, rev, order, block_size, dims,
-        temp_keys=temp_v, temp_values=temp_ix,
-    )
+    _merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
 
     ix
 end
 
 
-"""
-    merge_sortperm(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        inplace::Bool=false,
-        block_size::Int=256,
-        temp_ix::Union{Nothing, AbstractArray}=nothing,
-        temp_v::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    ix = similar(v, Int)
-    merge_sortperm!(
-        ix, v, backend;
-        kwargs...
-    )
-end
-
-
-"""
-    merge_sortperm_lowmem!(
-        ix::AbstractArray,
-        v::AbstractArray,
-        backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm_lowmem!(
+# GPU merge sort permutation comparing the keys in global memory, without copying them.
+function _merge_sortperm_lowmem!(
     ix::AbstractArray,
     v::AbstractArray,
-    backend::Backend=get_backend(v);
+    backend::Backend,
+    bufs::NamedTuple;
 
     lt=isless,
     by=identity,
@@ -126,7 +47,6 @@ function merge_sortperm_lowmem!(
     order::Base.Order.Ordering=Base.Order.Forward,
 
     block_size::Int=256,
-    temp::Union{Nothing, AbstractArray}=nothing,
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
@@ -135,13 +55,9 @@ function merge_sortperm_lowmem!(
     dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
     ord = Base.Order.ord(lt, by, rev, order)
-    if !isnothing(temp)
-        @argcheck length(temp) == length(ix)
-        @argcheck eltype(temp) === eltype(ix)
-    end
 
     # Initialise the linear indices that will be sorted by the keys in v
-    foreachindex(ix, block_size=block_size) do i
+    _foreachindex(eachindex(ix), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(ix) || layout.len <= 1) && return ix
@@ -162,7 +78,7 @@ function merge_sortperm_lowmem!(
     size_group = half_size_group * 2
     if len > half_size_group
         p1 = ix
-        p2 = isnothing(temp) ? similar(ix) : temp
+        p2 = bufs.temp
 
         kernel! = _merge_sort_global!(backend, block_size)
 
@@ -187,32 +103,4 @@ function merge_sortperm_lowmem!(
     end
 
     ix
-end
-
-
-"""
-    merge_sortperm_lowmem(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        lt=isless,
-        by=identity,
-        rev::Union{Nothing, Bool}=nothing,
-        order::Base.Order.Ordering=Base.Order.Forward,
-
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-
-        # Permute each 1D slice along this dimension; `:` permutes the whole array as one vector
-        dims::Union{Colon, Integer}=Colon(),
-    )
-"""
-function merge_sortperm_lowmem(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    ix = similar(v, Int)
-    merge_sortperm_lowmem!(
-        ix, v, backend;
-        kwargs...
-    )
 end

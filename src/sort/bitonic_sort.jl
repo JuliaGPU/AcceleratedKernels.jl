@@ -98,15 +98,8 @@ end
 end
 
 
-"""
-    bitonic_defaults(backend::Backend)
-
-Default `block_size` and `items_per_thread` for [`BitonicSort`](@ref) on `backend`.
-"""
-bitonic_defaults(::Backend) = (block_size=256, items_per_thread=8)
-
-
-function bitonic_sort!(
+# GPU bitonic sort of `v` (or of each slice along `dims`), in place.
+function _bitonic_sort!(
     v::AbstractArray, backend::Backend=get_backend(v);
 
     lt=isless,

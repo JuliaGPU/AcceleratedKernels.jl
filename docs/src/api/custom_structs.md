@@ -14,7 +14,7 @@ using CUDA
 
 function complex_any(x, y)
     # Calling `any` on a normal Julia range, but running on x's backend
-    AK.any(1:length(x), AK.get_backend(x)) do i
+    AK.any(1:length(x); backend=AK.get_backend(x)) do i
         x[i] < 0 && y[i] > 0
     end
 end

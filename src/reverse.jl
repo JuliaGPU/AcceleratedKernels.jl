@@ -30,7 +30,7 @@ function reverse_dims!(
     reduced_size = ntuple(d -> ifelse(d == half_dim, cld(size(v, d), 2), size(v, d)), N)
     nd_idx = CartesianIndices(reduced_size)
 
-    foreachindex(1:Base.prod(reduced_size), backend; kwargs...) do i
+    _foreachindex(1:Base.prod(reduced_size), backend; kwargs...) do i
         idx = Tuple(nd_idx[i])
         index_in = lin_idx[idx...]
         idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
@@ -55,7 +55,7 @@ function reverse_dims!(
     lin_idx = LinearIndices(src)
     nd_idx = CartesianIndices(src)
 
-    foreachindex(src, backend; kwargs...) do i
+    _foreachindex(eachindex(src), backend; kwargs...) do i
         idx = Tuple(nd_idx[i])
         idx_mirror = ifelse.(rev_dims, ref .- idx, idx)
         index_out = lin_idx[idx_mirror...]
@@ -68,22 +68,18 @@ end
 
 """
     reverse!(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
+        v::AbstractArray;
+        backend=nothing,
         dims=:,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # GPU settings
-        block_size=256,
-    )
+        block_size::Int=256,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
+    ) -> v
 
 Reverse `v` in-place and return it. With `dims=:` (the default) the whole array is reversed; pass
 `dims=d` (an integer or an iterable of distinct integers in `1:ndims(v)`) to reverse only along
-those dimensions. `dims=()` leaves `v` unchanged. The CPU and GPU settings are the same as for
-[`foreachindex`](@ref).
+those dimensions. `dims=()` leaves `v` unchanged. `backend` is derived from `v`; the other
+keywords are those of [`foreachindex`](@ref).
 
 No temporary array is allocated.
 
@@ -102,12 +98,19 @@ AK.reverse!(m; dims=2)          # reverse the columns
 ```
 """
 function reverse!(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    dims=:, kwargs...
+    v::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
+    dims=:,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 )
+    backend = _resolve_backend(backend, v)
+    launch = (; block_size, max_tasks, min_elems)
+    _check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(v, dims)
     if !(dims isa Colon)
-        return reverse_dims!(v, dims, backend; kwargs...)
+        return reverse_dims!(v, dims, backend; launch...)
     end
 
     len = length(v)
@@ -117,7 +120,7 @@ function reverse!(
     hi = lastindex(v)
 
     # Swap each pair once; an odd-length array keeps its middle element.
-    foreachindex(1:(len ÷ 2), backend; kwargs...) do i
+    _foreachindex(1:(len ÷ 2), backend; launch...) do i
         left = lo + i - 1
         right = hi - i + 1
         @inbounds begin
@@ -133,33 +136,37 @@ end
 
 """
     reverse!(
-        dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
-
+        dst::AbstractArray, src::AbstractArray;
+        backend=nothing,
         dims=:,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # GPU settings
-        block_size=256,
-    )
+        block_size::Int=256,
+        max_tasks::Int=Threads.nthreads(),
+        min_elems::Int=1,
+    ) -> dst
 
 Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
 must not alias. With `dims=:` (the default), the whole array is reversed and only the lengths
 must match. With an integer or iterable of distinct dimensions, the sizes must match. `dims=()`
 copies `src` unchanged. Elements are converted to the destination element type on assignment.
-The CPU and GPU settings are the same as for [`foreachindex`](@ref).
+`backend` is derived from `dst` and `src`; the other keywords are those of
+[`foreachindex`](@ref).
 """
 function reverse!(
-    dst::AbstractArray, src::AbstractArray, backend::Backend=get_backend(src);
-    dims=:, kwargs...
+    dst::AbstractArray, src::AbstractArray;
+    backend::Union{Nothing, Backend}=nothing,
+    dims=:,
+    block_size::Int=256,
+    max_tasks::Int=Threads.nthreads(),
+    min_elems::Int=1,
 )
+    backend = _resolve_backend(backend, dst, src)
+    launch = (; block_size, max_tasks, min_elems)
+    _check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(src, dims)
     if !(dims isa Colon)
         @argcheck size(dst) == size(src)
         length(src) == 0 && return dst
-        return reverse_dims!(dst, src, dims, backend; kwargs...)
+        return reverse_dims!(dst, src, dims, backend; launch...)
     end
 
     @argcheck length(dst) == length(src)
@@ -168,7 +175,7 @@ function reverse!(
     hi_src = lastindex(src)
     lo_dst = firstindex(dst)
 
-    foreachindex(src, backend; kwargs...) do i
+    _foreachindex(eachindex(src), backend; launch...) do i
         @inbounds dst[lo_dst + (hi_src - i)] = src[i]
     end
 
@@ -177,28 +184,15 @@ end
 
 
 """
-    reverse(
-        v::AbstractArray, backend::Backend=get_backend(v);
-
-        dims=:,
-
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
-
-        # GPU settings
-        block_size=256,
-    )
+    reverse(v::AbstractArray; kwargs...)
 
 Return a reversed copy of `v`, leaving `v` unchanged. With `dims=:` (the default) the whole array is
-reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`. The CPU and
-GPU settings are the same as for [`foreachindex`](@ref).
+reversed; pass `dims=d` to reverse only along those dimensions, matching `Base.reverse`. The
+keywords are those of [`reverse!`](@ref).
 
 Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the allocation.
 """
-function reverse(
-    v::AbstractArray, backend::Backend=get_backend(v);
-    kwargs...
-)
-    reverse!(similar(v), v, backend; kwargs...)
+function reverse(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
+    backend = _resolve_backend(backend, v)
+    return reverse!(_similar(backend, v), v; backend, kwargs...)
 end

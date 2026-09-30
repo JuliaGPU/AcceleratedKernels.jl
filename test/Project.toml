@@ -18,3 +18,4 @@ pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"
 
 [compat]
 ParallelTestRunner = "2"
+oneAPI = "2.9.2"

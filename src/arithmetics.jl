@@ -1,322 +1,138 @@
 """
-    sum(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=zero(eltype(src)),
-        dims=nothing,
+    sum(src::AbstractArray; kwargs...)
 
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+Sum of the elements of an array, with Base's `add_sum`, so that small integers are summed as
+`Int`. The keywords are those of [`mapreduce`](@ref). Without `init`, an empty array, or along
+`dims` an empty slice, sums to zero of the accumulator type.
 
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
-    )
-
-Sum of elements of an array, with optional `init` and `dims`. Arguments are the same as for
-[`reduce`](@ref).
-
-# Examples
-Simple sum of elements in a vector:
 ```julia
 import AcceleratedKernels as AK
 using Metal
 
 v = MtlArray(rand(Int32(1):Int32(100), 100_000))
-s = AK.sum(v)
-```
+s = AK.sum(v)                           # an Int
+s = AK.sum(v; init=Int32(0))            # an Int as well
+s = AK.sum(v; acctype=Int32)            # an Int32, summed as Int32
 
-Row-wise sum of a matrix:
-```julia
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
-s = AK.sum(m, dims=1)
-```
-
-If you know the shape of the resulting array (in case of a dimensionwise sum, i.e. `dims` is not
-`nothing`), you can provide the `temp` argument to save results into and avoid allocations:
-```julia
-m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = MtlArray(zeros(Int32, 10, 1))
-s = AK.sum(m, dims=2, temp=temp)
+s = AK.sum(m; dims=1)                   # row-wise
 ```
 """
-function sum(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=zero(eltype(src)),
-    kwargs...
-)
-    reduce(
-        +, src, backend;
-        init,
-        kwargs...
-    )
-end
+sum(src::AbstractArray; kwargs...) = _reduce_or_empty(zero, Base.add_sum, src; kwargs...)
 
 
 """
-    prod(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=one(eltype(src)),
-        dims=nothing,
+    prod(src::AbstractArray; kwargs...)
 
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+Product of the elements of an array, with Base's `mul_prod`. The keywords are those of
+[`mapreduce`](@ref). Without `init`, an empty array, or along `dims` an empty slice, has the
+product one of the accumulator type.
 
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
-    )
-
-Product of elements of an array, with optional `init` and `dims`. Arguments are the same as for
-[`reduce`](@ref).
-
-# Examples
-Simple product of elements in a vector:
 ```julia
 import AcceleratedKernels as AK
 using AMDGPU
 
 v = ROCArray(rand(Int32(1):Int32(100), 100_000))
 p = AK.prod(v)
-```
-
-Row-wise product of a matrix:
-```julia
-m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
-p = AK.prod(m, dims=1)
-```
-
-If you know the shape of the resulting array (in case of a dimensionwise product, i.e. `dims` is not
-`nothing`), you can provide the `temp` argument to save results into and avoid allocations:
-```julia
-m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = ROCArray(ones(Int32, 10, 1))
-p = AK.prod(m, dims=2, temp=temp)
+p = AK.prod(ROCArray(rand(Int32(1):Int32(100), 10, 100_000)); dims=1)
 ```
 """
-function prod(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=one(eltype(src)),
-    kwargs...
-)
-    reduce(
-        *, src, backend;
-        init,
-        kwargs...
-    )
+prod(src::AbstractArray; kwargs...) = _reduce_or_empty(one, Base.mul_prod, src; kwargs...)
+
+# `reduce(op, src; kwargs...)`, except that without `init` an empty reduction gives `empty(A)` of
+# the accumulator type `A` (for a whole array, and for every output along `dims`), instead of
+# applying it as an `init`, which would change results such as the sign of a sum of `-0.0`s
+function _reduce_or_empty(empty, op, src; init=_NoInit(), dims=:, acctype=nothing,
+                          backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
+                          workspace=nothing, kwargs...)
+    kwargs = (; dims, acctype, backend, alg, kwargs...)
+    init isa _NoInit || return reduce(op, src; init, workspace, kwargs...)
+    A = _acctype(op, Union{}, _mapped_eltype(identity, src), acctype)
+    if A !== Union{} && isempty(src) &&
+       (_whole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))
+        # (the algorithm and the workspace are checked as for any other input)
+        p = _plan(reduce, op, src; kwargs...)
+        _buffers(p, workspace, src)
+        _whole(dims) && return empty(A)
+        dims_valid = _reduced_dims(dims, ndims(src))
+        dst_sizes = ntuple(d -> d in dims_valid ? 1 : size(src, d), ndims(src))
+        return fill!(KernelAbstractions.allocate(p.backend, A, dst_sizes), empty(A))
+    end
+    return reduce(op, src; workspace, kwargs...)
 end
 
 
 """
-    maximum(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=typemin(eltype(src)),
-        dims=nothing,
+    maximum(src::AbstractArray; kwargs...)
 
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+Maximum of the elements of an array; the maximum of an empty array, or along `dims` of an empty
+slice, is an error unless `init` is given. The keywords are those of [`mapreduce`](@ref).
 
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
-    )
-
-Maximum of elements of an array, with optional `init` and `dims`. Arguments are the same as for
-[`reduce`](@ref).
-
-# Examples
-Simple maximum of elements in a vector:
 ```julia
 import AcceleratedKernels as AK
 using oneAPI
 
 v = oneArray(rand(Int32(1):Int32(100), 100_000))
 m = AK.maximum(v)
-```
-
-Row-wise maximum of a matrix:
-```julia
-m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
-m = AK.maximum(m, dims=1)
-```
-
-If you know the shape of the resulting array (in case of a dimensionwise maximum, i.e. `dims` is not
-`nothing`), you can provide the `temp` argument to save results into and avoid allocations:
-```julia
-m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = oneArray(zeros(Int32, 10, 1))
-m = AK.maximum(m, dims=2, temp=temp)
+m = AK.maximum(oneArray(rand(Int32(1):Int32(100), 10, 100_000)); dims=1)
 ```
 """
-function maximum(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=typemin(eltype(src)),
-    kwargs...
-)
-    reduce(
-        max, src, backend;
-        init,
-        kwargs...
-    )
-end
+maximum(src::AbstractArray; kwargs...) = reduce(max, src; kwargs...)
 
 
 """
-    minimum(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=typemax(eltype(src)),
-        dims=nothing,
+    minimum(src::AbstractArray; kwargs...)
 
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+Minimum of the elements of an array; the minimum of an empty array, or along `dims` of an empty
+slice, is an error unless `init` is given. The keywords are those of [`mapreduce`](@ref).
 
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
-    )
-
-Minimum of elements of an array, with optional `init` and `dims`. Arguments are the same as for
-[`reduce`](@ref).
-
-# Examples
-Simple minimum of elements in a vector:
 ```julia
 import AcceleratedKernels as AK
 using CUDA
 
 v = CuArray(rand(Int32(1):Int32(100), 100_000))
 m = AK.minimum(v)
-```
-
-Row-wise minimum of a matrix:
-```julia
-m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
-m = AK.minimum(m, dims=1)
-```
-
-If you know the shape of the resulting array (in case of a dimensionwise minimum, i.e. `dims` is not
-`nothing`), you can provide the `temp` argument to save results into and avoid allocations:
-```julia
-m = CuArray(rand(Int32(1):Int32(100), 10, 100_000))
-temp = CuArray(ones(Int32, 10, 1))
-m = AK.minimum(m, dims=2, temp=temp)
+m = AK.minimum(CuArray(rand(Int32(1):Int32(100), 10, 100_000)); dims=1)
 ```
 """
-function minimum(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=typemax(eltype(src)),
-    kwargs...
-)
-    reduce(
-        min, src, backend;
-        init,
-        kwargs...
-    )
-end
+minimum(src::AbstractArray; kwargs...) = reduce(min, src; kwargs...)
 
 
 """
-    count(
-        [f=identity], src::AbstractArray, backend::Backend=get_backend(src);
-        init=0,
-        dims=nothing,
+    count([f=identity,] src::AbstractArray; init=0, kwargs...)
 
-        # CPU settings
-        max_tasks=Threads.nthreads(),
-        min_elems=1,
+Count the elements of `src` for which `f` returns `true`: `f` must return a `Bool`, and the
+count is added to `init` (so an empty array counts `init`). The keywords are those of
+[`mapreduce`](@ref).
 
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        switch_below::Int=0,
-    )
-
-Count the number of elements in `src` for which the function `f` returns `true`. If `f` is omitted,
-count the number of `true` elements in `src`. Arguments are the same as for [`mapreduce`](@ref).
-
-# Examples
-Simple count of `true` elements in a vector:
 ```julia
 import AcceleratedKernels as AK
-using Metal
+using CUDA
 
-v = MtlArray(rand(Bool, 100_000))
-c = AK.count(v)
-```
-
-Count of elements greater than 50 in a vector:
-```julia
-v = MtlArray(rand(Int32(1):Int32(100), 100_000))
-c = AK.count(x -> x > 50, v)
-```
-
-Row-wise count of `true` elements in a matrix:
-```julia
-m = MtlArray(rand(Bool, 10, 100_000))
-c = AK.count(m, dims=1)
-```
-
-If you know the shape of the resulting array (in case of a dimensionwise count, i.e. `dims` is not
-`nothing`), you can provide the `temp` argument to save results into and avoid allocations:
-```julia
-m = MtlArray(rand(Bool, 10, 100_000))
-temp = MtlArray(zeros(Int32, 10, 1))
-c = AK.count(m; init=Int32(0), dims=2, temp=temp)
+v = CuArray(rand(Float32, 100_000))
+c = AK.count(x -> x > 0.5, v)
+c = AK.count(CuArray(rand(Bool, 10, 100_000)); init=Int32(0), dims=2)
 ```
 """
-function count(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=0,
-    kwargs...
-)
-    mapreduce(
-        x -> x ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init,
-        neutral=zero(typeof(init)),
-        kwargs...
-    )
-end
+count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
+count(f, src::AbstractArray; init=0, kwargs...) =
+    mapreduce(_BoolValued(f), Base.add_sum, src; init, kwargs...)
 
-
-function count(
-    f, src::AbstractArray, backend::Backend=get_backend(src);
-    init=0,
-    kwargs...
-)
-    mapreduce(
-        x -> f(x) ? one(typeof(init)) : zero(typeof(init)), +, src, backend;
-        init,
-        neutral=zero(typeof(init)),
-        kwargs...
-    )
-end
+_plan(::typeof(sum), src::AbstractArray; kwargs...) = _plan(reduce, Base.add_sum, src; kwargs...)
+_plan(::typeof(prod), src::AbstractArray; kwargs...) = _plan(reduce, Base.mul_prod, src; kwargs...)
+_plan(::typeof(maximum), src::AbstractArray; kwargs...) = _plan(reduce, max, src; kwargs...)
+_plan(::typeof(minimum), src::AbstractArray; kwargs...) = _plan(reduce, min, src; kwargs...)
+_plan(::typeof(count), src::AbstractArray; kwargs...) = _plan(count, identity, src; kwargs...)
+_plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
+    _plan(mapreduce, _BoolValued(f), Base.add_sum, src; init, kwargs...)
 
 
 """
-    cumsum(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=zero(eltype(src)),
-        neutral=zero(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+    cumsum(src::AbstractArray; kwargs...)
 
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Cumulative sum of elements of an array, with optional `init` and `dims`. Arguments are the same as
-for [`accumulate`](@ref).
+Cumulative sum of elements of an array, as `Base.cumsum` (Base's `add_sum`, so small integers are
+summed as `Int`), except that without `dims` a multidimensional array is summed in linear order.
+The keywords are those of [`accumulate`](@ref).
 
 # Examples
 Simple cumulative sum of elements in a vector:
@@ -334,39 +150,15 @@ m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.cumsum(m, dims=1)
 ```
 """
-function cumsum(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=zero(eltype(src)),
-    neutral=zero(eltype(src)),
-    kwargs...
-)
-    accumulate(
-        +, src, backend;
-        init, neutral,
-        inclusive=true,
-        kwargs...
-    )
-end
+cumsum(src::AbstractArray; kwargs...) = accumulate(Base.add_sum, src; kwargs...)
 
 
 """
-    cumprod(
-        src::AbstractArray, backend::Backend=get_backend(src);
-        init=one(eltype(src)),
-        neutral=one(eltype(src)),
-        dims::Union{Nothing, Int}=nothing,
+    cumprod(src::AbstractArray; kwargs...)
 
-        # Algorithm choice
-        alg::AccumulateAlgorithm=ScanPrefixes(),
-
-        # GPU settings
-        block_size::Int=256,
-        temp::Union{Nothing, AbstractArray}=nothing,
-        temp_flags::Union{Nothing, AbstractArray}=nothing,
-    )
-
-Cumulative product of elements of an array, with optional `init` and `dims`. Arguments are the same
-as for [`accumulate`](@ref).
+Cumulative product of elements of an array, as `Base.cumprod` (Base's `mul_prod`), except that
+without `dims` a multidimensional array is multiplied in linear order. The keywords are those of
+[`accumulate`](@ref).
 
 # Examples
 Simple cumulative product of elements in a vector:
@@ -384,16 +176,7 @@ m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
 p = AK.cumprod(m, dims=1)
 ```
 """
-function cumprod(
-    src::AbstractArray, backend::Backend=get_backend(src);
-    init=one(eltype(src)),
-    neutral=one(eltype(src)),
-    kwargs...
-)
-    accumulate(
-        *, src, backend;
-        init, neutral,
-        inclusive=true,
-        kwargs...
-    )
-end
+cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)
+
+_plan(::typeof(cumsum), src::AbstractArray; kwargs...) = _plan(accumulate, Base.add_sum, src; kwargs...)
+_plan(::typeof(cumprod), src::AbstractArray; kwargs...) = _plan(accumulate, Base.mul_prod, src; kwargs...)
