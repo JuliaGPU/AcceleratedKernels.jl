@@ -135,7 +135,7 @@ end
 
 # The scratch of `sort!` with each algorithm, and the algorithms of the operations it calls
 _sort_plan(a, v, backend, dims, by) = _sort_sizes(a, v, backend, dims, by), (;)
-_sort_plan(a::RadixSort, v, backend, dims, by) = _radix_plan(a, v, backend)
+_sort_plan(a::RadixSort, v, backend, dims, by) = _radix_plan(a, v, backend, dims)
 
 function _sort_sizes(a::MergeSort, v, backend, dims, by)
     layout = slice_layout(v, dims)
@@ -155,7 +155,7 @@ end
 
 function _sort_impl!(a::RadixSort, v, backend, dims, ord, bufs; lt, by, rev, order)
     _radix_sort!(v, backend, bufs; descending=ord === Base.Order.Reverse,
-                 block_size=a.block_size, items_per_thread=a.items_per_thread)
+                 block_size=a.block_size, items_per_thread=a.items_per_thread, dims)
 end
 
 function _sort_impl!(a::BitonicSort, v, backend, dims, ord, bufs; lt, by, rev, order)

@@ -1,6 +1,13 @@
 # Stable GPU LSD radix sort with 8-bit digits.
 # The atomic kernels use several items per thread; scan kernels are the portable
 # fallback for backends without shared-memory atomics.
+#
+# The kernels sort the slices of a slices.jl layout, a whole-array sort being one flat slice. Each
+# slice is split into `bps` blocks, and the digit histograms are laid out slice-major:
+# `hist[(slice * 256 + digit) * bps + block]`. An exclusive scan of all of them then gives every
+# (slice, digit, block) its position in the concatenation of the sorted slices, from which the
+# scatter subtracts the slice's start. The subtraction wraps, so positions within a slice are
+# right as long as the slice fits in a UInt32.
 
 import Atomix
 
@@ -34,27 +41,29 @@ end
 
 # Histogram without atomics.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist!(
-    hist, @Const(v), shift::UInt32, rev::Bool, ::Val,
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val, layout, bps::Int,
 )
     @uniform NI = Int(@groupsize()[1])
     s_digit = @localmem UInt32 (NI,)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    len        = Int(length(v))
-    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    islice, iblk = slice_block(layout, iblock, bps)
+    src = slice(v, layout, islice)
+    len = layout.len
 
-    i = iblock * NI + ithread
-    s_digit[ithread + 1] = UInt32(i < len ? _rs_digit(v[i + 1], shift, rev) : 0xffffffff)
+    i = iblk * NI + ithread
+    s_digit[ithread + 1] = UInt32(i < len ? _rs_digit(src[i + 1], shift, rev) : 0xffffffff)
     @synchronize()
 
+    base = islice * Int(_RS_SIZE) * bps + iblk
     bucket = ithread
     while bucket < Int(_RS_SIZE)
         cnt = UInt32(0)
         for jj in 1:NI
             cnt += UInt32(s_digit[jj] == UInt32(bucket))
         end
-        hist[bucket * num_blocks + iblock + 1] = cnt
+        hist[base + bucket * bps + 1] = cnt
         bucket += NI
     end
 end
@@ -63,15 +72,16 @@ end
 # Histogram with shared-memory atomics.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_hist_atomic!(
-    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS},
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS}, layout, bps::Int,
 ) where ITEMS
     @uniform NI = Int(@groupsize()[1])
     s_hist = @localmem UInt32 (Int(_RS_SIZE),)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    len        = Int(length(v))
-    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    islice, iblk = slice_block(layout, iblock, bps)
+    src = slice(v, layout, islice)
+    len = layout.len
     j = ithread
     while j < Int(_RS_SIZE)
         s_hist[j + 1] = UInt32(0)
@@ -81,18 +91,19 @@ end
 
     m = 0
     while m < ITEMS
-        i = iblock * NI * ITEMS + ithread + m * NI
+        i = iblk * NI * ITEMS + ithread + m * NI
         if i < len
-            d = Int(_rs_digit(v[i + 1], shift, rev))
+            d = Int(_rs_digit(src[i + 1], shift, rev))
             Atomix.@atomic s_hist[d + 1] += UInt32(1)
         end
         m += 1
     end
     @synchronize()
 
+    base = islice * Int(_RS_SIZE) * bps + iblk
     bucket = ithread
     while bucket < Int(_RS_SIZE)
-        hist[bucket * num_blocks + iblock + 1] = s_hist[bucket + 1]
+        hist[base + bucket * bps + 1] = s_hist[bucket + 1]
         bucket += NI
     end
 end
@@ -100,7 +111,7 @@ end
 
 # Stable scatter without atomics.
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val,
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val, layout, bps::Int,
 )
     @uniform N   = @groupsize()[1]
     @uniform NI  = Int(@groupsize()[1])
@@ -110,16 +121,20 @@ end
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    len        = Int(length(v_in))
-    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    islice, iblk = slice_block(layout, iblock, bps)
+    src = slice(v_in, layout, islice)
+    dst = slice(v_out, layout, islice)
+    len = layout.len
 
-    i = iblock * NI + ithread
+    i = iblk * NI + ithread
     if i < len
-        s_elem[ithread + 1] = v_in[i + 1]
+        s_elem[ithread + 1] = src[i + 1]
     end
+    base = islice * Int(_RS_SIZE) * bps + iblk
+    start = (islice * len) % UInt32
     j = ithread
     while j < Int(_RS_SIZE)
-        s_gbase[j + 1] = hist[j * num_blocks + iblock + 1]
+        s_gbase[j + 1] = hist[base + j * bps + 1] - start
         j += NI
     end
     @synchronize()
@@ -134,7 +149,7 @@ end
             cnt += UInt32(s_digit[jj] == my_digit)
         end
         gpos = Int(s_gbase[my_digit + 1]) + Int(cnt)
-        v_out[gpos + 1] = s_elem[ithread + 1]
+        dst[gpos + 1] = s_elem[ithread + 1]
     end
 end
 
@@ -142,7 +157,7 @@ end
 # Stable scatter with chunked ranks.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter_chunked!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS},
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS}, layout, bps::Int,
 ) where ITEMS
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * ITEMS
@@ -154,14 +169,16 @@ end
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    len        = Int(length(v_in))
-    num_blocks = Int(length(hist)) ÷ Int(_RS_SIZE)
+    islice, iblk = slice_block(layout, iblock, bps)
+    src = slice(v_in, layout, islice)
+    dst = slice(v_out, layout, islice)
+    len = layout.len
     m = 0
     while m < ITEMS
         p = ithread + m * NI
-        i = iblock * TILE + p
+        i = iblk * TILE + p
         if i < len
-            k = v_in[i + 1]
+            k = src[i + 1]
             s_elem[p + 1]  = k
             s_digit[p + 1] = _rs_digit(k, shift, rev)
         else
@@ -169,9 +186,11 @@ end
         end
         m += 1
     end
+    base = islice * Int(_RS_SIZE) * bps + iblk
+    start = (islice * len) % UInt32
     j = ithread
     while j < Int(_RS_SIZE)
-        s_gbase[j + 1] = hist[j * num_blocks + iblock + 1]
+        s_gbase[j + 1] = hist[base + j * bps + 1] - start
         j += NI
     end
     j = ithread
@@ -218,7 +237,7 @@ end
             end
             rank = s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] + cnt
             gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
-            v_out[gpos + 1] = s_elem[p + 1]
+            dst[gpos + 1] = s_elem[p + 1]
         end
         m += 1
     end
@@ -226,22 +245,23 @@ end
 
 
 
-# Single-block sort for small arrays.
+# Sorts of slices that fit one block, one block per slice.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_sort_block!(
-    v, rev::Bool, ::Val{NPASS},
+    data, rev::Bool, ::Val{NPASS}, layout,
 ) where NPASS
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * 2
     @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ _RS_CHUNK
-    s_a     = @localmem eltype(v) (TILE,)
-    s_b     = @localmem eltype(v) (TILE,)
+    s_a     = @localmem eltype(data) (TILE,)
+    s_b     = @localmem eltype(data) (TILE,)
     s_digit = @localmem UInt32    (TILE,)
     s_chist = @localmem UInt32    (Int(_RS_SIZE) * NCH,)
     s_loff  = @localmem UInt32    (Int(_RS_SIZE),)
 
     it = Int(@index(Local, Linear)) - 1
-    n  = Int(length(v))
+    v  = slice(data, layout, Int(@index(Group, Linear)) - 1)
+    n  = layout.len
 
     m = 0
     while m < 2
@@ -391,28 +411,32 @@ function _rs_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool, 
 end
 
 
-# The launch configuration of `_radix_sort!`: whether it uses the chunked kernels, the items per
-# thread they get, and whether a single block sorts everything in local memory
-function _rs_config(::Type{T}, n, backend, block_size, items_per_thread) where T
+# The launch configuration of `_radix_sort!` for slices of length `len`: whether it uses the
+# chunked kernels, the items per thread they get, and whether one block sorts each slice in local
+# memory
+function _rs_config(::Type{T}, len, backend, block_size, items_per_thread) where T
     has_atomics = KernelAbstractions.supports_atomics(backend)
     use_fast    = has_atomics && block_size % _RS_CHUNK == 0 &&
                   _rs_fast_local_memory(T, block_size, items_per_thread) <= LOCAL_MEMORY_BUDGET
     items       = use_fast ? items_per_thread : 1
     one_block   = use_fast && _rs_block_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET &&
-                  n <= 2 * block_size
+                  len <= 2 * block_size
     return (; has_atomics, use_fast, items, one_block)
 end
+
+# The number of blocks of the radix passes. Tiny slices make it exceed the number of elements, so
+# it and the sizes derived from it are checked: on 32-bit hosts, they could overflow.
+_rs_num_blocks(layout, tile) = Base.checked_mul(slice_count(layout), cld(layout.len, tile))
 
 # The scratch of `_radix_sort!`, and the algorithms of the operations it calls: the output of
 # every other pass, the digit histograms of every block, and the histograms' scan and the key
 # range reduction
-function _radix_plan(a, v::AbstractArray{T}, backend) where T
-    n = length(v)
-    n <= 1 && return (;), (;)
-    c = _rs_config(T, n, backend, a.block_size, a.items_per_thread)
+function _radix_plan(a, v::AbstractArray{T}, backend, dims) where T
+    layout = slice_layout(v, dims)
+    (isempty(v) || layout.len <= 1) && return (;), (;)
+    c = _rs_config(T, layout.len, backend, a.block_size, a.items_per_thread)
     c.one_block && return (;), (;)
-    num_blocks = cld(n, a.block_size * c.items)
-    hist_len = Int(_RS_SIZE) * num_blocks
+    hist_len = Base.checked_mul(Int(_RS_SIZE), _rs_num_blocks(layout, a.block_size * c.items))
     scan = _accumulate_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                              inclusive=false).plan
     key_range = first(_rs_key_range_setup(v, backend)).plan
@@ -422,41 +446,45 @@ end
 
 
 """
-    _radix_sort!(v, backend, bufs; descending, block_size, items_per_thread)
+    _radix_sort!(v, backend, bufs; descending, block_size, items_per_thread, dims)
 
-In-place GPU radix sort for supported 32- and 64-bit integers and floats, with the scratch
-buffers of `_radix_plan`.
+In-place GPU radix sort of `v`, or of its slices along `dims`, for supported 32- and 64-bit
+integers and floats, with the scratch buffers of `_radix_plan`.
 """
 function _radix_sort!(
     v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;
     descending::Bool=false,
     block_size::Int=256,
     items_per_thread::Int=2,
+    dims::Union{Colon, Integer}=Colon(),
 ) where T
-    n = length(v)
-    n <= 1 && return v
+    layout = slice_layout(v, dims)
+    len = layout.len
+    (isempty(v) || len <= 1) && return v
 
     @argcheck ispow2(block_size) && block_size >= 1
     @argcheck items_per_thread >= 1
     @argcheck _rs_portable_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET
 
-    (; has_atomics, use_fast, items, one_block) = _rs_config(T, n, backend, block_size, items_per_thread)
+    (; has_atomics, use_fast, items, one_block) = _rs_config(T, len, backend, block_size, items_per_thread)
 
     n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)
 
     if one_block
         _radix_sort_block!(backend, block_size)(
-            v, descending, Val(n_passes); ndrange=block_size)
+            v, descending, Val(n_passes), layout;
+            ndrange=Base.checked_mul(block_size, slice_count(layout)))
         KernelAbstractions.synchronize(backend)
         return v
     end
 
-    num_blocks = cld(n, block_size * items)
+    bps = cld(len, block_size * items)
+    num_blocks = _rs_num_blocks(layout, block_size * items)
     hist = bufs.hist
     p1 = v
     p2 = bufs.temp
 
-    ndrange = (block_size * num_blocks,)
+    ndrange = (Base.checked_mul(block_size, num_blocks),)
 
     min_key, max_key = _rs_key_range(p1, backend, descending, bufs.key_range)
 
@@ -476,9 +504,9 @@ function _radix_sort!(
         (min_key >> shift) == (max_key >> shift) && continue
 
         shift32 = UInt32(shift)
-        hist_kern!(hist, p1, shift32, descending, vitems; ndrange)
+        hist_kern!(hist, p1, shift32, descending, vitems, layout, bps; ndrange)
         _accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
-        scat_kern!(p2, p1, hist, shift32, descending, vitems; ndrange)
+        scat_kern!(p2, p1, hist, shift32, descending, vitems, layout, bps; ndrange)
 
         p1, p2 = p2, p1
         n_actual += 1
