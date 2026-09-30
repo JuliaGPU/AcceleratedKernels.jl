@@ -925,6 +925,13 @@ end
         @test Array(AK.sort(A; alg=SORT_ALG, dims=dim)) == sort(A_h; dims=dim)
     end
 
+    # Slices after dimensions of size 1 are contiguous, like those along the first dimension
+    A_h = rand(Int32, 1, 3000, 7)
+    @test Array(AK.sort(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sort(A_h; dims=2)
+    A_h = rand(Float32, 1, 1, 300, 5)
+    @test Array(AK.sort(array_from_host(A_h); alg=SORT_ALG, dims=3, rev=true)) ==
+          sort(A_h; dims=3, rev=true)
+
     # Empty and singleton slices
     for sz in ((0, 5), (5, 0), (1, 64), (64, 1)), dim in 1:2
         A_h = rand(Float32, sz...)
@@ -988,6 +995,13 @@ end
     v_h = rand(Int32(0):Int32(9), 5000)
     v   = array_from_host(v_h)
     @test Array(AK.sortperm(v; alg=SORT_ALG, dims=1)) == sortperm(v_h)
+
+    # Slices after dimensions of size 1 are contiguous, like those along the first dimension
+    A_h = rand(Int32(0):Int32(9), 1, 3000, 7)
+    @test Array(AK.sortperm(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sortperm(A_h; dims=2)
+    A_h = rand(Float32, 1, 1, 300, 5)
+    @test Array(AK.sortperm(array_from_host(A_h); alg=SORT_ALG, dims=3, rev=true)) ==
+          sortperm(A_h; dims=3, rev=true)
 
     # Empty and singleton slices
     for sz in ((0, 5), (5, 0), (1, 64), (64, 1)), dim in 1:2

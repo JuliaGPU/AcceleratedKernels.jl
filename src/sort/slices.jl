@@ -12,6 +12,13 @@ struct SliceLayout
     count::Int      # number of slices
 end
 
+# Slices of stride 1 (along the first dimension, or one after dimensions of size 1) are
+# contiguous: slice `i` starts at `i * len`, and indexing it needs no multiplication
+struct ContiguousLayout
+    len::Int
+    count::Int
+end
+
 slice_layout(v::AbstractArray, ::Colon) = FlatLayout(length(v))
 
 function slice_layout(v::AbstractArray, dims::Integer)
@@ -22,11 +29,12 @@ function slice_layout(v::AbstractArray, dims::Integer)
     for d in 1:dims - 1
         stride *= size(v, d)
     end
-    SliceLayout(len, stride, len == 0 ? 0 : length(v) ÷ len)
+    count = len == 0 ? 0 : length(v) ÷ len
+    stride == 1 ? ContiguousLayout(len, count) : SliceLayout(len, stride, count)
 end
 
 slice_count(::FlatLayout) = 1
-slice_count(layout::SliceLayout) = layout.count
+slice_count(layout::Union{SliceLayout, ContiguousLayout}) = layout.count
 
 
 # One slice of `parent`, indexed like a vector (one-based)
@@ -42,11 +50,22 @@ Base.@propagate_inbounds Base.setindex!(s::SliceView, x, i) =
     s.parent[s.offset + (i - 1) * s.stride + 1] = x
 Base.eltype(::Type{SliceView{A}}) where A = eltype(A)
 
+struct ContiguousSliceView{A <: AbstractArray}
+    parent::A
+    offset::Int
+end
+
+Base.@propagate_inbounds Base.getindex(s::ContiguousSliceView, i) = s.parent[s.offset + i]
+Base.@propagate_inbounds Base.setindex!(s::ContiguousSliceView, x, i) = s.parent[s.offset + i] = x
+Base.eltype(::Type{ContiguousSliceView{A}}) where A = eltype(A)
+
 # Split a kernel's linear block index into (slice, block within the slice)
 @inline slice_block(::FlatLayout, iblock, blocks_per_slice) = (0, iblock)
-@inline slice_block(::SliceLayout, iblock, blocks_per_slice) = divrem(iblock, blocks_per_slice)
+@inline slice_block(::Union{SliceLayout, ContiguousLayout}, iblock, blocks_per_slice) =
+    divrem(iblock, blocks_per_slice)
 
 @inline slice(v, ::FlatLayout, i) = v
+@inline slice(v, layout::ContiguousLayout, i) = ContiguousSliceView(v, Int(i) * layout.len)
 
 @inline function slice(v, layout::SliceLayout, i)
     # `i` is an index straight from the kernel, so it may be unsigned on some backends
