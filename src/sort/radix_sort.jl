@@ -13,7 +13,6 @@ import Atomix
 
 const _RS_BITS = UInt32(8)
 const _RS_SIZE = UInt32(256)
-const _RS_CHUNK = 32
 # Positions are UInt32s, so this many elements at most are sorted together
 const _RS_MAX_LEN = Int64(2)^32
 
@@ -159,11 +158,12 @@ end
 # Stable scatter with chunked ranks.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter_chunked!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS}, layout, bps::Int,
-) where ITEMS
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS}, ::Val{CH},
+    layout, bps::Int,
+) where {ITEMS, CH}
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * ITEMS
-    @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ _RS_CHUNK
+    @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ CH
     s_elem  = @localmem eltype(v_in) (TILE,)
     s_digit = @localmem UInt32       (TILE,)
     s_gbase = @localmem UInt32       (Int(_RS_SIZE),)
@@ -207,7 +207,7 @@ end
         p = ithread + m * NI
         d = s_digit[p + 1]
         if d != 0xffffffff
-            Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
+            Atomix.@atomic s_chist[(p ÷ CH) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
         end
         m += 1
     end
@@ -230,14 +230,14 @@ end
         p = ithread + m * NI
         d = s_digit[p + 1]
         if d != 0xffffffff
-            chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+            chunk_start = (p ÷ CH) * CH
             # Fixed-trip form avoids a POCL LLVM loop-vectorizer failure.
             cnt = UInt32(0)
-            for r in 0:_RS_CHUNK - 1
+            for r in 0:CH - 1
                 q = chunk_start + r
                 cnt += UInt32((q < p) & (s_digit[q + 1] == d))
             end
-            rank = s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] + cnt
+            rank = s_chist[(p ÷ CH) * Int(_RS_SIZE) + Int(d) + 1] + cnt
             gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
             dst[gpos + 1] = s_elem[p + 1]
         end
@@ -250,11 +250,11 @@ end
 # Sorts of slices that fit one block, one block per slice.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_sort_block!(
-    data, rev::Bool, ::Val{NPASS}, layout,
-) where NPASS
+    data, rev::Bool, ::Val{NPASS}, ::Val{CH}, layout,
+) where {NPASS, CH}
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * 2
-    @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ _RS_CHUNK
+    @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ CH
     s_a     = @localmem eltype(data) (TILE,)
     s_b     = @localmem eltype(data) (TILE,)
     s_digit = @localmem UInt32    (TILE,)
@@ -299,7 +299,7 @@ end
             if p < n
                 d = _rs_digit(src[p + 1], sh, rev)
                 s_digit[p + 1] = d
-                Atomix.@atomic s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
+                Atomix.@atomic s_chist[(p ÷ CH) * Int(_RS_SIZE) + Int(d) + 1] += UInt32(1)
             end
             m += 1
         end
@@ -337,13 +337,13 @@ end
             p = it + m * NI
             if p < n
                 d = s_digit[p + 1]
-                chunk_start = (p ÷ _RS_CHUNK) * _RS_CHUNK
+                chunk_start = (p ÷ CH) * CH
                 cnt = UInt32(0)
-                for r in 0:_RS_CHUNK - 1
+                for r in 0:CH - 1
                     q = chunk_start + r
                     cnt += UInt32((q < p) & (s_digit[q + 1] == d))
                 end
-                rank = s_chist[(p ÷ _RS_CHUNK) * Int(_RS_SIZE) + Int(d) + 1] + cnt
+                rank = s_chist[(p ÷ CH) * Int(_RS_SIZE) + Int(d) + 1] + cnt
                 dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
             end
             m += 1
@@ -375,15 +375,15 @@ _rs_supported(::Type{T}) where T =
     block_size * (sizeof(T) + sizeof(UInt32)) + Int(_RS_SIZE) * sizeof(UInt32)
 end
 
-@inline function _rs_fast_local_memory(::Type{T}, block_size::Int, items::Int) where T
+@inline function _rs_fast_local_memory(::Type{T}, block_size::Int, items::Int, chunk::Int) where T
     tile = block_size * items
-    chunks = tile ÷ _RS_CHUNK
+    chunks = tile ÷ chunk
     tile * (sizeof(T) + sizeof(UInt32)) + Int(_RS_SIZE) * sizeof(UInt32) * (chunks + 1)
 end
 
-@inline function _rs_block_local_memory(::Type{T}, block_size::Int) where T
+@inline function _rs_block_local_memory(::Type{T}, block_size::Int, chunk::Int) where T
     tile = 2 * block_size
-    chunks = tile ÷ _RS_CHUNK
+    chunks = tile ÷ chunk
     2 * tile * sizeof(T) + tile * sizeof(UInt32) + Int(_RS_SIZE) * sizeof(UInt32) * (chunks + 1)
 end
 
@@ -414,14 +414,16 @@ end
 
 
 # The launch configuration of `_radix_sort!` for slices of length `len`: whether it uses the
-# chunked kernels, the items per thread they get, and whether one block sorts each slice in local
-# memory
-function _rs_config(::Type{T}, len, backend, block_size, items_per_thread) where T
+# chunked kernels (which need the chunks to tile the block), the items per thread they get, and
+# whether one block sorts each slice in local memory
+function _rs_config(::Type{T}, len, backend, block_size, items_per_thread, chunk_size) where T
     has_atomics = KernelAbstractions.supports_atomics(backend)
-    use_fast    = has_atomics && block_size % _RS_CHUNK == 0 &&
-                  _rs_fast_local_memory(T, block_size, items_per_thread) <= LOCAL_MEMORY_BUDGET
+    use_fast    = has_atomics && block_size % chunk_size == 0 &&
+                  _rs_fast_local_memory(T, block_size, items_per_thread, chunk_size) <=
+                  LOCAL_MEMORY_BUDGET
     items       = use_fast ? items_per_thread : 1
-    one_block   = use_fast && _rs_block_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET &&
+    one_block   = use_fast &&
+                  _rs_block_local_memory(T, block_size, chunk_size) <= LOCAL_MEMORY_BUDGET &&
                   len <= 2 * block_size
     return (; has_atomics, use_fast, items, one_block)
 end
@@ -436,7 +438,7 @@ _rs_num_blocks(layout, tile) = Base.checked_mul(slice_count(layout), cld(layout.
 function _radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     layout = slice_layout(v, dims)
     (isempty(v) || layout.len <= 1) && return (;), (;)
-    c = _rs_config(T, layout.len, backend, a.block_size, a.items_per_thread)
+    c = _rs_config(T, layout.len, backend, a.block_size, a.items_per_thread, a.chunk_size)
     c.one_block && return (;), (;)
     hist_len = Base.checked_mul(Int(_RS_SIZE), _rs_num_blocks(layout, a.block_size * c.items))
     scan = _accumulate_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
@@ -448,7 +450,7 @@ end
 
 
 """
-    _radix_sort!(v, backend, bufs; descending, block_size, items_per_thread, dims)
+    _radix_sort!(v, backend, bufs; descending, block_size, items_per_thread, chunk_size, dims)
 
 In-place GPU radix sort of `v`, or of its slices along `dims`, for supported 32- and 64-bit
 integers and floats, with the scratch buffers of `_radix_plan`.
@@ -458,6 +460,7 @@ function _radix_sort!(
     descending::Bool=false,
     block_size::Int=256,
     items_per_thread::Int=2,
+    chunk_size::Int=32,
     dims::Union{Colon, Integer}=Colon(),
 ) where T
     layout = slice_layout(v, dims)
@@ -466,15 +469,17 @@ function _radix_sort!(
 
     @argcheck ispow2(block_size) && block_size >= 1
     @argcheck items_per_thread >= 1
+    @argcheck ispow2(chunk_size)
     @argcheck _rs_portable_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET
 
-    (; has_atomics, use_fast, items, one_block) = _rs_config(T, len, backend, block_size, items_per_thread)
+    (; has_atomics, use_fast, items, one_block) =
+        _rs_config(T, len, backend, block_size, items_per_thread, chunk_size)
 
     n_passes = sizeof(T) * 8 ÷ Int(_RS_BITS)
 
     if one_block
         _radix_sort_block!(backend, block_size)(
-            v, descending, Val(n_passes), layout;
+            v, descending, Val(n_passes), Val(chunk_size), layout;
             ndrange=Base.checked_mul(block_size, slice_count(layout)))
         KernelAbstractions.synchronize(backend)
         return v
@@ -497,6 +502,8 @@ function _radix_sort!(
     scat_kern! = use_fast ?
         _radix_scatter_chunked!(backend, block_size) :
         _radix_scatter!(backend, block_size)
+    # the chunked scatter also takes the chunk size
+    scat_args = use_fast ? (vitems, Val(chunk_size)) : (vitems,)
 
     n_actual = 0
 
@@ -508,7 +515,7 @@ function _radix_sort!(
         shift32 = UInt32(shift)
         hist_kern!(hist, p1, shift32, descending, vitems, layout, bps; ndrange)
         _accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
-        scat_kern!(p2, p1, hist, shift32, descending, vitems, layout, bps; ndrange)
+        scat_kern!(p2, p1, hist, shift32, descending, scat_args..., layout, bps; ndrange)
 
         p1, p2 = p2, p1
         n_actual += 1

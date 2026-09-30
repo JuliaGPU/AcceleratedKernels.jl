@@ -839,6 +839,17 @@ end
             @test Array(v) == sort(v_h)
         end
 
+        # Chunk sizes, in the passes and in the single-block sort (small chunks need small
+        # blocks for their histograms to fit local memory); a chunk larger than the block makes
+        # the portable kernels run instead
+        for (block_size, chunk_size) in ((8, 1), (32, 8), (256, 64), (256, 256), (256, 512)),
+            n in (12, 300, 20_000)
+            v_h = rand(Int32(0):Int32(9), n)
+            v = array_from_host(v_h)
+            AK.sort!(v; alg=AK.RadixSort(; block_size, chunk_size))
+            @test Array(v) == sort(v_h)
+        end
+
         # ── Rejected: custom by/lt, unsupported element type ────────────────────
         n   = 10
         v_h = rand(Int32, n)
@@ -1255,7 +1266,8 @@ end
         # The chunked and portable kernels (a block size that is not a multiple of 32), and
         # several items per thread
         h = rand(Int32, 3000, 10)
-        for alg in (AK.RadixSort(block_size=16), AK.RadixSort(block_size=128, items_per_thread=8))
+        for alg in (AK.RadixSort(block_size=16), AK.RadixSort(block_size=128, items_per_thread=8),
+                    AK.RadixSort(chunk_size=64))
             @test Array(AK.sort(array_from_host(h); dims=1, alg)) == sort(h; dims=1)
             @test Array(AK.sort(array_from_host(h); dims=2, alg)) == sort(h; dims=2)
         end

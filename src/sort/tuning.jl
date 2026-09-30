@@ -21,8 +21,8 @@ device, as returned by [`sort_tuning`](@ref).
   its instability is allowed (see [`Auto`](@ref)).
 - `radix_min_len`: `Auto` picks `RadixSort` for whole-array sorts from this length, for the
   element types and orderings it supports.
-- `merge_block_size`, `radix_block_size`, `radix_items_per_thread`, `bitonic_block_size`,
-  `bitonic_items_per_thread`: settings for the algorithms' unset fields.
+- `merge_block_size`, `radix_block_size`, `radix_items_per_thread`, `radix_chunk_size`,
+  `bitonic_block_size`, `bitonic_items_per_thread`: settings for the algorithms' unset fields.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.SampleSort`; `max_tasks` defaults
   to `Threads.nthreads()`.
 
@@ -35,6 +35,7 @@ Base.@kwdef struct SortTuning
     merge_block_size::Int = 256
     radix_block_size::Int = 256
     radix_items_per_thread::Int = 2
+    radix_chunk_size::Int = 32
     bitonic_block_size::Int = 256
     bitonic_items_per_thread::Int = 8
     threads_min_elems::Int = 1
@@ -111,6 +112,9 @@ function _checkdomain(a::RadixSort)
         "RadixSort: `block_size` must be at most 1024, got $(a.block_size)"))
     a.items_per_thread === nothing || a.items_per_thread <= 64 || throw(ArgumentError(
         "RadixSort: `items_per_thread` must be at most 64, got $(a.items_per_thread)"))
+    _check_pow2(a, :chunk_size)
+    a.chunk_size === nothing || a.chunk_size <= 1024 || throw(ArgumentError(
+        "RadixSort: `chunk_size` must be at most 1024, got $(a.chunk_size)"))
     nothing
 end
 
@@ -134,7 +138,8 @@ _fill(a::MergeSort, t::SortTuning, T) =
     MergeSort(something(a.block_size, t.merge_block_size), a.lowmem)
 _fill(a::RadixSort, t::SortTuning, T) =
     RadixSort(something(a.block_size, t.radix_block_size),
-              something(a.items_per_thread, t.radix_items_per_thread))
+              something(a.items_per_thread, t.radix_items_per_thread),
+              something(a.chunk_size, t.radix_chunk_size))
 _fill(a::BitonicSort, t::SortTuning, T) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
