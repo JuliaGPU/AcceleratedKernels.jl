@@ -14,6 +14,8 @@ import Atomix
 const _RS_BITS = UInt32(8)
 const _RS_SIZE = UInt32(256)
 const _RS_CHUNK = 32
+# Positions are UInt32s, so this many elements at most are sorted together
+const _RS_MAX_LEN = Int64(2)^32
 
 
 # Sort keys

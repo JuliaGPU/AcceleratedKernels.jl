@@ -163,6 +163,8 @@ function _check(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) wher
         "and floats"))
     _rs_ordering(ord) || throw(ArgumentError(
         "RadixSort only supports the default ordering and its reverse (no custom `lt` or `by`)"))
+    layout.len <= _RS_MAX_LEN || throw(ArgumentError(
+        "RadixSort sorts at most 2^32 elements per array or slice, got $(layout.len)"))
     _rs_portable_local_memory(T, a.block_size) <= LOCAL_MEMORY_BUDGET || throw(ArgumentError(
         "RadixSort: block_size=$(a.block_size) needs more than $(LOCAL_MEMORY_BUDGET) bytes " *
         "of local memory for element type $T"))

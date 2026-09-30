@@ -173,6 +173,12 @@ end
     @test rejects(AK.RadixSort(block_size=1 << 62))                  # no overflowing footprints
     @test rejects(AK.RadixSort(items_per_thread=1 << 62))
     @test rejects(AK.RadixSort(items_per_thread=65))
+    if Sys.WORD_SIZE == 64                                              # positions are UInt32s
+        @test !rejects(AK.RadixSort(), Base.OneTo(2^32))
+        @test rejects(AK.RadixSort(), Base.OneTo(2^32 + 1))
+        @test !rejects(AK.RadixSort(), reshape(Base.OneTo(2^33 + 2), 2, :); dims=1)
+        @test rejects(AK.RadixSort(), reshape(Base.OneTo(2^33 + 2), :, 2); dims=1)
+    end
     for T in (UInt32, Int32, Float32, UInt64, Int64, Float64), ord in (FWD, REV)
         @test !rejects(AK.RadixSort(), zeros(T, 16); ord)
     end
