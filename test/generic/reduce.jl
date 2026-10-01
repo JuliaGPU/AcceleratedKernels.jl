@@ -1050,12 +1050,13 @@ end
 @testset "reduce block sizes" begin
     # The block-level tree reduction must cover every power-of-two group size the device allows;
     # each shape below reaches a different kernel: the 1D block reduction, the grid-strided
-    # one-block-per-output reduction (contiguous and strided sources), and the multi-block
-    # reduction with its second pass.
+    # one-block-per-output reduction (contiguous and strided sources), the multi-block
+    # reduction with its second pass, and the column reduction with its second pass.
     Random.seed!(0)
     vh = rand(Int32(1):Int32(100), 100_000)
     v = array_from_host(vh)
-    shapes = (((3000, 40), 1), ((40, 3000), 2), ((20_000, 4), 1))
+    shapes = (((3000, 40), 1), ((40, 3000), 2), ((20_000, 4), 1), ((64, 8192), 2),
+              ((10, 30_000), 2), ((3000, 4000), 2))
     mats = [(array_from_host(rand(Int32(1):Int32(100), sz)), dims) for (sz, dims) in shapes]
     block_sizes = TEST_KERNELS ? filter(<=(MAX_BLOCK_SIZE), 2 .^ (0:10)) : [nothing]
     for block_size in block_sizes
@@ -1064,6 +1065,54 @@ end
         for (m, dims) in mats
             @test Array(AK.reduce(+, m; init=Int32(0), dims, alg)) == sum(Array(m); dims)
         end
+    end
+    # The column reduction in one pass, which only more outputs than a test affords choose
+    if TEST_KERNELS
+        h = rand(Int32(1):Int32(100), 64, 1000)
+        R = array_from_host(fill(Int32(1), 64))
+        AK._mapreduce_nd_launch!(
+            :columns, 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
+            init=AK._Fold(), neutral=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
+            reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
+            reduce_size=1000)
+        @test Array(R) == vec(sum(h; dims=2)) .+ 1
+    end
+end
+
+
+@testset "column reductions" begin
+    # Few contiguous outputs, each reducing a long strided row, take the column reduction in two
+    # passes (with enough elements for every backend's threshold): a tile of 8 outputs, and two
+    # tiles of 32 outputs the second of which is partial
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    for (m, n) in ((8, 600_000), (40, 110_000))
+        h = rand(Int8(-9):Int8(9), m, n)
+        a = array_from_host(h)
+        s = sum(Int.(h); dims=2)
+        if TEST_KERNELS
+            segs = AK._mapreduce_segments((m, n), (1, m), (2,))
+            @test AK._mapreduce_nd_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int))[1] ===
+                  :columns
+        end
+        # `init` applied once, folding into `R`, into an `R` narrower than the accumulator
+        R = array_from_host(fill(Int16(1), m))
+        AK.mapreducedim!(identity, +, R, a; acctype=Int32, alg)
+        @test Array(R) == vec(s) .+ 1
+        AK.mapreducedim!(identity, +, R, a; acctype=Int32, init=Int16(7), alg)
+        @test Array(R) == vec(s) .+ 7
+        # ... with a workspace, used twice
+        ws = AK.workspace(AK.mapreducedim!, identity, +, R, a; acctype=Int32, alg)
+        AK.mapreducedim!(identity, +, R, a; acctype=Int32, overwrite=true, alg, workspace=ws)
+        @test Array(R) == vec(s)
+        AK.mapreducedim!(identity, +, R, a; acctype=Int32, alg, workspace=ws)
+        @test Array(R) == 2 .* vec(s)
+        # Without a neutral element
+        @test Array(AK.reduce((x, y) -> max(x, y), a; dims=2, alg)) == maximum(h; dims=2)
+        # A strided view at an offset
+        p = array_from_host(rand(Int8(-9):Int8(9), m + 2, n + 3))
+        v = view(p, 2:m + 1, 4:n + 3)
+        @test Array(AK.sum(v; dims=2, alg)) == sum(Int.(Array(p)[2:m + 1, 4:n + 3]); dims=2)
     end
 end
 
