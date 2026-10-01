@@ -200,7 +200,8 @@ function _merge_sort_by_key!(
     )
 
     # Global level: merge the sorted tiles of each slice, doubling the run length every pass
-    half_size_group = Int32(block_size * 2)
+    # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
+    half_size_group = block_size * 2
     size_group = half_size_group * 2
     if len > half_size_group
         pk1 = keys

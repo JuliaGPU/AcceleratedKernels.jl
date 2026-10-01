@@ -74,7 +74,8 @@ function _merge_sortperm_lowmem!(
     )
 
     # Global level
-    half_size_group = Int32(block_size * 2)
+    # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
+    half_size_group = block_size * 2
     size_group = half_size_group * 2
     if len > half_size_group
         p1 = ix
