@@ -185,14 +185,33 @@ end
 # The outputs per block of the columns kernel
 _columns_cols(dst_size) = min(nextpow(2, dst_size), COLUMNS_COLS)
 
+# The source of a reduction along `dims` into a single output as a linearly indexed collection
+# of its elements, for the whole-array kernels (`mapreduce_1d_gpu`): a `Broadcasted` object, or a
+# contiguous range of a dense buffer; `nothing` for other sources.
+_mapreduce_nd_linear(src::Base.Broadcast.Broadcasted, dims_valid) = src
+function _mapreduce_nd_linear(src::AbstractArray, dims_valid)
+    layout = _mapreduce_strided_layout(src)
+    isnothing(layout) && return nothing
+    buffer, base_offset, src_strides = layout
+    (rstrides, _, nr), _ = _mapreduce_segments(size(src), src_strides, dims_valid)
+    nr == 1 && rstrides[1] == 1 || return nothing
+    return base_offset == 0 && buffer === src ? src :
+           view(buffer, base_offset + 1:base_offset + length(src))
+end
+
 # The scratch of a reduction along `dims` into `dst_size` outputs: the partial results of a
-# `:multigroup` reduction or of a `:columns` one in two passes, with the partial-result type of the
-# seed `neutral` (see `_reduce_seed`)
+# `:multigroup` reduction, of a `:columns` one in two passes or of the whole-array kernels, with
+# the partial-result type of the seed `neutral` (see `_reduce_seed`)
 function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, dst_size) where {A}
     alg isa BlockReduce && A !== Union{} || return (;)
     src_sizes = size(src)
     len = Base.prod(src_sizes[d] for d in dims_valid; init=1)
     (len <= 1 || dst_size == 0) && return (;)
+    if dst_size == 1 && _mapreduce_nd_linear(src, dims_valid) !== nothing
+        n = _mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
+                                   reduce_tuning(backend, A).target_blocks, 0; device=true)
+        return n == 0 ? (;) : (; partials=_buffer(typeof(neutral), n))
+    end
     layout = _mapreduce_strided_layout(src)
     isnothing(layout) && return (;)
     segs = _mapreduce_segments(src_sizes, layout[3], dims_valid)
@@ -272,6 +291,17 @@ function mapreduce_nd!(
     if alg isa CPUThreads.Partitioned
         _mapreduce_nd_cpu_sections!(f, op, dst, src; init, neutral, launch...)
         return dst
+    end
+
+    # A single output of a contiguous source: the whole-array kernels, finishing on the device
+    if dst_size == 1
+        linear = _mapreduce_nd_linear(src, dims_valid)
+        if linear !== nothing
+            mapreduce_1d_gpu(f, op, linear, backend; init, neutral, block_size,
+                             items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
+                             partials=get(bufs, :partials, nothing), switch_below=0, dst)
+            return dst
+        end
     end
 
     # The stride-based fast paths below index a flat buffer at

@@ -178,7 +178,7 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
         # (the buffer's name does not depend on the length, so that results infer)
         sizes = if a isa BlockReduce && seed !== nothing
             n = _mapreduce_1d_partials(length(src), a.block_size, a.items_per_thread,
-                                       a.switch_below)
+                                       reduce_tuning(backend, A).target_blocks, a.switch_below)
             (; partials=_buffer(typeof(seed), n))
         else
             (;)
@@ -363,16 +363,17 @@ function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neut
     _check_acctype(op, f, A)
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type
-    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, partials))
+    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials))
 end
 
-function _mapreduce_whole_run(f::F, op::OP, src, backend, alg; init, neutral,
-                              partials) where {F, OP}
+function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
+                              partials) where {F, OP, A}
     if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;
             init, neutral,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
+            max_blocks=reduce_tuning(backend, A).target_blocks,
             partials, switch_below=alg.switch_below,
         )
     else

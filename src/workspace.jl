@@ -81,7 +81,7 @@ julia> AK.workspace_size(AK.sort!, CuArray(rand(Float32, 10_000)); alg=AK.RadixS
  key_range = (partials = (Tuple{UInt32, UInt32}, (40,)),))
 
 julia> AK.workspace_size(AK.sum, CuArray(rand(Float32, 10_000)))
-(partials = (Float32, (40,)),)
+(partials = (Float32, (4,)),)
 ```
 """
 workspace_size(op, args...; kwargs...) = _public_sizes(_plan(op, args...; kwargs...).sizes)
