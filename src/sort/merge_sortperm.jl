@@ -25,8 +25,7 @@ function _merge_sortperm!(
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
-    # (a range, for instance, has no backend: collected on the host first)
-    keys = copyto!(bufs.keys, _backend_free(v) ? collect(v) : v)
+    keys = _copyto!(backend, bufs.keys, v)
 
     _merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
 

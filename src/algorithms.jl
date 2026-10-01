@@ -210,18 +210,33 @@ end
 
 _backend_name(b::Backend) = nameof(typeof(b))
 
-# Values that never determine the backend: lazy index collections (and Base's wrappers of them),
-# scalars, and any other value that is not an array. Every other array votes with `get_backend`,
-# which throws for array types that do not implement it.
+# Values that never determine the backend: lazy index collections, scalars, and any other value
+# that is not an array. Every other array votes with `get_backend`, which throws for array types
+# that do not implement it.
 _backend_vote(_) = nothing
-_backend_vote(x::AbstractArray) = get_backend(x)
 _backend_vote(::Union{AbstractRange, CartesianIndices, LinearIndices}) = nothing
-# Base's views, reshapes and permutations vote like the array they wrap, so that e.g. a reshaped
-# range does not determine the backend either
-_backend_vote(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = _backend_vote(parent(x))
 _backend_vote(x::Tuple) = _backend_votes(x...)
 _backend_vote(bc::Base.Broadcast.Broadcasted) = _backend_votes(bc.args...)
 _backend_vote(x::Base.Broadcast.Extruded) = _backend_vote(x.x)
+# An array that wraps others (its `parent` is another array, or a tuple of them for a wrapper of
+# several, like a mapped array of two arrays) votes like the arrays it wraps. KernelAbstractions'
+# `get_backend` recurses through `parent` the same way, and is asked where it can answer, or
+# where the wrapper defines its own method; it throws for a chain of parents ending in a range or
+# a tuple, where a reshaped range, or a lazy array computed from ranges, has no backend here.
+function _backend_vote(x::AbstractArray)
+    p = parent(x)
+    p === x && return get_backend(x)
+    _wraps_storage(p) || _defines_backend(x) ? get_backend(x) : _backend_vote(p)
+end
+
+# Whether `x` is an array with memory, or a chain of single parents ending in one
+_wraps_storage(::Union{AbstractRange, CartesianIndices, LinearIndices}) = false
+_wraps_storage(x::AbstractArray) = (p = parent(x); p === x || _wraps_storage(p))
+_wraps_storage(_) = false
+
+# Whether `get_backend(x)` has a method other than KernelAbstractions' fallback for arrays
+_defines_backend(x) =
+    which(get_backend, Tuple{typeof(x)}) !== which(get_backend, Tuple{AbstractArray})
 
 _backend_votes() = nothing
 _backend_votes(x, xs...) = _backend_merge(_backend_vote(x), _backend_votes(xs...))
@@ -236,28 +251,79 @@ function _backend_merge(a, b)
     a
 end
 
-# Lazy index collections, and Base's views, reshapes and permutations of them, have no backend
-# (unlike `_backend_vote`, this never asks an array for its backend, which an explicit `backend`
-# makes unnecessary)
+# Lazy index collections, and Base's views, reshapes and permutations of them, have no backend and
+# can be evaluated on the host (unlike `_backend_vote`, this never asks an array for its backend,
+# which an explicit `backend` makes unnecessary). Other lazy arrays may compute their elements
+# from arrays they capture rather than wrap, so they are evaluated on the backend instead.
 _backend_free(_) = false
 _backend_free(::Union{AbstractRange, CartesianIndices, LinearIndices}) = true
 _backend_free(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = _backend_free(parent(x))
 
-# An array for an operation's result: `similar(v, ...)`, unless `v` has no backend (a range, for
-# instance), which gives a new array on `backend`
-_similar(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T} =
-    _backend_free(v) ? KernelAbstractions.allocate(backend, T, dims) : similar(v, T, dims)
-# A copy of `v`, likewise
-_copy(backend, v) = _backend_free(v) ? copyto!(_similar(backend, v), collect(v)) : copy(v)
+# The array that holds the memory behind `v`: `v` itself unless it wraps others, else the first of
+# the arrays it wraps that holds memory; `nothing` if there is none (a range, or a lazy array over
+# one)
+_storage(v::Tuple) = _storage_first(v...)
+function _storage(v::AbstractArray)
+    _backend_free(v) && return nothing
+    p = parent(v)
+    p === v ? v : _storage(p)
+end
+_storage(_) = nothing
+_storage_first() = nothing
+_storage_first(x, xs...) = (s = _storage(x); s === nothing ? _storage_first(xs...) : s)
+
+# Whether `v` wraps the memory `s` of another array type than a host `Array` but gets Base's
+# `similar` fallback, a host `Array` (a lazy array without a `similar` method of its own, for
+# instance). Checked on an empty result.
+_similar_falls_back(v, s) =
+    s !== v && !(s isa Array) && similar(v, eltype(v), Base.map(zero, size(v))) isa Array
+
+# An array for an operation's result: `similar(v, ...)`, unless `v` holds no memory (a range, or a
+# lazy array over one), or gets Base's fallback for its `similar`, which give a new array on
+# `backend`
+function _similar(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T}
+    s = _storage(v)
+    s === nothing || _similar_falls_back(v, s) ? KernelAbstractions.allocate(backend, T, dims) :
+                                                  similar(v, T, dims)
+end
+
+# Whether `v` is copied with a kernel on `backend`. Its own array, Base's wrappers of arrays in host
+# memory and GPUArrays' wrappers of its arrays are copied by Base or GPUArrays, as backend-free
+# arrays are after collecting them on the host, and everything is on the host backend. Copies of
+# other wrappers fall back to scalar indexing, and lazy arrays over ranges may read device arrays
+# they capture.
+function _copies_by_kernel(backend, v)
+    (_runs_threads(backend) || _backend_free(v) || parent(v) === v || v isa AnyGPUArray) &&
+        return false
+    !(_storage(v) isa Union{Array, BitArray})
+end
+
+# Copy the elements of `src` into `dst`, which has as many, in linear order
+function _kernel_copy!(backend, dst, src)
+    d0, s0 = firstindex(dst), firstindex(src)
+    _foreachindex(Base.OneTo(length(src)), backend) do i
+        @inbounds dst[d0 + i - 1] = src[s0 + i - 1]
+    end
+    dst
+end
+
+# `copyto!(dst, src)`, `copy(v)` and `Array(v)` for any source on `backend`
+_copyto!(backend, dst, src) =
+    _copies_by_kernel(backend, src) ? _kernel_copy!(backend, dst, src) :
+    copyto!(dst, _backend_free(src) ? collect(src) : src)
+_copy(backend, v) =
+    _copies_by_kernel(backend, v) ? _kernel_copy!(backend, _similar(backend, v), v) :
+    _backend_free(v) ? copyto!(_similar(backend, v), collect(v)) : copy(v)
+_host_array(backend, v) = _copies_by_kernel(backend, v) ? Array(_copy(backend, v)) : Array(v)
 
 """
     _resolve_backend(backend, args...)
 
 The backend an operation runs on: `backend` if given, else the one every array in `args`
-(destination first) agrees on, recursing into `Broadcasted` trees; ranges, `CartesianIndices`,
-`LinearIndices`, Base's views, reshapes and permutations of them, and non-array values do not
-count. Arguments on different backends are an `ArgumentError`. If no argument determines it, the
-host backend is used.
+(destination first) agrees on, recursing into `Broadcasted` trees and into the arrays that
+wrappers wrap; ranges, `CartesianIndices`, `LinearIndices`, wrappers of only those, and non-array
+values do not count. Arguments on different backends are an `ArgumentError`. If no argument
+determines it, the host backend is used.
 """
 _resolve_backend(backend::Backend, args...) = backend
 function _resolve_backend(::Nothing, args...)

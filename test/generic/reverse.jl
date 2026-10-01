@@ -234,3 +234,12 @@ end
     @test get_backend(r) == BACKEND
     @test Array(r) == 5:-1:1
 end
+
+@testset "reverse: Cartesian-indexed sources" begin
+    # A strided view, whose indices are Cartesian
+    mh = rand(Int32, 5, 7)
+    v = view(array_from_host(mh), 2:4, 1:2:7)
+    @test Array(AK.reverse(v)) == reverse(mh[2:4, 1:2:7])
+    dst = array_from_host(zeros(Int32, 12))
+    @test Array(AK.reverse!(dst, v)) == reverse(vec(mh[2:4, 1:2:7]))
+end
