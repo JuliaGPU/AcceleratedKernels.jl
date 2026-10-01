@@ -32,7 +32,7 @@ settings yourself; an algorithm that cannot run the call is an `ArgumentError`, 
 | Algorithm | Stable | `dims` | `sortperm!` | `sort_by_key!` | Element types, orderings | Backends |
 |---|---|---|---|---|---|---|
 | [`MergeSort`](@ref AcceleratedKernels.MergeSort) | yes | yes | yes | yes | all | kernels |
-| [`RadixSort`](@ref AcceleratedKernels.RadixSort) | yes | no | no | no | 32/64-bit integers and floats, default ordering or its reverse | kernels |
+| [`RadixSort`](@ref AcceleratedKernels.RadixSort) | yes | yes | no | no | 32/64-bit integers and floats, default ordering or its reverse | kernels |
 | [`BitonicSort`](@ref AcceleratedKernels.BitonicSort) | no | yes | no | no | all | kernels |
 | [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort) | yes | yes | yes | yes | all | host |
 

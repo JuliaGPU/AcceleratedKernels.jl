@@ -839,6 +839,17 @@ end
             @test Array(v) == sort(v_h)
         end
 
+        # Chunk sizes, in the passes and in the single-block sort (small chunks need small
+        # blocks for their histograms to fit local memory); a chunk larger than the block makes
+        # the portable kernels run instead
+        for (block_size, chunk_size) in ((8, 1), (32, 8), (256, 64), (256, 256), (256, 512)),
+            n in (12, 300, 20_000)
+            v_h = rand(Int32(0):Int32(9), n)
+            v = array_from_host(v_h)
+            AK.sort!(v; alg=AK.RadixSort(; block_size, chunk_size))
+            @test Array(v) == sort(v_h)
+        end
+
         # ── Rejected: custom by/lt, unsupported element type ────────────────────
         n   = 10
         v_h = rand(Int32, n)
@@ -898,7 +909,6 @@ end
     @test Array(with_workspace(AK.sort, A; alg=SORT_ALG, dims=2)) == sort(A_h; dims=2)
     if TEST_KERNELS
         @test Array(AK.sort(A; alg=AK.MergeSort(block_size=64), dims=1)) == sort(A_h; dims=1)
-        @test_throws ArgumentError AK.sort(A; dims=1, alg=AK.RadixSort())
     end
 
     # NaNs, infinities and signed zeros order like Base
@@ -924,6 +934,13 @@ end
     for dim in 1:4
         @test Array(AK.sort(A; alg=SORT_ALG, dims=dim)) == sort(A_h; dims=dim)
     end
+
+    # Slices after dimensions of size 1 are contiguous, like those along the first dimension
+    A_h = rand(Int32, 1, 3000, 7)
+    @test Array(AK.sort(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sort(A_h; dims=2)
+    A_h = rand(Float32, 1, 1, 300, 5)
+    @test Array(AK.sort(array_from_host(A_h); alg=SORT_ALG, dims=3, rev=true)) ==
+          sort(A_h; dims=3, rev=true)
 
     # Empty and singleton slices
     for sz in ((0, 5), (5, 0), (1, 64), (64, 1)), dim in 1:2
@@ -988,6 +1005,13 @@ end
     v_h = rand(Int32(0):Int32(9), 5000)
     v   = array_from_host(v_h)
     @test Array(AK.sortperm(v; alg=SORT_ALG, dims=1)) == sortperm(v_h)
+
+    # Slices after dimensions of size 1 are contiguous, like those along the first dimension
+    A_h = rand(Int32(0):Int32(9), 1, 3000, 7)
+    @test Array(AK.sortperm(array_from_host(A_h); alg=SORT_ALG, dims=2)) == sortperm(A_h; dims=2)
+    A_h = rand(Float32, 1, 1, 300, 5)
+    @test Array(AK.sortperm(array_from_host(A_h); alg=SORT_ALG, dims=3, rev=true)) ==
+          sortperm(A_h; dims=3, rev=true)
 
     # Empty and singleton slices
     for sz in ((0, 5), (5, 0), (1, 64), (64, 1)), dim in 1:2
@@ -1193,6 +1217,71 @@ end
             AK.sort!(v; dims=1, alg=AK.BitonicSort(; block_size=128, items_per_thread))
             @test Array(v) == sort(h; dims=1)
         end
+        v = array_from_host(h)
+        w = AK.sort(v; dims=1, alg)
+        @test Array(w) == sort(h; dims=1)
+        @test Array(v) == h
+
+        @test_throws ArgumentError AK.sort!(array_from_host(h); dims=3, alg)
+    end
+end
+
+
+@testset "radix_sort_dims" begin
+    if TEST_KERNELS
+        Random.seed!(0)
+        alg = AK.RadixSort()
+
+        # Slices sorted in local memory (up to 2 * block_size = 512 elements) and by the passes
+        # over all slices, 2D and 3D
+        for T in valid_backend_eltypes(BACKEND, (UInt32, Int32, Float32, UInt64, Int64, Float64))
+            for (L, ncols) in ((8, 5), (256, 16), (512, 4), (513, 4), (100, 50), (2049, 3),
+                               (20_000, 2), (300_000, 2))
+                for dim in (1, 2)
+                    sz = dim == 1 ? (L, ncols) : (ncols, L)
+                    h = T <: AbstractFloat ? rand(T, sz...) : rand(T(1):T(1000), sz...)
+                    @test Array(AK.sort(array_from_host(h); dims=dim, alg)) == sort(h; dims=dim)
+                    @test Array(AK.sort(array_from_host(h); dims=dim, alg, rev=true)) ==
+                          sort(h; dims=dim, rev=true)
+                end
+            end
+
+            h = rand(T, 7, 600, 5)
+            for dim in (1, 2, 3)
+                @test Array(AK.sort(array_from_host(h); dims=dim, alg)) == sort(h; dims=dim)
+            end
+            h = rand(T, 1, 3000, 3)             # contiguous slices after a singleton dimension
+            @test Array(AK.sort(array_from_host(h); dims=2, alg)) == sort(h; dims=2)
+        end
+
+        # Signed zeros, infinities and NaNs order like Base
+        for L in (300, 3000)
+            h = rand(Float32[-0.0, 0.0, 1, -Inf, Inf, NaN], L, 7)
+            for dim in (1, 2), rev in (false, true)
+                @test isequal(Array(AK.sort(array_from_host(h); dims=dim, alg, rev)),
+                              sort(h; dims=dim, rev))
+            end
+        end
+
+        # The chunked and portable kernels (a block size that is not a multiple of 32), and
+        # several items per thread
+        h = rand(Int32, 3000, 10)
+        for alg in (AK.RadixSort(block_size=16), AK.RadixSort(block_size=128, items_per_thread=8),
+                    AK.RadixSort(chunk_size=64))
+            @test Array(AK.sort(array_from_host(h); dims=1, alg)) == sort(h; dims=1)
+            @test Array(AK.sort(array_from_host(h); dims=2, alg)) == sort(h; dims=2)
+        end
+
+        # Vectors, empty and singleton slices, workspaces, out-of-place
+        h = rand(Float32, 1000)
+        @test Array(AK.sort(array_from_host(h); dims=1, alg)) == sort(h)
+        @test size(AK.sort(array_from_host(rand(Float32, 0, 5)); dims=1, alg)) == (0, 5)
+        @test size(AK.sort(array_from_host(rand(Float32, 5, 0)); dims=1, alg)) == (5, 0)
+        h = rand(Float32, 1, 100)
+        @test Array(AK.sort(array_from_host(h); dims=1, alg)) == h
+        h = rand(Float32, 3000, 10)
+        v = array_from_host(h)
+        @test Array(with_workspace(AK.sort!, v; dims=2, alg)) == sort(h; dims=2)
         v = array_from_host(h)
         w = AK.sort(v; dims=1, alg)
         @test Array(w) == sort(h; dims=1)

@@ -76,7 +76,7 @@ end
         @test resolve(AK.Auto(), zeros(Int32, 1024)) === AK.BitonicSort(64, 4)
         @test resolve(AK.Auto(), zeros(Int32, 1025)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 4095)) isa AK.MergeSort
-        @test resolve(AK.Auto(), zeros(Int32, 4096)) === AK.RadixSort(128, 4)
+        @test resolve(AK.Auto(), zeros(Int32, 4096)) === AK.RadixSort(128, 4, 32)
         @test resolve(AK.Auto(), zeros(Int32, 4096); ord=REV) isa AK.RadixSort
         @test resolve(AK.Auto(), zeros(Int32, 64, 16); dims=1) isa AK.BitonicSort
         @test resolve(AK.Auto(), zeros(Int32, 2048, 16); dims=1) isa AK.MergeSort
@@ -128,12 +128,14 @@ end
 
     # Explicit fields win over the tuning, unset ones come from it
     with_tuning(; merge_block_size=128, radix_block_size=512, radix_items_per_thread=8,
-                  bitonic_block_size=32, bitonic_items_per_thread=16, threads_min_elems=7) do
+                  radix_chunk_size=64, bitonic_block_size=32, bitonic_items_per_thread=16,
+                  threads_min_elems=7) do
         @test resolve(AK.MergeSort(), v) === AK.MergeSort(128, false)
         @test resolve(AK.MergeSort(block_size=64), v) === AK.MergeSort(64, false)
         @test resolve(AK.MergeSort(lowmem=true), v; perm=true) === AK.MergeSort(128, true)
-        @test resolve(AK.RadixSort(), v) === AK.RadixSort(512, 8)
-        @test resolve(AK.RadixSort(items_per_thread=1), v) === AK.RadixSort(512, 1)
+        @test resolve(AK.RadixSort(), v) === AK.RadixSort(512, 8, 64)
+        @test resolve(AK.RadixSort(items_per_thread=1), v) === AK.RadixSort(512, 1, 64)
+        @test resolve(AK.RadixSort(chunk_size=16), v) === AK.RadixSort(512, 8, 16)
         @test resolve(AK.BitonicSort(block_size=128), v) === AK.BitonicSort(128, 16)
     end
     host = AK.HOST_BACKEND
@@ -165,8 +167,6 @@ end
     @test rejects(AK.RadixSort(items_per_thread=0))
     @test rejects(AK.RadixSort(); perm=true)
     @test rejects(AK.RadixSort(); pairs=true)
-    @test rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=1)
-    @test rejects(AK.RadixSort(), zeros(Float32, 16); dims=1)
     @test rejects(AK.RadixSort(), zeros(Int16, 16))
     @test rejects(AK.RadixSort(), Vector{Tuple{Int32, Int32}}(undef, 16))
     @test rejects(AK.RadixSort(); ord=Base.Order.ord(isless, abs, nothing))
@@ -175,10 +175,22 @@ end
     @test rejects(AK.RadixSort(block_size=1 << 62))                  # no overflowing footprints
     @test rejects(AK.RadixSort(items_per_thread=1 << 62))
     @test rejects(AK.RadixSort(items_per_thread=65))
+    @test rejects(AK.RadixSort(chunk_size=0))
+    @test rejects(AK.RadixSort(chunk_size=24))
+    @test rejects(AK.RadixSort(chunk_size=2048))
+    if Sys.WORD_SIZE == 64                                              # positions are UInt32s
+        @test !rejects(AK.RadixSort(), Base.OneTo(2^32))
+        @test rejects(AK.RadixSort(), Base.OneTo(2^32 + 1))
+        @test !rejects(AK.RadixSort(), reshape(Base.OneTo(2^33 + 2), 2, :); dims=1)
+        @test rejects(AK.RadixSort(), reshape(Base.OneTo(2^33 + 2), :, 2); dims=1)
+    end
     for T in (UInt32, Int32, Float32, UInt64, Int64, Float64), ord in (FWD, REV)
         @test !rejects(AK.RadixSort(), zeros(T, 16); ord)
     end
     @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4))             # dims=: sorts flat
+    @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=1)
+    @test !rejects(AK.RadixSort(), zeros(Float32, 4, 4); dims=2)
+    @test !rejects(AK.RadixSort(), zeros(Float32, 16); dims=1)
 
     # BitonicSort
     @test rejects(AK.BitonicSort(block_size=100))
@@ -224,10 +236,10 @@ end
         rt = only(Base.return_types(AK._resolve_sort,
                                     (AK.Auto, typeof(AK.HOST_BACKEND), A, D, Base.Order.ForwardOrdering)))
         @test rt === AK.CPUThreads.SampleSort
-        # An explicit algorithm resolves to itself, or always throws (no radix sort along `dims`)
+        # An explicit algorithm resolves to itself
         rt = only(Base.return_types(AK._resolve_sort,
                                     (AK.RadixSort, ResolveTestBackend, A, D, Base.Order.ForwardOrdering)))
-        @test rt === (D === Colon ? AK.RadixSort : Union{})
+        @test rt === AK.RadixSort
     end
 end
 
