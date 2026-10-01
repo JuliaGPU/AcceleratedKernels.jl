@@ -83,6 +83,28 @@ end
 @inline findall_index(indices::LinearIndices{1}, position) =
     first(indices) + position - 1
 @inline findall_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
+# Base converts a linear index to a Cartesian one with checked signed 64-bit divisions, which GPUs
+# emulate in long instruction sequences; in the scatter pass, where each thread converts the
+# positions of its run in turn, they made small `findall`s of `keys(A)` several times slower than
+# those of `LinearIndices(A)`. No axis is empty where a position exists, so unsigned divisions
+# without the zero check are exact.
+@inline findall_index(::CartesianIndices{0}, position) = CartesianIndex()
+@inline function findall_index(indices::CartesianIndices, position)
+    # (in 32 bits where the indices fit, which some GPUs divide much faster)
+    offsets = length(indices) <= typemax(UInt32) ?
+        _cartesian_offsets((position - 1) % UInt32, Base.front(size(indices))) :
+        _cartesian_offsets((position - 1) % UInt, Base.front(size(indices)))
+    return CartesianIndex(Base.map((ax, o) -> @inbounds(ax[firstindex(ax) + o % Int]),
+                                   indices.indices, offsets))
+end
+# The offsets along each dimension of the 0-based linear offset `p` into an array whose leading
+# dimensions have the sizes `sizes`
+@inline _cartesian_offsets(p::Unsigned, ::Tuple{}) = (p,)
+@inline function _cartesian_offsets(p::U, sizes::Tuple) where {U <: Unsigned}
+    n = sizes[1] % U
+    q = Base.udiv_int(p, n)
+    return (p - q * n, _cartesian_offsets(q, Base.tail(sizes))...)
+end
 
 
 # With `out === nothing`, compute block counts. Otherwise, `block_counts` contains their
