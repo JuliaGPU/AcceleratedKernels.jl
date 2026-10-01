@@ -40,14 +40,26 @@ element type, the ordering or the backend cannot run, or an invalid setting, is 
 #### The `backend` keyword
 
 Operations run on the backend of their arrays: `backend` is derived from every array argument,
-the destination first, and all of them must agree. Ranges, `CartesianIndices`, `LinearIndices`
-(also through views and reshapes), numbers and other non-array arguments do not count. If no
+the destination first, and all of them must agree. Ranges, `CartesianIndices`, `LinearIndices`,
+numbers and other non-array arguments do not count. An array that wraps others (one whose
+`parent` is another array, or a tuple of arrays) counts as the arrays it wraps: a view or a
+reshape, but also a lazy array such as a [MappedArrays.jl](https://github.com/JuliaArrays/MappedArrays.jl)
+`mappedarray(f, A, B)`, so that a lazy array computed from ranges does not count either. If no
 argument determines the backend (e.g. a loop over a range), the operation runs on the host.
 
 Pass `backend` explicitly for arrays that cannot tell (a range to be processed on a GPU, for
-instance), or for memory that several backends can access. AcceleratedKernels does not check that
-the backend can reach the arrays. The device and stream are those of the calling task, as set by
-the backend package (e.g. `CUDA.device!`); make sure the arrays live on that device.
+instance), for lazy arrays whose function reads device arrays it captures rather than wraps, or
+for memory that several backends can access. AcceleratedKernels does not check that the backend
+can reach the arrays. The device and stream are those of the calling task, as set by the backend
+package (e.g. `CUDA.device!`); make sure the arrays live on that device.
+
+Results of operations on a lazy array (e.g. `AK.sort(mappedarray(f, A))`) are allocated with its
+`similar` method, or on `backend` if it has none of its own (Base's fallback gives a host `Array`)
+or wraps no memory. Running a GPU kernel over a lazy array needs a version of it that the kernel
+can use: an `isbits` lazy array (`mappedarray(abs2, 1:n)`) is passed as it is, while one wrapping
+device arrays needs an [Adapt.jl](https://github.com/JuliaGPU/Adapt.jl) rule for its type, as
+Base's views and reshapes have. MappedArrays.jl does not define such rules yet, so a
+`mappedarray` of GPU arrays cannot be processed on the GPU.
 
 #### The host backend
 

@@ -64,7 +64,7 @@ function mapreduce_1d_gpu(
     len == 1 && return _finish(op, init, nothing, 0,
                                @allowscalar(op_host(neutral, f_host(src[1]))))
     if len < switch_below
-        h_src = _host_copy(src)
+        h_src = _host_copy(src, backend)
         return _finish(op, init, nothing, 0, Base.mapreduce(f_host, op_host, h_src; init=neutral))
     end
 
@@ -115,16 +115,17 @@ function mapreduce_1d_gpu(
     return _finish(op, init, nothing, 0, @allowscalar(p1[1]))
 end
 
-_host_copy(src::AbstractArray) = Array(src)
+_host_copy(src::AbstractArray, backend) = _host_array(backend, src)
 # A `Broadcasted` source is evaluated on the host from host copies of its arrays, so that it needs
 # no device memory
-_host_copy(src::Base.Broadcast.Broadcasted) = Base.Broadcast.materialize(_on_host(src))
-_on_host(bc::Base.Broadcast.Broadcasted) =
-    Base.Broadcast.Broadcasted(bc.f, Base.map(_on_host, bc.args), bc.axes)
-_on_host(x::Base.Broadcast.Extruded) = _on_host(x.x)
-_on_host(x::AbstractArray) = Array(x)
-_on_host(x::AbstractRange) = x
-_on_host(x) = x
+_host_copy(src::Base.Broadcast.Broadcasted, backend) =
+    Base.Broadcast.materialize(_on_host(src, backend))
+_on_host(bc::Base.Broadcast.Broadcasted, backend) =
+    Base.Broadcast.Broadcasted(bc.f, Base.map(x -> _on_host(x, backend), bc.args), bc.axes)
+_on_host(x::Base.Broadcast.Extruded, backend) = _on_host(x.x, backend)
+_on_host(x::AbstractArray, backend) = _host_array(backend, x)
+_on_host(x::AbstractRange, backend) = x
+_on_host(x, backend) = x
 
 _mapreduce_1d_src_view(src::AbstractArray) = @view src[1:end]
 _mapreduce_1d_src_view(src::Base.Broadcast.Broadcasted) = src
