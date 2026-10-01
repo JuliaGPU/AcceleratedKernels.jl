@@ -1,12 +1,12 @@
 # Reduce the non-empty `src` to a value on Julia threads; `neutral` and `init` as for
 # `mapreduce_1d_gpu`.
 function mapreduce_1d_cpu(
-    f, op, src::MapReduceSource, backend::Backend;
+    f::F, op::OP, src::MapReduceSource, backend::Backend;
     init,
     neutral,
     max_tasks::Int,
     min_elems::Int,
-)
+) where {F, OP}
     f, op_lanes = _lanefuncs(f, op, neutral)
     tp = TaskPartitioner(length(src), max_tasks, min_elems)
     if src isa Base.Broadcast.Broadcasted || tp.num_tasks == 1

@@ -37,7 +37,7 @@ AK.reduce(max, m; dims=1)                           # a 1×100_000 MtlArray
 AK.reduce(+, m; dims=2, alg=AK.BlockReduce(block_size=512))
 ```
 """
-reduce(op, src::AbstractArray; kwargs...) = mapreduce(identity, op, src; kwargs...)
+reduce(op::OP, src::AbstractArray; kwargs...) where {OP} = mapreduce(identity, op, src; kwargs...)
 
 
 """
@@ -116,7 +116,7 @@ rows = AK.mapreduce((x, y) -> x * y, +, a, b; dims=1)
 ```
 """
 function mapreduce(
-    f, op, src::MapReduceSource, srcs::AbstractArray...;
+    f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
     backend::Union{Nothing, Backend}=nothing,
     init=_NoInit(),
     neutral=nothing,
@@ -124,7 +124,7 @@ function mapreduce(
     dims=:,
     alg::Algorithm=Auto(),
     workspace=nothing,
-)
+) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
     s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
     bufs = _buffers(s.plan, workspace, src)
@@ -132,20 +132,20 @@ function mapreduce(
 end
 
 function _plan(
-    ::typeof(mapreduce), f, op, src::MapReduceSource, srcs::AbstractArray...;
+    ::typeof(mapreduce), f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
     backend=nothing, init=_NoInit(), neutral=nothing, acctype=nothing, dims=:,
     alg::Algorithm=Auto(),
-)
+) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
     return _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
 end
 
-_plan(::typeof(reduce), op, src::AbstractArray; kwargs...) =
+_plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
     _plan(mapreduce, identity, op, src; kwargs...)
 
 # The source of a reduction: several arrays become one `Broadcasted` object
-_mapreduce_fuse(f, src, ::Tuple{}) = (f, src)
-function _mapreduce_fuse(f, src, srcs::Tuple)
+_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, src)
+function _mapreduce_fuse(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
     _mapreduce_check_map_axes(src, srcs...)
@@ -160,12 +160,13 @@ _mapreduce_source(src::Base.Broadcast.Broadcasted) =
     VERSION < v"1.12-" ? _materialize_source(src) : src
 
 # The seed of the partial results (`_reduce_seed`), where an accumulator type exists
-_mapreduce_seed(op, ::Type{A}, neutral) where {A} =
+_mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
     A === Union{} ? nothing : _reduce_seed(op, A, neutral)
 
 # Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
 # plan), accumulator type and partial-result seed, and for reductions along `dims` the result
-function _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
+function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
+                          alg) where {F, OP}
     backend = _resolve_backend(backend, src)
     M = _mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
@@ -198,7 +199,7 @@ function _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg
 end
 
 # Run the reduction set up by `_mapreduce_setup`, with the plan's scratch buffers `bufs`
-function _mapreduce_run(f, op, src, s, init, bufs)
+function _mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :dims_valid)
         return _mapreduce_whole(f, op, src, backend, a, _unval(s.A); init, neutral=s.seed,
@@ -215,7 +216,8 @@ function _mapreduce_run(f, op, src, s, init, bufs)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
-_mapreduce_nested(f, op, src, bufs; backend, init=_NoInit(), neutral=nothing, dims=:, alg) =
+_mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing, dims=:,
+                  alg) where {F, OP} =
     _mapreduce_run(f, op, src,
                    _mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
                    init, bufs)
@@ -284,7 +286,7 @@ AK.mapreducedim!(identity, +, R, A; init=100)        # [103 107]
 ```
 """
 function mapreducedim!(
-    f, op, R::AbstractArray, src::MapReduceSource;
+    f::F, op::OP, R::AbstractArray, src::MapReduceSource;
     backend::Union{Nothing, Backend}=nothing,
     init=_NoInit(),
     neutral=nothing,
@@ -292,20 +294,26 @@ function mapreducedim!(
     acctype=nothing,
     alg::Algorithm=Auto(),
     workspace=nothing,
-)
+) where {F, OP}
     s = _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
-    bufs = _buffers(s.plan, workspace, R, src)
-    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
-                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
+    _mapreducedim_run!(f, op, R, src, s, workspace)
     return R
 end
 
-_plan(::typeof(mapreducedim!), f, op, R::AbstractArray, src::MapReduceSource;
+# (a function barrier: the type of `s` depends on the number of reduced dimensions)
+function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace) where {F, OP}
+    bufs = _buffers(s.plan, workspace, R, src)
+    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
+                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
+end
+
+_plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
       backend=nothing, init=_NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
-      alg::Algorithm=Auto()) =
+      alg::Algorithm=Auto()) where {F, OP} =
     _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
 
-function _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
+function _mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwrite, acctype,
+                             alg) where {F, OP}
     backend = _resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
@@ -317,6 +325,11 @@ function _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, a
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)
+    return _mapreducedim_setup(f, op, src, dst, dims_valid, backend, init, neutral, overwrite,
+                               acctype, alg)
+end
+function _mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, neutral,
+                             overwrite, acctype, alg) where {F, OP}
     A = _acctype(op, eltype(dst), _mapped_eltype(f, src), acctype)
     a = _resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
@@ -336,7 +349,8 @@ _check_noalias(R, src) = nothing
 
 # Reduce all of `src` to a host value, with accumulator type `A` and partial-result seed
 # `neutral`; `partials` is the plan's scratch
-function _mapreduce_whole(f, op, src, backend, alg, ::Type{A}; init, neutral, partials) where {A}
+function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
+                          partials) where {F, OP, A}
     if length(src) == 0
         init isa _NoInit || return init
         throw(ArgumentError(
@@ -352,7 +366,8 @@ function _mapreduce_whole(f, op, src, backend, alg, ::Type{A}; init, neutral, pa
     return convert(A, _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, partials))
 end
 
-function _mapreduce_whole_run(f, op, src, backend, alg; init, neutral, partials)
+function _mapreduce_whole_run(f::F, op::OP, src, backend, alg; init, neutral,
+                              partials) where {F, OP}
     if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;

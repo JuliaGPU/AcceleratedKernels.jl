@@ -31,49 +31,59 @@ const TILED_STRIDED_ROWS_PER_BLOCK = 8
 
 
 # Host-side canonicalization: split the dimensions into reduced and kept ("outer") segments,
-# merging adjacent dimensions whose strides are contiguous. Returns two tuples of
-# (stride, size) segments.
-function _canonicalize_dims(src_sizes, src_strides, dims_valid)
-    ndim = length(src_sizes)
-    reduce_segs = Tuple{Int,Int}[]
-    outer_segs  = Tuple{Int,Int}[]
-
+# merging adjacent dimensions whose strides are contiguous. Returns the `(stride, size)` pairs of
+# the reduced and of the kept segments, each as `N`-tuples of strides and sizes padded with
+# zeros, and the number of segments. (The fixed length keeps this type stable: the reduction's
+# host path runs on every call, and dynamic dispatch there costs more than small kernels take.)
+function _canonicalize_dims(src_sizes::NTuple{N, Int}, src_strides::NTuple{N, Int},
+                            dims_valid) where {N}
+    pad = ntuple(_ -> 0, Val(N))
+    rstrides, rsizes, nr = pad, pad, 0
+    ostrides, osizes, no = pad, pad, 0
     i = 1
-    while i <= ndim
-        if i in dims_valid
-            seg_stride = src_strides[i]
-            seg_size   = src_sizes[i]
-            while i + 1 <= ndim &&
-                  (i + 1) in dims_valid &&
-                  src_strides[i + 1] == seg_stride * seg_size
-                i += 1
-                seg_size *= src_sizes[i]
-            end
-            push!(reduce_segs, (seg_stride, seg_size))
+    while i <= N
+        reduced = i in dims_valid
+        seg_stride = src_strides[i]
+        seg_size   = src_sizes[i]
+        while i + 1 <= N && ((i + 1) in dims_valid) == reduced &&
+              src_strides[i + 1] == seg_stride * seg_size
+            i += 1
+            seg_size *= src_sizes[i]
+        end
+        if reduced
+            nr += 1
+            rstrides = Base.setindex(rstrides, seg_stride, nr)
+            rsizes = Base.setindex(rsizes, seg_size, nr)
         else
-            seg_stride = src_strides[i]
-            seg_size   = src_sizes[i]
-            while i + 1 <= ndim &&
-                  !((i + 1) in dims_valid) &&
-                  src_strides[i + 1] == seg_stride * seg_size
-                i += 1
-                seg_size *= src_sizes[i]
-            end
-            push!(outer_segs, (seg_stride, seg_size))
+            no += 1
+            ostrides = Base.setindex(ostrides, seg_stride, no)
+            osizes = Base.setindex(osizes, seg_size, no)
         end
         i += 1
     end
-
-    return Tuple(reduce_segs), Tuple(outer_segs)
+    return (rstrides, rsizes, nr), (ostrides, osizes, no)
 end
 
-# The reduced and kept dimensions of a strided source, as `(strides, sizes)` of their merged
-# segments.
-function _mapreduce_segments(src_sizes, src_strides, dims_valid)
-    reduce_segs, outer_segs = _canonicalize_dims(src_sizes, src_strides, dims_valid)
-    return (Tuple(str for (str, _) in reduce_segs), Tuple(s for (_, s) in reduce_segs)),
-           (Tuple(str for (str, _) in outer_segs), Tuple(s for (_, s) in outer_segs))
+# The reduced and kept dimensions of a strided source, as `(strides, sizes, count)` of their
+# merged segments (see `_canonicalize_dims`)
+_mapreduce_segments(src_sizes, src_strides, dims_valid) =
+    _canonicalize_dims(Tuple(src_sizes), Tuple(src_strides), dims_valid)
+
+# Call `g(reduce_strides, reduce_sizes, outer_strides, outer_sizes)` with the segments of
+# `_mapreduce_segments` as tuples of their lengths, which the kernels specialize on. The common
+# layouts (one reduced segment and at most one kept one) take no dynamic dispatch.
+@inline function _with_segments(g::G, segs) where {G}
+    (rstrides, rsizes, nr), (ostrides, osizes, no) = segs
+    if nr == 1 && no == 1
+        return g((rstrides[1],), (rsizes[1],), (ostrides[1],), (osizes[1],))
+    elseif nr == 1 && no == 0
+        return g((rstrides[1],), (rsizes[1],), (), ())
+    else
+        return g(_segment_tuple(rstrides, nr), _segment_tuple(rsizes, nr),
+                 _segment_tuple(ostrides, no), _segment_tuple(osizes, no))
+    end
 end
+_segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 
 # The launch shape of a strided reduction along `dims`, and the number of blocks per output of a
 # `:multigroup` reduction:
@@ -92,17 +102,16 @@ end
 # the (large) reduction itself across many blocks via multigroup is still better.
 # For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
 # option regardless of GS_DST_CUTOFF.
-function _mapreduce_nd_shape(
-    dst_size, reduce_size, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-    block_size, target_blocks,
-)
+function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, target_blocks)
+    (rstrides, rsizes, nr), (ostrides, _, no) = segs
+    single_reduce = nr == 1 && rsizes[1] != 0
+
     # by_block override 1: when the reduced dimension is the fastest-varying one
     # (reduce_strides==(1,)), by_thread's per-thread strided access is badly
     # uncoalesced, while by_block lets consecutive threads read consecutive elements.
     use_by_block_for_coalescing =
         dst_size >= reduce_size && reduce_size >= block_size &&
-        length(reduce_sizes) == 1 && reduce_sizes[1] != 0 &&
-        reduce_strides == (1,)
+        single_reduce && rstrides[1] == 1
 
     # by_block override 2: when by_thread would launch too few blocks for a square-like
     # output/reduction shape, split each output reduction across a full block. This
@@ -112,14 +121,12 @@ function _mapreduce_nd_shape(
     # coalescing is better than a strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
-        cld(dst_size, block_size) < target_blocks &&
-        length(reduce_sizes) == 1 && reduce_sizes[1] != 0
+        cld(dst_size, block_size) < target_blocks && single_reduce
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
     use_tiled_strided =
         dst_size == reduce_size && reduce_size >= block_size &&
-        length(outer_sizes) == 1 && outer_strides == (1,) &&
-        length(reduce_sizes) == 1 && reduce_strides[1] > 1 &&
+        no == 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1 &&
         block_size % TILED_STRIDED_ROWS_PER_BLOCK == 0 &&
         ispow2(block_size ÷ TILED_STRIDED_ROWS_PER_BLOCK)
 
@@ -152,12 +159,8 @@ function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, 
     layout = _mapreduce_strided_layout(src)
     isnothing(layout) && return (;)
     target_blocks = reduce_tuning(backend, A).target_blocks
-    (reduce_strides, reduce_sizes), (outer_strides, outer_sizes) =
-        _mapreduce_segments(src_sizes, layout[3], dims_valid)
-    shape, reduce_groups = _mapreduce_nd_shape(
-        dst_size, len, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-        alg.block_size, target_blocks,
-    )
+    segs = _mapreduce_segments(src_sizes, layout[3], dims_valid)
+    shape, reduce_groups = _mapreduce_nd_shape(dst_size, len, segs, alg.block_size, target_blocks)
     shape === :multigroup || return (;)
     return (; partials=_buffer(typeof(neutral), dst_size, reduce_groups))
 end
@@ -182,13 +185,13 @@ end
 # dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
 # `_Fold()` (see `_finish`).
 function mapreduce_nd!(
-    f, op, dst::AbstractArray, src::MapReduceSource, backend::Backend,
+    f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
     alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
     init,
     neutral,
     dims_valid::Tuple,
     bufs::NamedTuple,
-) where {A}
+) where {F, OP, A}
     # Launch settings of the elementwise passes, and of the reduction kernels
     launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
                                    (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
@@ -253,14 +256,27 @@ function mapreduce_nd!(
     end
 
     buffer, base_offset, src_strides = layout
-    (reduce_strides, reduce_sizes), (outer_strides, outer_sizes) =
-        _mapreduce_segments(src_sizes, src_strides, dims_valid)
+    segs = _mapreduce_segments(src_sizes, src_strides, dims_valid)
     reduce_size = len
-    shape, reduce_groups = _mapreduce_nd_shape(
-        dst_size, reduce_size, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-        block_size, target_blocks,
-    )
+    shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size,
+                                               target_blocks)
+    _with_segments(segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
+        _mapreduce_nd_launch!(
+            shape, reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
+            init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
+            outer_sizes, dst_size, reduce_size,
+        )
+    end
 
+    return dst
+end
+
+# Launch the kernels of a strided reduction of shape `shape` (see `_mapreduce_nd_shape`)
+function _mapreduce_nd_launch!(
+    shape, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
+    init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
+    dst_size, reduce_size,
+) where {F, OP}
     if shape === :tiled_strided
         # Narrow layout-specific path: square-like row reductions with contiguous
         # outputs and strided input reads, e.g. size=(1024,1024), dims=2. Several
@@ -320,17 +336,14 @@ function mapreduce_nd!(
         )
     end
 
-    return dst
+    return nothing
 end
 
-function _mapreduce_dense_strides(sizes::Tuple)
-    stride = 1
-    return ntuple(length(sizes)) do i
-        s = stride
-        stride *= sizes[i]
-        s
-    end
-end
+# (the strides of a dense column-major array: 1 and the running products of the sizes)
+_mapreduce_dense_strides(sizes::Tuple{}) = ()
+_mapreduce_dense_strides(sizes::Tuple) = Base.front(_cumprod((1, sizes...)))
+_cumprod(t::Tuple{Any}) = t
+_cumprod(t::Tuple) = (t[1], _cumprod((t[1] * t[2], Base.tail(Base.tail(t))...))...)
 
 # Resolve the layout the stride-based fast-path kernels need. Those kernels index a
 # flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`, so they work for any
@@ -420,10 +433,10 @@ function _contiguous_vector_width(
 end
 
 function _launch_mapreduce_nd_by_block!(
-    backend, block_size, buffer, dst, f, op, neutral, init,
+    backend, block_size, buffer, dst, f::F, op::OP, neutral, init,
     base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
-)
+) where {F, OP}
     W = _contiguous_vector_width(
         buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
     )
@@ -475,9 +488,9 @@ end
 # CPU path
 
 function _mapreduce_nd_cpu_sections!(
-    f, op, dst, src;
+    f::F, op::OP, dst, src;
     init, neutral, max_tasks, min_elems,
-)
+) where {F, OP}
     Rother  = CartesianIndices(dst)
     Rreduce = _mapreduce_reduce_indices(src, dst)
     f_lanes, op_lanes = _lanefuncs(f, op, neutral)
