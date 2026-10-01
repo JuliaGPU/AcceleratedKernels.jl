@@ -59,6 +59,14 @@
     AK.foreachindex(i -> (y[i] = i), 1:10)
     @test y == 1:10
 
+    # Indices that do not start at 1 are visited as they are
+    x = array_from_host(zeros(Int, 3))
+    f4(x) = AK.foreachindex(Base.IdentityUnitRange(0:2); backend=AK.get_backend(x)) do i
+        @inbounds x[i + 1] = i + 1
+    end
+    f4(x)
+    @test Array(x) == 1:3
+
     # Invalid launch settings, on every backend
     for kw in ((block_size=0,), (max_tasks=0,), (min_elems=0,))
         @test_throws ArgumentError AK.foreachindex(i -> nothing, x; kw...)

@@ -8,9 +8,12 @@
 
     # Avoid an out-of-line device call that can copy captured state to local memory.
     if i <= length(indices)
-        @inline f(indices[i])
+        @inline f(_nth(indices, i))
     end
 end
+
+# The `i`-th element of `indices`, counting from 1 whatever the first index of `indices` is
+@inline _nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
 
 
 function _forindices_gpu(
@@ -34,8 +37,7 @@ function _forindices_threads(f, indices; max_tasks, min_elems)
         # into indices, which supports arbitrary indices (and gets compiled away when using 1-based
         # collections); each thread processes this range
         for i in irange
-            @inbounds index = indices[i]
-            @inline f(index)
+            @inline f(_nth(indices, i))
         end
     end
 end
