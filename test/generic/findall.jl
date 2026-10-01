@@ -146,10 +146,12 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
         ci = CartesianIndices((2:38, 0:2:56))
         @test Array(AK.findall(array_from_host(hb); items=ci, alg=FINDALL_ALG)) ==
               ci[findall(vec(hb))]
-        # ... and the conversion itself, for other axes and on both sides of 32-bit lengths
+        # ... and the conversion itself, for other axes and on both sides of 32-bit lengths (which
+        # only 64-bit hosts can index)
         for ci in (CartesianIndices((Base.IdentityUnitRange(-2:4), 5:-1:1, 3)),
                    CartesianIndices((7,)), CartesianIndices(()),
-                   CartesianIndices((65_536, 65_535)), CartesianIndices((65_536, 65_537, 2)))
+                   (Sys.WORD_SIZE == 64 ? (CartesianIndices((65_536, 65_535)),
+                                           CartesianIndices((65_536, 65_537, 2))) : ())...)
             n = length(ci)
             for p in unique(clamp.((1, 2, 7, n ÷ 3, n - 1, n), 1, n))
                 @test AK.findall_index(ci, p) == ci[p]
