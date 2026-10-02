@@ -42,14 +42,14 @@ end
 # `_reduce_seed`, `init` is a value or `_NoInit()`, and `partials` holds `_mapreduce_1d_partials`
 # partial results (`nothing` if none are needed).
 function mapreduce_1d_gpu(
-    f, op, src::MapReduceSource, backend::Backend;
+    f::F, op::OP, src::MapReduceSource, backend::Backend;
     init,
     neutral,
     block_size::Int,
     items_per_thread::Int,
     partials::Union{Nothing, AbstractArray},
     switch_below::Int,
-)
+) where {F, OP}
     @argcheck 1 <= block_size <= 1024
     @argcheck ispow2(block_size)
     @argcheck items_per_thread >= 1

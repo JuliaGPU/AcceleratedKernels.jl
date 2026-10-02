@@ -9,7 +9,7 @@ end
 
 # The mapped element type of a reduction source. Base's `combine_eltypes` does not see through
 # the `Extruded` wrappers of a preprocessed `Broadcasted`, so its element types are derived here.
-_mapped_eltype(f, src) = Base.promote_op(f, _source_eltype(src))
+_mapped_eltype(f::F, src) where {F} = Base.promote_op(f, _source_eltype(src))
 _source_eltype(src::AbstractArray) = eltype(src)
 _source_eltype(bc::Base.Broadcast.Broadcasted) = Base.promote_op(bc.f, Base.map(_source_eltype, bc.args)...)
 _source_eltype(x::Base.Broadcast.Extruded) = eltype(x.x)
@@ -19,7 +19,8 @@ _source_eltype(x) = Base.Broadcast._broadcast_getindex_eltype(x)
 _materialize_source(bc::Base.Broadcast.Broadcasted) = copyto!(similar(bc, _source_eltype(bc)), bc)
 
 # The type of a reduction's first partial value when no `init` is given.
-_first_type(op, ::Type{M}) where {M} = Base.promote_op(Base.reduce_first, Core.Typeof(op), M)
+_first_type(op::OP, ::Type{M}) where {OP, M} =
+    Base.promote_op(Base.reduce_first, Core.Typeof(op), M)
 
 # The accumulator type of a reduction of mapped elements of type `M` into `S` (the type of `init`
 # or of the destination, `Union{}` for neither): the types Base's fold `op(op(S, M), M)...` goes
@@ -30,7 +31,7 @@ _first_type(op, ::Type{M}) where {M} = Base.promote_op(Base.reduce_first, Core.T
 # `Int`, as Base's `add_sum` does, and partial results have one type however many elements they
 # combine. `Union{}` when inference shows that the fold always throws; only a reduction with
 # elements to combine is an error then (`_check_acctype`).
-function _reduce_acctype(op, ::Type{S}, ::Type{M}) where {S, M}
+function _reduce_acctype(op::OP, ::Type{S}, ::Type{M}) where {OP, S, M}
     A = _first_type(op, M)
     if S !== Union{}
         B = Base.promote_op(op, S, M)
@@ -58,8 +59,8 @@ _check_acctype(op, f, ::Type{A}) where {A} = A === Union{} && throw(ArgumentErro
 # a partial result takes (`Base.reduce_first`'s of an element, or `op`'s of a partial result and
 # an element or of two partial results) has no conversion to it at all; whether the values fit is
 # the caller's obligation.
-_acctype(op, ::Type{S}, ::Type{M}, ::Nothing) where {S, M} = _reduce_acctype(op, S, M)
-function _acctype(op, ::Type{S}, ::Type{M}, ::Type{A}) where {S, M, A}
+_acctype(op::OP, ::Type{S}, ::Type{M}, ::Nothing) where {OP, S, M} = _reduce_acctype(op, S, M)
+function _acctype(op::OP, ::Type{S}, ::Type{M}, ::Type{A}) where {OP, S, M, A}
     M === Union{} && return A           # (no elements to hold)
     _check_holds(A, _first_type(op, M), "a one-element partial result (`Base.reduce_first`)")
     for (T, what) in ((Base.promote_op(op, A, M), "a partial result and an element"),
@@ -161,7 +162,7 @@ end
 # GPUArraysCore's neutral element for `op` when it has one, else an empty lane. A seed that is not
 # a lane stands for the accumulator type, so an abstract one (only on the host) is a lane: holding
 # the caller's `neutral`, or empty.
-function _reduce_seed(op, ::Type{A}, neutral) where {A}
+function _reduce_seed(op::OP, ::Type{A}, neutral) where {OP, A}
     isconcretetype(A) || return neutral === nothing ? _Lane{A}() : _Lane{A}(neutral)
     neutral === nothing || return convert(A, neutral)
     Base.promote_op(neutral_element, Core.Typeof(op), Type{A}) === Union{} && return _Lane{A}()
@@ -184,6 +185,10 @@ struct _Fold end
 @inline _finish(op, ::_NoInit, dst, i, partial) = _unlane(partial)
 @inline _finish(op, ::_Fold, dst, i, partial) = op(dst[i], _unlane(partial))
 
+# `init` of a pass that stores bare partial results, for a later pass
+struct _NoFinish end
+@inline _finish(op, ::_NoFinish, dst, i, partial) = partial
+
 
 # Unrolled map constructing a tuple
 @inline function unrolled_map_index(f, tuple_vector::Tuple)
@@ -204,7 +209,8 @@ end
 
 # Reductions whose every output reduces a single element, a partial result of the accumulator
 # type `A`: `dst` and `src` have the same length.
-function _mapreduce_nd_single!(f, op, dst, src, backend, ::Type{A}; init, launch...) where {A}
+function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
+                               launch...) where {F, OP, A}
     _foreachindex(eachindex(dst), backend; launch...) do i
         x = Base.mapreduce_first(f, op, src[i])
         dst[i] = _finish(op, init, dst, i, A === Union{} ? x : convert(A, x))

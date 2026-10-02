@@ -31,15 +31,20 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields.
 - `target_blocks`: the number of blocks a reduction along `dims` aims to launch, to fill the
   device when there are few outputs; must be positive.
+- `columns_min_elements`: the fewest elements of a reduction along `dims` into contiguous outputs
+  for which it splits each output's reduction across blocks of consecutive outputs; that can take
+  a second launch, which costs more on some backends.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`.
 
-The defaults reproduce AK's historical settings. Internal: the fields may change in any release.
+`columns_min_elements` defaults to 2^18, measured on CUDA; the other defaults reproduce AK's
+historical settings. Internal: the fields may change in any release.
 """
 Base.@kwdef struct ReduceTuning
     block_size::Int = 256
     items_per_thread::Int = 2
     switch_below::Int = 0
     target_blocks::Int = 256
+    columns_min_elements::Int = 1 << 18
     threads_min_elems::Int = 1
 end
 
