@@ -51,8 +51,18 @@
         @test Base.all(k -> haskey(sizes, k), (:temp, :hist, :scan, :key_range))
         @test sizes.temp == (Float32, (10_000,))
         @test AK.workspace_size(AK.sort!, v; alg=AK.BitonicSort()) == (;)
-        # A whole-array reduction keeps its partial results in two halves of one buffer
+        # A whole-array reduction keeps the partial results of its first pass, at most
+        # `target_blocks`, and a slot for the last one
         @test haskey(AK.workspace_size(AK.sum, v; alg=AK.BlockReduce()), :partials)
+        @test AK.workspace_size(AK.sum, array_from_host(rand(Float32, 10^7));
+                                alg=AK.BlockReduce()).partials[2] ==
+              (AK.reduce_tuning(BACKEND, Float32).target_blocks + 1,)
+        # ... as does one along `dims` into a single output, which has no slot
+        @test AK.workspace_size(AK.mapreducedim!, identity, +,
+                                array_from_host(zeros(Float32, 1, 1)),
+                                array_from_host(rand(Float32, 1000, 10_000));
+                                alg=AK.BlockReduce()).partials[2] ==
+              (AK.reduce_tuning(BACKEND, Float32).target_blocks,)
         # ... which a reduction of one element does not need
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
         # DecoupledLookback's flags only where it runs
@@ -155,11 +165,12 @@ end
         # ... and a reduction against every array of a fused source
         x = array_from_host(ones(Int32, 1000))
         y = copy(x)
+        # (two elements in one tile: the partials are the first pass's one and the result's)
         a = AK.BlockReduce(block_size=2, items_per_thread=1)
-        ws = AK.workspace(AK.mapreduce, +, +, x, y; alg=a)
+        ws = AK.workspace(AK.mapreduce, +, +, x[1:2], y[1:2]; alg=a)
         z = ws.buffers.partials
-        @test length(z) == 1000
-        @test_throws ArgumentError AK.mapreduce(+, +, z, y; alg=a, workspace=ws)
+        @test length(z) == 2
+        @test_throws ArgumentError AK.mapreduce(+, +, z, y[1:2]; alg=a, workspace=ws)
         # ... and a findall against its input
         ws = AK.workspace(AK.findall, identity, array_from_host(rand(Bool, 1000)))
         @test_throws ArgumentError AK.findall(identity, ws.buffers.mask; workspace=ws)

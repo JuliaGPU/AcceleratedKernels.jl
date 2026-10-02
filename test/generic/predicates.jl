@@ -82,10 +82,10 @@ struct PredicateCWTestBackend <: KernelAbstractions.Backend end
           AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
     @test AK._resolve_predicate(AK.Auto(), PredicateCWTestBackend(), Float32) ===
           AK.ConcurrentWrite(256)
-    @test AK._resolve_predicate(AK.Auto(), B, Float32) === AK.ViaReduce(AK.BlockReduce(256, 2, 0))
+    @test AK._resolve_predicate(AK.Auto(), B, Float32) === AK.ViaReduce(AK.BlockReduce(256, 16, 0))
     # The nested reduction is resolved like any reduction
     @test AK._resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=64)), B, Float32) ===
-          AK.ViaReduce(AK.BlockReduce(64, 2, 0))
+          AK.ViaReduce(AK.BlockReduce(64, 16, 0))
     @test_throws ArgumentError AK._resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)), B, Float32)
     # A tuning only guides `Auto`
     @test AK._resolve_predicate(AK.ConcurrentWrite(), B, Float32) === AK.ConcurrentWrite(256)

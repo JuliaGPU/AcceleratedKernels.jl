@@ -185,7 +185,7 @@ struct _Fold end
 @inline _finish(op, ::_NoInit, dst, i, partial) = _unlane(partial)
 @inline _finish(op, ::_Fold, dst, i, partial) = op(dst[i], _unlane(partial))
 
-# `init` of a pass that stores bare partial results, for a later pass
+# `init` of a pass that stores bare partial results, for a later pass or for the host
 struct _NoFinish end
 @inline _finish(op, ::_NoFinish, dst, i, partial) = partial
 

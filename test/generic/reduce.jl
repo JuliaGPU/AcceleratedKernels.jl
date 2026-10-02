@@ -1117,6 +1117,54 @@ end
 end
 
 
+@testset "reductions into a single output" begin
+    # Along `dims`, a reduction into one output of a contiguous or fused source takes the
+    # whole-array kernels, finishing on the device; the sizes span one tile, one pass and two
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    for n in (2, 1000, 50_000, 3_000_000)
+        h = rand(Int32(-9):Int32(9), n)
+        hm = reshape(h, :, 2)
+        v = array_from_host(h)
+        m = array_from_host(hm)
+        # `init` applied once, folding into `R`'s value, overwriting it
+        R = array_from_host(Int32[5])
+        AK.mapreducedim!(identity, +, R, v; alg)
+        @test Array(R) == [5 + sum(h)]
+        AK.mapreducedim!(identity, +, R, v; init=Int32(1), alg)
+        @test Array(R) == [1 + sum(h)]
+        AK.mapreducedim!(identity, +, R, m; overwrite=true, alg)
+        @test Array(R) == [sum(h)]
+        # ... in the accumulator type, and without a neutral element
+        r = AK.sum(m; dims=(1, 2), alg)
+        @test eltype(r) === Int && Array(r) == sum(hm; dims=(1, 2))
+        @test Array(AK.reduce((a, b) -> max(a, b), m; dims=(1, 2), alg)) == fill(maximum(h), 1, 1)
+        # A contiguous view at an offset, and a fused source
+        R = array_from_host(Int32[0])
+        AK.mapreducedim!(identity, +, R, view(m, :, 2); alg)
+        @test Array(R) == [sum(view(hm, :, 2))]
+        @test Array(AK.mapreduce(*, +, m, m; dims=(1, 2), alg)) == fill(sum(h .* h), 1, 1)
+        # Partial results in the accumulator type, which only the result must fit `R`'s
+        n == 2 && continue
+        h8 = Int8[fill(Int8(100), n ÷ 2); fill(Int8(-100), n ÷ 2)]
+        h8[end] = -95
+        v8 = array_from_host(h8)
+        R = array_from_host(Int8[0])
+        AK.mapreducedim!(identity, +, R, v8; acctype=Int32, overwrite=true, alg)
+        @test Array(R) == Int8[5]
+        AK.mapreducedim!(identity, +, R, v8; acctype=Int32, init=Int8(-10), alg)
+        @test Array(R) == Int8[-5]
+        # ... with a workspace, used twice
+        R = array_from_host(Int8[0])
+        ws = AK.workspace(AK.mapreducedim!, identity, +, R, v8; acctype=Int32, alg)
+        AK.mapreducedim!(identity, +, R, v8; acctype=Int32, alg, workspace=ws)
+        @test Array(R) == Int8[5]
+        AK.mapreducedim!(identity, +, R, v8; acctype=Int32, alg, workspace=ws)
+        @test Array(R) == Int8[10]
+    end
+end
+
+
 @testset "reduction contract" begin
     Random.seed!(0)
     alg = REDUCE_ALG

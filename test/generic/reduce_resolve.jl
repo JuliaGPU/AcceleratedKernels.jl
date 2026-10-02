@@ -26,11 +26,11 @@ end
 
 
 @testset "reduce resolution: Auto" begin
-    # The default tuning reproduces AK's historical settings, for whole arrays and `dims`
-    @test resolve_reduce(AK.Auto()) === AK.BlockReduce(256, 2, 0)
-    @test resolve_reduce(AK.Auto(); dims=nothing) === AK.BlockReduce(256, 2, 0)
-    @test resolve_reduce(AK.Auto(); dims=2) === AK.BlockReduce(256, 2, 0)
-    @test resolve_reduce(AK.Auto(); dims=(1, 3)) === AK.BlockReduce(256, 2, 0)
+    # The default tuning, for whole arrays and `dims`
+    @test resolve_reduce(AK.Auto()) === AK.BlockReduce(256, 16, 0)
+    @test resolve_reduce(AK.Auto(); dims=nothing) === AK.BlockReduce(256, 16, 0)
+    @test resolve_reduce(AK.Auto(); dims=2) === AK.BlockReduce(256, 16, 0)
+    @test resolve_reduce(AK.Auto(); dims=(1, 3)) === AK.BlockReduce(256, 16, 0)
 
     # On the host backend: the threaded algorithm, filled
     host = AK.HOST_BACKEND
@@ -43,6 +43,15 @@ end
     with_reduce_tuning(; block_size=512, items_per_thread=4, switch_below=100) do
         @test resolve_reduce(AK.Auto()) === AK.BlockReduce(512, 4, 100)
         @test resolve_reduce(AK.Auto(stable=false)) === AK.BlockReduce(512, 4, 100)
+    end
+
+    # A tuning without `items_per_thread` loads 64 bytes of accumulators per thread and tile, 4 to
+    # 16 elements
+    @test resolve_reduce(AK.Auto(); T=Float64) === AK.BlockReduce(256, 8, 0)
+    @test resolve_reduce(AK.Auto(); T=NTuple{8, Float64}) === AK.BlockReduce(256, 4, 0)
+    @test resolve_reduce(AK.Auto(); T=Union{}) === AK.BlockReduce(256, 4, 0)
+    with_reduce_tuning(; block_size=512, switch_below=100) do
+        @test resolve_reduce(AK.Auto(); T=Int8) === AK.BlockReduce(512, 16, 100)
     end
 end
 
@@ -83,7 +92,7 @@ end
     # and at most typemax(Int32), whether the settings are explicit or from the tuning
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(block_size=1, items_per_thread=1))
     @test resolve_reduce(AK.BlockReduce(block_size=1, items_per_thread=2)) === AK.BlockReduce(1, 2, 0)
-    @test resolve_reduce(AK.BlockReduce(block_size=1); dims=1) === AK.BlockReduce(1, 2, 0)
+    @test resolve_reduce(AK.BlockReduce(block_size=1); dims=1) === AK.BlockReduce(1, 16, 0)
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(items_per_thread=1 << 56))
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(block_size=1024, items_per_thread=1 << 22))
     with_reduce_tuning(; block_size=1, items_per_thread=1) do
@@ -95,7 +104,7 @@ end
     @test_throws ArgumentError resolve_reduce(AK.CPUThreads.Partitioned())
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=ReduceNoKernelsTestBackend())
     if AK._runs_kernels(host)
-        @test resolve_reduce(AK.BlockReduce(); backend=host) === AK.BlockReduce(256, 2, 0)
+        @test resolve_reduce(AK.BlockReduce(); backend=host) === AK.BlockReduce(256, 16, 0)
     else
         @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=host)
     end
