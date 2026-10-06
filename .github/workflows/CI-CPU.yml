@@ -125,11 +125,15 @@ jobs:
           arch: x64
       - uses: julia-actions/cache@v3
       - name: Develop AcceleratedKernels and KernelAbstractions main into the test environment
+        # KernelInterface is unregistered and only reaches KernelAbstractions through its
+        # `[sources]`, which Julia 1.10 ignores, so develop it explicitly.
         run: |
           julia --project=test -e '
             using Pkg
             Pkg.develop([PackageSpec(path="."),
-                         PackageSpec(url="https://github.com/JuliaGPU/KernelAbstractions.jl")])'
+                         PackageSpec(url="https://github.com/JuliaGPU/KernelAbstractions.jl"),
+                         PackageSpec(url="https://github.com/JuliaGPU/KernelAbstractions.jl",
+                                     subdir="lib/KernelInterface")])'
       - name: Run tests
         # only the generic tests: the others, Aqua included, do not depend on the backend
         run: julia --project=test test/runtests.jl --cpu-ka cpu-ka/
