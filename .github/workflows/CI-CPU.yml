@@ -31,7 +31,7 @@ jobs:
           - ubuntu-latest
           - macOS-latest
           - windows-latest
-          - macOS-13
+          - macOS-15-intel
         arch:
           - x64
           - x86
@@ -40,9 +40,9 @@ jobs:
           - JULIA_NUM_THREADS: 1
           - JULIA_NUM_THREADS: 2
         exclude:
-          - os: macOS-13
+          - os: macOS-15-intel
             arch: x86
-          - os: macOS-13
+          - os: macOS-15-intel
             arch: aarch64
           - os: macOS-latest
             arch: x86
