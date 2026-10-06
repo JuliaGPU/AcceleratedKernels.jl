@@ -1,8 +1,16 @@
+import Pkg
+
+# Install the back-end before loading anything, as it may need different versions of
+# packages that AcceleratedKernels depends on (e.g. UnsafeAtomics).
+for backend in ("CUDA", "oneAPI", "AMDGPU", "Metal")
+    "--$backend" in ARGS && Pkg.add(backend)
+end
+"--OpenCL" in ARGS && Pkg.add(["OpenCL", "pocl_jll"])
+
 import AcceleratedKernels as AK
 using KernelAbstractions
 using Test
 using Random
-import Pkg
 
 # Set to true when testing backends that support this
 const TEST_DL = Ref{Bool}(false)
@@ -11,13 +19,11 @@ const TEST_DL = Ref{Bool}(false)
 #   julia> import Pkg
 #   julia> Pkg.test(test_args=["--oneAPI"])
 if "--CUDA" in ARGS
-    Pkg.add("CUDA")
     using CUDA
     CUDA.versioninfo()
     const BACKEND = CUDABackend()
     TEST_DL[] = true
 elseif "--oneAPI" in ARGS
-    Pkg.add("oneAPI")
     using oneAPI
     oneAPI.versioninfo()
     const BACKEND = oneAPIBackend()
@@ -25,20 +31,15 @@ elseif "--oneAPI" in ARGS
     # FIXME: need atomic orderings for `DecoupledLookback` in oneAPI
     # TEST_DL[] = true
 elseif "--AMDGPU" in ARGS
-    Pkg.add("AMDGPU")
     using AMDGPU
     AMDGPU.versioninfo()
     const BACKEND = ROCBackend()
     TEST_DL[] = true
 elseif "--Metal" in ARGS
-    Pkg.add("Metal")
     using Metal
     Metal.versioninfo()
     const BACKEND = MetalBackend()
 elseif "--OpenCL" in ARGS
-    Pkg.add(name="OpenCL", rev="master")
-    Pkg.add(name="SPIRVIntrinsics", rev="master")
-    Pkg.add("pocl_jll")
     using pocl_jll
     using OpenCL
     OpenCL.versioninfo()
