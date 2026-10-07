@@ -143,13 +143,12 @@ end
 
 function findall_gpu(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg::ScanScatter;
-    bufs,
+    bufs, like,
 ) where I
     block_size = alg.block_size
     items_per_thread = alg.items_per_thread
 
-    # The output on the resolved backend, which a range does not determine
-    isempty(bools) && return KernelAbstractions.allocate(backend, I, 0)
+    isempty(bools) && return _similar(backend, like, I, (0,))
 
     elems_per_block = block_size * items_per_thread
     num_blocks = cld(length(bools), elems_per_block)
@@ -163,7 +162,7 @@ function findall_gpu(
     _accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
-    out = KernelAbstractions.allocate(backend, I, n)
+    out = _similar(backend, like, I, (n,))
     if n > 0
         kernel!(out, bools, block_counts, input_indices, output_indices, items;
                 ndrange=num_blocks * block_size)
@@ -213,11 +212,14 @@ function findall_section!(out, bools, input_indices, output_indices, positions, 
 end
 
 
+# The result is an array like `like` (the searched array, rather than a mask of it in scratch
+# memory), so that it shares properties such as a GPU array's storage mode
 function findall_impl(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg; bufs,
+    like=bools,
 ) where I
     if alg isa ScanScatter
-        findall_gpu(bools, I, output_indices, backend, alg; bufs)
+        findall_gpu(bools, I, output_indices, backend, alg; bufs, like)
     else
         findall_cpu(bools, I, output_indices, backend, alg; bufs)
     end
@@ -331,5 +333,5 @@ function _findall_run(pred, v, items, s, bufs)
     else
         v
     end
-    findall_impl(bools, eltype(items), items, backend, a; bufs)
+    findall_impl(bools, eltype(items), items, backend, a; bufs, like=v)
 end

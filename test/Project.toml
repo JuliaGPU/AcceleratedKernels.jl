@@ -16,6 +16,9 @@ OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
 oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"
 
+[sources]
+AcceleratedKernels = {path = ".."}
+
 [compat]
 ParallelTestRunner = "2"
 oneAPI = "2.9.2"
