@@ -622,7 +622,8 @@ end
     @inbounds for i in 1:length(reduce_sizes) - 1
         sz = reduce_sizes[i]
         if ispow2(sz)
-            shift = trailing_zeros(sz)
+            # (`trailing_zeros` would be `ctz`, which spirv2clc can't translate to OpenCL C)
+            shift = count_ones(sz - 1)
             r   = tmp & (sz - 1)
             tmp = tmp >> shift
         else
