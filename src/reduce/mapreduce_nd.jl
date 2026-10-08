@@ -299,9 +299,10 @@ function mapreduce_nd!(
     if dst_size == 1
         linear = _mapreduce_nd_linear(src, dims_valid)
         if linear !== nothing
-            mapreduce_1d_gpu(f, op, linear, backend; init, neutral, block_size,
-                             items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
-                             partials=get(bufs, :partials, nothing), switch_below=0, dst)
+            Base.inferencebarrier(mapreduce_1d_gpu)(
+                f, op, linear, backend; init, neutral, block_size,
+                items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
+                partials=get(bufs, :partials, nothing), switch_below=0, dst)
             return dst
         end
     end
