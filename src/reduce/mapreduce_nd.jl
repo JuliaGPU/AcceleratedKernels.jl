@@ -280,7 +280,10 @@ function mapreduce_nd!(
     # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
     # dimensions, or only ones of size 1
     if len == 1
-        _mapreduce_nd_single!(f, op, dst, src, backend, A; init, launch...)
+        # (a runtime dispatch on the GPU, see `_mapreduce_nd_launch!`)
+        single! = alg isa BlockReduce ? Base.inferencebarrier(_mapreduce_nd_single!) :
+                                        _mapreduce_nd_single!
+        single!(f, op, dst, src, backend, A; init, launch...)
         return dst
     end
 
@@ -315,7 +318,7 @@ function mapreduce_nd!(
     if isnothing(layout)
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_generic!(backend, block_size)
-        kernel!(
+        Base.inferencebarrier(kernel!)(
             src, dst, f, op, neutral, init,
             CartesianIndices(dst), _mapreduce_reduce_indices(src, dst), dst_size,
             ndrange=(block_size * blocks,),
@@ -328,8 +331,8 @@ function mapreduce_nd!(
     reduce_size = len
     shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning)
     _with_segments(segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
-        _mapreduce_nd_launch!(
-            shape, reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
+        Base.inferencebarrier(_mapreduce_nd_launch!)(
+            Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
             init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
             outer_sizes, dst_size, reduce_size,
         )
@@ -338,12 +341,18 @@ function mapreduce_nd!(
     return dst
 end
 
-# Launch the kernels of a strided reduction of shape `shape` (see `_mapreduce_nd_shape`)
+# Launch the kernels of a strided reduction of shape `shape` (see `_mapreduce_nd_shape`).
+#
+# This and the other GPU launches of a reduction are called through `Base.inferencebarrier`.
+# Inferring a launch through KernelAbstractions and the back-end takes far longer than the launch,
+# and without the barrier a reduction with a new `f`, `op` or element type infers every launch it
+# could make: all shapes, segment layouts and vector widths. A dynamic dispatch costs a fraction of
+# a microsecond.
 function _mapreduce_nd_launch!(
-    shape, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
+    ::Val{shape}, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
     init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
     dst_size, reduce_size,
-) where {F, OP}
+) where {shape, F, OP}
     if shape === :columns
         groups = reduce_groups
         blocks = cld(dst_size, _columns_cols(dst_size)) * groups
@@ -528,7 +537,7 @@ function _launch_mapreduce_nd_by_block!(
     )
     if W == 4
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
-        kernel!(
+        Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(4),
@@ -536,7 +545,7 @@ function _launch_mapreduce_nd_by_block!(
         )
     elseif W == 2
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
-        kernel!(
+        Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes,
             output_size, reduce_size, num_blocks, Val(2),
@@ -544,7 +553,7 @@ function _launch_mapreduce_nd_by_block!(
         )
     else
         kernel! = _mapreduce_nd_by_block!(backend, block_size)
-        kernel!(
+        Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             output_size, reduce_size, num_blocks,

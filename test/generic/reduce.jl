@@ -1071,7 +1071,7 @@ end
         h = rand(Int32(1):Int32(100), 64, 1000)
         R = array_from_host(fill(Int32(1), 64))
         AK._mapreduce_nd_launch!(
-            :columns, 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
+            Val(:columns), 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
             init=AK._Fold(), neutral=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
             reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
             reduce_size=1000)

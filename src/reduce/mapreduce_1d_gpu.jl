@@ -106,20 +106,20 @@ function mapreduce_1d_gpu(
     last_dst, last_init = dst === nothing ?
         (@view(partials[blocks + 1:blocks + 1]), _NoFinish()) : (dst, init)
     if blocks == 1
-        kernel!(src_view, last_dst, f, op, neutral, last_init, 1, NI, K;
-                ndrange=(block_size,))
+        Base.inferencebarrier(kernel!)(src_view, last_dst, f, op, neutral, last_init, 1, NI, K;
+                                       ndrange=(block_size,))
     else
         p = @view partials[1:blocks]
-        kernel!(src_view, p, f, op, neutral, _NoFinish(), blocks, NI, K;
-                ndrange=(block_size * blocks,))
+        Base.inferencebarrier(kernel!)(src_view, p, f, op, neutral, _NoFinish(), blocks, NI, K;
+                                       ndrange=(block_size * blocks,))
         if dst === nothing && blocks < switch_below
             return _finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=neutral))
         end
         # (the second pass reads the partials in unrolled steps of up to 16 loads per thread: in
         # one step for the default settings)
         K2 = Val(clamp(cld(max_blocks, block_size), 1, 16))
-        kernel!(p, last_dst, _Partials(), op, neutral, last_init, 1, NI, K2;
-                ndrange=(block_size,))
+        Base.inferencebarrier(kernel!)(p, last_dst, _Partials(), op, neutral, last_init, 1,
+                                       NI, K2; ndrange=(block_size,))
     end
     dst === nothing || return dst
     return _finish(op, init, nothing, 0, @allowscalar(last_dst[1]))
