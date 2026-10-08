@@ -142,7 +142,7 @@ function _buffers(p::_Plan, ws::Workspace, arrays...)
 end
 
 # Whether the buffer `b` may alias the array or `Broadcasted` source `a`
-_aliases(b, a::AbstractArray) = Base.mightalias(b, a)
+_aliases(b, a::AbstractArray) = _mightalias(b, a)
 _aliases(b, a::Base.Broadcast.Broadcasted) = Base.any(x -> _aliases(b, x), a.args)
 _aliases(b, a::Base.Broadcast.Extruded) = _aliases(b, a.x)
 _aliases(b, a) = false

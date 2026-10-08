@@ -117,7 +117,7 @@ end
 
 function _check_scan_destination(dst, src)
     dst === src && return nothing
-    Base.mightalias(dst, src) && throw(ArgumentError(
+    _mightalias(dst, src) && throw(ArgumentError(
         "the destination of a scan must be its source or not overlap it"))
     axes(dst) == axes(src) || throw(DimensionMismatch(
         "the destination of a scan must have the source's axes $(axes(src)), got $(axes(dst))"))

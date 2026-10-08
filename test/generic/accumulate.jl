@@ -604,6 +604,9 @@ end
     if Base.mightalias(view(x, 2:100), view(x, 1:99))
         @test_throws ArgumentError AK.accumulate!(+, view(x, 2:100), view(x, 1:99); alg=scan_alg())
     end
+    # (empty arrays overlap nothing, even where Julia 1.10's `Base.mightalias` says otherwise)
+    @test isempty(AK.accumulate!(+, view(x, 1:0), vec(view(reshape(x, 100, :), :, 1:0));
+                                 alg=scan_alg()))
     @test_throws DimensionMismatch AK.accumulate!(+, array_from_host(zeros(Int32, 5)), x;
                                                   alg=scan_alg())
 end

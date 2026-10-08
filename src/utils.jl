@@ -10,6 +10,10 @@ const LOCAL_MEMORY_BUDGET = 32 * 1024
 # `init=nothing`, which is an explicit initial value.
 struct _NoInit end
 
+# `Base.mightalias`, but with empty arrays aliasing nothing, which Julia 1.10's does not know:
+# GPU back-ends give all of them the same null data pointer
+_mightalias(a, b) = !isempty(a) && !isempty(b) && Base.mightalias(a, b)
+
 """
     struct TypeWrap{T} end
     TypeWrap(T) = TypeWrap{T}()

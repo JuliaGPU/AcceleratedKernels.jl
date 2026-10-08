@@ -1366,6 +1366,8 @@ end
     @test_throws DimensionMismatch AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 3, 1)), A; alg)
     @test_throws DimensionMismatch AK.mapreducedim!(identity, +, array_from_host(zeros(Int32, 1, 1, 2)), A; alg)
     @test_throws ArgumentError AK.mapreducedim!(identity, +, view(A, 1:1, :), A; alg)
+    @test size(AK.mapreducedim!(identity, +, view(A, 1:1, 1:0), reshape(view(A, 1:0, :), 2, 0);
+                                alg)) == (1, 0)
     bc = Base.Broadcast.preprocess(nothing, Base.Broadcast.instantiate(
         Base.Broadcast.broadcasted(identity, A)))
     @test_throws ArgumentError AK.mapreducedim!(identity, +, view(A, 1:1, :), bc;

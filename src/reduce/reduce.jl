@@ -339,7 +339,7 @@ function _mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, 
 end
 
 function _check_noalias(R, src::AbstractArray)
-    Base.mightalias(R, src) &&
+    _mightalias(R, src) &&
         throw(ArgumentError("the destination of a reduction must not alias its source"))
     nothing
 end
