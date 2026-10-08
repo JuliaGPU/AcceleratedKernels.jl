@@ -22,3 +22,12 @@ for T in [UInt32, Int64, Float32]
     _group["base_dims=2_sin"] = @benchmarkable @sb(Base.mapreduce(sin, +, v; init=$T(0), dims=2)) setup=(v = ArrayType(rand(rng, $randrange, n1, n2)))
     _group["acck_dims=2_sin"] = @benchmarkable @sb(AK.mapreduce(sin, +, v; init=$T(0), dims=2)) setup=(v = ArrayType(rand(rng, $randrange, n1, n2)))
 end
+
+# A fused two-input source, which has no dense buffer: into one output, and into few outputs of
+# many elements each
+let _group = addgroup!(group, "fused"), n = 128
+    for dims in ((1, 2, 3), (1, 2))
+        _group["base_dims=$dims"] = @benchmarkable @sb(Base.mapreduce(*, +, v, w; dims=$dims)) setup=(v = ArrayType(rand(rng, Float32, $n, $n, $n)); w = ArrayType(rand(rng, Float32, $n, $n, $n)))
+        _group["acck_dims=$dims"] = @benchmarkable @sb(AK.mapreduce(*, +, v, w; dims=$dims)) setup=(v = ArrayType(rand(rng, Float32, $n, $n, $n)); w = ArrayType(rand(rng, Float32, $n, $n, $n)))
+    end
+end

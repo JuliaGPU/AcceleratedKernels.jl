@@ -14,6 +14,29 @@ end
 # Only for backend-agnostic initialisation with KernelAbstractions.zero
 Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
+using Adapt: Adapt, adapt
+
+# A lazy array, without a dense buffer: its elements are computed from two arrays
+struct LazyProduct{T, N, A <: AbstractArray{T, N}} <: AbstractArray{T, N}
+    a::A
+    b::A
+end
+Base.size(p::LazyProduct) = size(p.a)
+Base.@propagate_inbounds Base.getindex(p::LazyProduct{T, N}, I::Vararg{Int, N}) where {T, N} =
+    p.a[I...] * p.b[I...]
+Adapt.adapt_structure(to, p::LazyProduct) = LazyProduct(adapt(to, p.a), adapt(to, p.b))
+KernelAbstractions.get_backend(p::LazyProduct) = get_backend(p.a)
+
+# A lazy vector whose indices start at 2
+struct ShiftedVector{T, A <: AbstractVector{T}} <: AbstractVector{T}
+    a::A
+end
+Base.axes(v::ShiftedVector) = (2:length(v.a) + 1,)
+Base.size(v::ShiftedVector) = size(v.a)
+Base.@propagate_inbounds Base.getindex(v::ShiftedVector, i::Int) = v.a[i - 1]
+Adapt.adapt_structure(to, v::ShiftedVector) = ShiftedVector(adapt(to, v.a))
+KernelAbstractions.get_backend(v::ShiftedVector) = get_backend(v.a)
+
 @testset "reduce_1d" begin
     Random.seed!(0)
 
@@ -352,7 +375,7 @@ end
     else
         # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
         # fast path over their dense parent buffer; the offset view exercises a nonzero
-        # base offset. Broadcasted/lazy sources still take the generic fallback.
+        # base offset.
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.reduce(+, @view(v[:, 1:2:end]); alg=REDUCE_ALG, init=Int32(0), dims=2)) ==
@@ -773,7 +796,7 @@ end
     else
         # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
         # fast path over their dense parent buffer; the offset view exercises a nonzero
-        # base offset. Broadcasted/lazy sources still take the generic fallback.
+        # base offset.
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[:, 1:2:end]); alg=REDUCE_ALG, init=Int32(0), dims=2)) ==
@@ -1074,7 +1097,7 @@ end
             Val(:columns), 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
             init=AK._Fold(), neutral=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
             reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
-            reduce_size=1000)
+            reduce_size=1000, dense_buffer=true)
         @test Array(R) == vec(sum(h; dims=2)) .+ 1
     end
 end
@@ -1161,6 +1184,52 @@ end
         @test Array(R) == Int8[5]
         AK.mapreducedim!(identity, +, R, v8; acctype=Int32, alg, workspace=ws)
         @test Array(R) == Int8[10]
+    end
+end
+
+
+@testset "lazy sources" begin
+    # Sources without a dense buffer, a lazy array and a fused one, reduced into one output and
+    # with every launch shape along `dims`: few outputs of many elements each (in one block per
+    # output, several, or one block for a few), contiguous outputs of strided elements (in
+    # columns, or tiles), non-adjacent dimensions, and many outputs of few elements each
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    for (shape, dims) in (((64, 64, 64), (1, 2, 3)), ((64, 64, 64), (1, 2)),
+                          ((300, 300, 3), (1, 2)), ((200, 5), 1), ((64, 64, 64), (2, 3)),
+                          ((256, 256), 2), ((64, 64, 64), (1, 3)), ((64, 64, 64), 3))
+        ha, hb = rand(Int32(-9):Int32(9), shape...), rand(Int32(-9):Int32(9), shape...)
+        da, db = array_from_host(ha), array_from_host(hb)
+        lazy, h = LazyProduct(da, db), ha .* hb
+        @test Array(AK.reduce(+, lazy; dims, alg)) == sum(h; dims)
+        @test Array(AK.reduce(+, lazy; dims, init=Int32(7), alg)) == reduce(+, h; dims, init=7)
+        # (without a neutral element)
+        @test Array(AK.reduce((a, b) -> max(a, b), lazy; dims, alg)) == maximum(h; dims)
+        @test Array(AK.mapreduce(*, +, da, db; dims, alg)) == sum(h; dims)
+        # Folding into the destination's values, and overwriting them
+        hR = rand(Int32(-9):Int32(9), size(sum(h; dims)))
+        R = array_from_host(hR)
+        AK.mapreducedim!(identity, +, R, lazy; alg)
+        @test Array(R) == hR .+ sum(h; dims)
+        AK.mapreducedim!(abs, max, R, lazy; overwrite=true, alg)
+        @test Array(R) == maximum(abs, h; dims)
+    end
+
+    # ... whose indices do not start at 1
+    h = rand(Int32(-9):Int32(9), 10_000)
+    shifted = ShiftedVector(array_from_host(h))
+    @test AK.reduce(+, shifted; alg) == sum(h)
+    @test Array(AK.reduce(+, shifted; dims=1, alg)) == [sum(h)]
+
+    # Reductions into one or few outputs split each output's reduction across blocks, and keep
+    # their partial results
+    if TEST_KERNELS
+        lazy = LazyProduct(array_from_host(ones(Int32, 300, 300, 3)),
+                           array_from_host(ones(Int32, 300, 300, 3)))
+        for R in (array_from_host(zeros(Int32, 1, 1, 1)), array_from_host(zeros(Int32, 1, 1, 3)))
+            @test haskey(AK.workspace_size(AK.mapreducedim!, identity, +, R, lazy;
+                                           alg=AK.BlockReduce()), :partials)
+        end
     end
 end
 

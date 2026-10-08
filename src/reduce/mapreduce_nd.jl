@@ -186,12 +186,13 @@ end
 _columns_cols(dst_size) = min(nextpow(2, dst_size), COLUMNS_COLS)
 
 # The source of a reduction along `dims` into a single output as a linearly indexed collection
-# of its elements, for the whole-array kernels (`mapreduce_1d_gpu`): a `Broadcasted` object, or a
-# contiguous range of a dense buffer; `nothing` for other sources.
+# of its elements, for the whole-array kernels (`mapreduce_1d_gpu`): a `Broadcasted` object, an
+# array without a dense buffer, or a contiguous range of a dense buffer; `nothing` for other
+# sources.
 _mapreduce_nd_linear(src::Base.Broadcast.Broadcasted, dims_valid) = src
 function _mapreduce_nd_linear(src::AbstractArray, dims_valid)
     layout = _mapreduce_strided_layout(src)
-    isnothing(layout) && return nothing
+    isnothing(layout) && return src
     buffer, base_offset, src_strides = layout
     (rstrides, _, nr), _ = _mapreduce_segments(size(src), src_strides, dims_valid)
     nr == 1 && rstrides[1] == 1 || return nothing
@@ -212,9 +213,7 @@ function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, 
                                    reduce_tuning(backend, A).target_blocks, 0; device=true)
         return n == 0 ? (;) : (; partials=_buffer(typeof(neutral), n))
     end
-    layout = _mapreduce_strided_layout(src)
-    isnothing(layout) && return (;)
-    segs = _mapreduce_segments(src_sizes, layout[3], dims_valid)
+    segs = _mapreduce_segments(src_sizes, _mapreduce_layout(src)[3], dims_valid)
     shape, reduce_groups = _mapreduce_nd_shape(dst_size, len, segs, alg.block_size,
                                                reduce_tuning(backend, A))
     shape === :multigroup || shape === :columns && reduce_groups > 1 || return (;)
@@ -300,22 +299,26 @@ function mapreduce_nd!(
     if dst_size == 1
         linear = _mapreduce_nd_linear(src, dims_valid)
         if linear !== nothing
-            mapreduce_1d_gpu(f, op, linear, backend; init, neutral, block_size,
-                             items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
-                             partials=get(bufs, :partials, nothing), switch_below=0, dst)
+            Base.inferencebarrier(mapreduce_1d_gpu)(
+                f, op, linear, backend; init, neutral, block_size,
+                items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
+                partials=get(bufs, :partials, nothing), switch_below=0, dst)
             return dst
         end
     end
 
-    # The stride-based fast paths below index a flat buffer at
-    # `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`. This works for any source backed
-    # by a single dense column-major buffer (dense arrays, but also strided views,
-    # adjoints, permuted dims, and reshapes over one). Sources without such a buffer
-    # — `Broadcasted`, lazy/computed arrays — take the generic Cartesian-indexed
-    # fallback, which makes no layout assumption (and crucially does not wrap the
-    # source in `@Const`, which is what makes e.g. PermutedDimsArray uncompilable).
+    # The kernels below index a flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`
+    # (see `_mapreduce_layout`)
     layout = _mapreduce_strided_layout(src)
-    if isnothing(layout)
+    buffer, base_offset, src_strides =
+        isnothing(layout) ? _mapreduce_linear_layout(src) : layout
+    segs = _mapreduce_segments(src_sizes, src_strides, dims_valid)
+    reduce_size = len
+    shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning)
+
+    # One output per thread of a source without a dense buffer: iterating over the Cartesian
+    # indices of each output's elements saves decoding every linear index
+    if isnothing(layout) && shape === :by_thread
         blocks = cld(dst_size, block_size)
         kernel! = _mapreduce_nd_generic!(backend, block_size)
         Base.inferencebarrier(kernel!)(
@@ -326,15 +329,11 @@ function mapreduce_nd!(
         return dst
     end
 
-    buffer, base_offset, src_strides = layout
-    segs = _mapreduce_segments(src_sizes, src_strides, dims_valid)
-    reduce_size = len
-    shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning)
     _with_segments(segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
         Base.inferencebarrier(_mapreduce_nd_launch!)(
             Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
             init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
-            outer_sizes, dst_size, reduce_size,
+            outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(layout),
         )
     end
 
@@ -348,10 +347,13 @@ end
 # and without the barrier a reduction with a new `f`, `op` or element type infers every launch it
 # could make: all shapes, segment layouts and vector widths. A dynamic dispatch costs a fraction of
 # a microsecond.
+#
+# `dense_buffer` is whether `buffer` is the dense buffer of the source, which the by-block kernel
+# can read with vector loads, or a linearly indexed lazy source (see `_mapreduce_layout`).
 function _mapreduce_nd_launch!(
     ::Val{shape}, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
     init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-    dst_size, reduce_size,
+    dst_size, reduce_size, dense_buffer,
 ) where {shape, F, OP}
     if shape === :columns
         groups = reduce_groups
@@ -427,7 +429,7 @@ function _mapreduce_nd_launch!(
         _launch_mapreduce_nd_by_block!(
             backend, block_size, buffer, dst, f, op, neutral, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, launch_blocks,
+            dst_size, reduce_size, launch_blocks, dense_buffer,
         )
     end
 
@@ -440,13 +442,28 @@ _mapreduce_dense_strides(sizes::Tuple) = Base.front(_cumprod((1, sizes...)))
 _cumprod(t::Tuple{Any}) = t
 _cumprod(t::Tuple) = (t[1], _cumprod((t[1] * t[2], Base.tail(Base.tail(t))...))...)
 
+# The layout the reduction kernels index `src` with, as `(buffer, base_offset, strides)`: the
+# strided layout of a source backed by a dense buffer, else (for a lazy array or a `Broadcasted`
+# object) the source indexed linearly, as a dense array of its size. Indexing a lazy source
+# linearly costs a decode of the index per element, but it gets the launch shapes of a dense
+# array, which can spread a reduction into few outputs across many threads.
+function _mapreduce_layout(src)
+    layout = _mapreduce_strided_layout(src)
+    return isnothing(layout) ? _mapreduce_linear_layout(src) : layout
+end
+_mapreduce_linear_layout(src) =
+    (_mapreduce_linear_source(src), 0, _mapreduce_dense_strides(size(src)))
+# (a reshaped array decodes a linear index with multiplicative inverses rather than divisions)
+_mapreduce_linear_source(src::AbstractArray) = vec(src)
+_mapreduce_linear_source(src::Base.Broadcast.Broadcasted) = src
+
 # Resolve the layout the stride-based fast-path kernels need. Those kernels index a
 # flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`, so they work for any
 # source backed by a single dense column-major buffer — a dense array, but also a
 # strided view, adjoint, permuted-dims, or reshape over one. Returns
-# `(buffer, base_offset, strides)` for such sources, or `nothing` (→ generic
-# Cartesian-indexed fallback) for `Broadcasted` and anything not backed by a dense
-# buffer (lazy/computed arrays, complex adjoints without `strides`, nested wrappers).
+# `(buffer, base_offset, strides)` for such sources, or `nothing` (→ linear indexing, see
+# `_mapreduce_layout`) for `Broadcasted` and anything not backed by a dense buffer
+# (lazy/computed arrays, complex adjoints without `strides`, nested wrappers).
 function _mapreduce_strided_layout(src::AbstractArray)
     s = try
         strides(src)
@@ -530,11 +547,11 @@ end
 function _launch_mapreduce_nd_by_block!(
     backend, block_size, buffer, dst, f::F, op::OP, neutral, init,
     base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-    output_size, reduce_size, num_blocks,
+    output_size, reduce_size, num_blocks, dense_buffer,
 ) where {F, OP}
-    W = _contiguous_vector_width(
+    W = dense_buffer ? _contiguous_vector_width(
         buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
-    )
+    ) : 0
     if W == 4
         kernel! = _mapreduce_nd_by_block_contiguous!(backend, block_size)
         Base.inferencebarrier(kernel!)(
@@ -645,14 +662,9 @@ end
     off
 end
 
-# GPU kernel: generic fallback — one thread per output element, reducing sequentially
-# over the reduced extents using Cartesian indexing. Makes no assumption about the
-# source's memory layout, so it handles strided views, adjoints, permuted dims, and
-# broadcasts over them. Mirrors the CPU `_mapreduce_nd_cpu_sections!` path.
-#
-# NOTE: the source is deliberately NOT marked `@Const` here. `@Const` prevents the
-# `@inbounds` getindex of some wrappers (e.g. PermutedDimsArray's `genperm`) from
-# being elided, leaving a `throw` that the GPU backends cannot compile.
+# GPU kernel: one thread per output element, reducing sequentially over the reduced extents
+# using Cartesian indexing; the by_thread kernel of sources without a dense buffer. Mirrors the
+# CPU `_mapreduce_nd_cpu_sections!` path.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_generic!(
     src, dst,
     f, op, neutral, init,

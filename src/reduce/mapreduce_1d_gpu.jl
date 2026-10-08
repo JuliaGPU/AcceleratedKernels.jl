@@ -136,7 +136,8 @@ _on_host(x::AbstractArray) = Array(x)
 _on_host(x::AbstractRange) = x
 _on_host(x) = x
 
-_mapreduce_1d_src_view(src::AbstractArray) = @view src[1:end]
+# (a view of all elements, indexed from 1 also when the source's indices are not)
+_mapreduce_1d_src_view(src::AbstractArray) = @view src[begin:end]
 _mapreduce_1d_src_view(src::Base.Broadcast.Broadcasted) = src
 
 # The number of partial results of `mapreduce_1d_gpu` over `len` elements: one per block of the
