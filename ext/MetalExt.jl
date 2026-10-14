@@ -13,4 +13,6 @@ Metal.@device_override AK._decoupled_fence() =
 # tiles than with 32 KiB ones.
 AK.scan_tuning(::MetalBackend, ::Type) = AK.ScanTuning(local_mem_bytes=16 * 1024)
 
+AK.predicate_tuning(::MetalBackend, ::Type) = AK.PredicateTuning(prefer_concurrent_write=false)
+
 end
