@@ -157,6 +157,10 @@ function _accumulate_setup(
         p = _buffer(typeof(seed), num_blocks)
         a isa DecoupledLookback ? (; prefixes=p, flags=_buffer(UInt8, num_blocks)) :
                                   (; prefixes=p)
+    elseif a isa SliceScan
+        # The chunk totals of slices split into chunks
+        m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
+        m == 0 ? (;) : (; totals=_buffer(typeof(seed), m))
     else
         (;)
     end
@@ -177,24 +181,42 @@ function _accumulate_run!(op, v, src, s, bufs)
     # of each slice, as `op(init, x)`.
     w = haskey(bufs, :work) ? bufs.work : v
     launch = _scan_launch(a)
-    if w !== src
+    # (`init` of the accumulator type seeds the kernels directly instead, except where every
+    # slice has one element and no kernel runs)
+    apply_init = inclusive && !(init isa _NoInit) && !isempty(w) &&
+                 (!(init isa A) || dims !== nothing && dims > ndims(w))
+    # The kernels read the elements from `src` as they scan them; the other cases first copy them
+    # to `w`, and scan that in place
+    fused = !(a isa CPUThreads.Partitioned) && !apply_init &&
+            (dims === nothing || dims <= ndims(w))
+    if w !== src && !fused
         _foreachindex(eachindex(w, src), backend; launch...) do i
             @inbounds w[i] = Base.reduce_first(op, src[i])
         end
     end
-    # (`init` of the accumulator type seeds the kernels directly instead, except where every
-    # slice has one element and no kernel runs)
-    if inclusive && !(init isa _NoInit) && !isempty(w) &&
-       (!(init isa A) || dims !== nothing && dims > ndims(w))
+    if apply_init
         _scan_apply_init!(w, op, init, dims, backend, launch)
         init = _NoInit()
     end
+    if w !== src && fused
+        _accumulate_scan!(op, w, src, _ScanEntry{A}(op), backend, a, bufs; init, neutral, dims,
+                          inclusive)
+    else
+        _accumulate_scan!(op, w, w, identity, backend, a, bufs; init, neutral, dims, inclusive)
+    end
+    w === v || copyto!(v, w)
+    return v
+end
 
+# Scan into `w`, from the elements `entry(src[i])` (`src` is `w`, with `entry === identity`, for
+# a scan in place; the threaded algorithms only scan in place)
+function _accumulate_scan!(op::OP, w, src, entry, backend, a, bufs; init, neutral, dims,
+                           inclusive) where {OP}
     if dims === nothing
         if a isa CPUThreads.Partitioned
             accumulate_1d_cpu!(op, w, backend, a; init, neutral, inclusive)
         else
-            accumulate_1d_gpu!(op, w, backend, a; init, neutral, inclusive,
+            accumulate_1d_gpu!(op, w, backend, a; src, entry, init, neutral, inclusive,
                                prefixes=get(bufs, :prefixes, nothing),
                                flags=get(bufs, :flags, nothing))
         end
@@ -203,11 +225,19 @@ function _accumulate_run!(op, v, src, s, bufs)
         # over
         inclusive || fill!(w, _unlane(_scan_first_seed(w, init, neutral)))
     else
-        accumulate_nd!(op, w, backend, a; init, neutral, dims=Int(dims), inclusive)
+        accumulate_nd!(op, w, backend, a; src, entry, init, neutral, dims=Int(dims), inclusive,
+                       totals=get(bufs, :totals, nothing))
     end
-    w === v || copyto!(v, w)
-    return v
+    return w
 end
+
+# How a kernel reads an element of a scan's source: as a one-element reduction, of the
+# accumulator type `A`, as the pass that copies the source to the destination stores it
+struct _ScanEntry{A, OP}
+    op::OP
+end
+_ScanEntry{A}(op::OP) where {A, OP} = _ScanEntry{A, OP}(op)
+@inline (e::_ScanEntry{A})(x) where {A} = convert(A, Base.reduce_first(e.op, x))
 
 # The running-value type of a scan of elements of type `T` into an array of element type `D`
 # (`Union{}` for none): `acctype`, else the accumulator type of a reduction from `D` joined with

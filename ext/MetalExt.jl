@@ -15,4 +15,9 @@ AK.scan_tuning(::MetalBackend, ::Type) = AK.ScanTuning(local_mem_bytes=16 * 1024
 
 AK.predicate_tuning(::MetalBackend, ::Type) = AK.PredicateTuning(prefer_concurrent_write=false)
 
+# Reductions in blocks of 64 threads: on an M1, summing a 512×1000 matrix along either dimension
+# takes 15% less time than with 256 threads, as does `findfirst` over 512k elements, while
+# reductions of 16M elements take at most 4% more.
+AK.reduce_tuning(::MetalBackend, ::Type) = AK.ReduceTuning(block_size=64)
+
 end

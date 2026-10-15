@@ -30,14 +30,19 @@ Base.@kwdef struct DecoupledLookback <: ScanAlgorithm
 end
 
 """
-    SliceScan(; block_size=nothing)
+    SliceScan(; block_size=nothing, items_per_thread=nothing)
 
-GPU scan of each slice along `dims`: one thread per slice when there are more slices than
-elements per slice, otherwise one block (`block_size` a power of two up to 1024) per slice.
-The algorithm for scans along `dims`.
+GPU scan of each slice along `dims`, the algorithm for scans along `dims`. Which threads scan a
+slice depends on the layout: one thread per slice for short slices, and where neighbouring
+threads then load neighbouring elements (when the dimensions before `dims` hold several
+elements); otherwise a block per slice, scanning tiles of `block_size * items_per_thread` consecutive
+elements of it (`block_size` a power of two up to 1024, smaller for short slices). When that
+leaves too few threads to fill the device, each slice is split into chunks, which takes two more
+passes: one over the source, to reduce each chunk, and a scan of the chunks' totals.
 """
 Base.@kwdef struct SliceScan <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
 end
 
 
@@ -50,13 +55,28 @@ returned by [`scan_tuning`](@ref).
 - `prefer_lookback`: `Auto` picks `DecoupledLookback` for whole-array scans where the backend
   supports it (`_supports_lookback`), else `ScanPrefixes`.
 - `block_size`: the block size of every scan kernel algorithm.
-- `local_mem_bytes`, `max_items`: the default `items_per_thread` of `ScanPrefixes` and
-  `DecoupledLookback` is the largest that keeps a tile of the element type within
-  `local_mem_bytes`, and at most `max_items`. It is derived from the effective `block_size`, so an
-  explicit `block_size` gets a matching default.
+- `local_mem_bytes`, `max_items`: the default `items_per_thread` of the kernel algorithms is the
+  largest that keeps a tile of the element type within `local_mem_bytes`, and at most
+  `max_items`. It is derived from the effective `block_size`, so an explicit `block_size` gets a
+  matching default.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`; at least 2.
+- `target_blocks`: the blocks a `SliceScan` aims to launch, splitting its slices into chunks when
+  they would take fewer.
+- `slice_serial_len`: `SliceScan` scans slices of at most this many elements with one thread each.
+- `slice_column_inner`: `SliceScan` scans with one thread per slice when the dimensions before
+  `dims` hold at least this many elements, so that neighbouring threads load neighbouring
+  elements. (Contiguous slices short enough for a block's worth to fit `local_mem_bytes` are
+  scanned one per thread from local memory.)
+- `slice_min_chunk`: the fewest elements per thread of a `SliceScan` that splits its slices.
+- `slice_columns_len`: in arrays too small to split, `SliceScan` scans slices of at most this
+  many elements with one thread each (as for `slice_column_inner`), and longer ones a block each.
+- `slice_split_min`: `SliceScan` splits the slices it scans with one thread each only in arrays
+  of at least this many elements.
+- `slice_split_tiles`: `SliceScan` splits slices it scans with a block each when there are too
+  few to fill the device and a block would scan more than this many tiles.
 
-The defaults reproduce AK's historical settings. Internal: the fields may change in any release.
+The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070); the other defaults reproduce
+AK's historical settings. Internal: the fields may change in any release.
 """
 Base.@kwdef struct ScanTuning
     prefer_lookback::Bool = false
@@ -64,6 +84,13 @@ Base.@kwdef struct ScanTuning
     local_mem_bytes::Int = LOCAL_MEMORY_BUDGET
     max_items::Int = 8
     threads_min_elems::Int = 2
+    target_blocks::Int = 256
+    slice_serial_len::Int = 8
+    slice_column_inner::Int = 4
+    slice_min_chunk::Int = 16
+    slice_columns_len::Int = 64
+    slice_split_min::Int = 1 << 16
+    slice_split_tiles::Int = 4
 end
 
 """
@@ -105,7 +132,7 @@ function _checkdomain(a::Union{ScanPrefixes, DecoupledLookback, SliceScan})
     _check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "$(_algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
-    a isa SliceScan || _check_positive(a, :items_per_thread)
+    _check_positive(a, :items_per_thread)
     nothing
 end
 
@@ -117,13 +144,13 @@ function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
           1, max(t.max_items, 1))
 end
 
-function _fill(a::A, t::ScanTuning, ::Type{T}) where {A <: Union{ScanPrefixes, DecoupledLookback}, T}
+function _fill(a::A, t::ScanTuning,
+               ::Type{T}) where {A <: Union{ScanPrefixes, DecoupledLookback, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
     items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
                                                        a.items_per_thread
     return A(block_size, items_per_thread)
 end
-_fill(a::SliceScan, t::ScanTuning, T) = SliceScan(something(a.block_size, t.block_size))
 _fill(a::CPUThreads.Partitioned, t::ScanTuning, T) = _fill_threads(a, t)
 _fill(a::Algorithm, t::ScanTuning, T) =
     throw(ArgumentError("$(_algname(a)) is not a scan algorithm"))
@@ -151,6 +178,8 @@ function _check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
     _check_scan_eltype(a, T)
     dims === nothing && throw(ArgumentError(
         "SliceScan scans along `dims`; scan whole arrays with `ScanPrefixes` or `Auto()`"))
+    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
+        "SliceScan: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
     nothing
 end
 
