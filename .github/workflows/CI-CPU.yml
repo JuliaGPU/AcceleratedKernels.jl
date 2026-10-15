@@ -61,6 +61,9 @@ jobs:
             arch: aarch64
           - os: windows-latest
             arch: aarch64
+          # PoCL, KernelAbstractions' host back-end, isn't built for 32-bit Windows
+          - os: windows-latest
+            arch: x86
         include:
           - { version: nightly, os: ubuntu-latest, arch: x64, env: { JULIA_NUM_THREADS: 2 } }
           - { version: nightly, os: macOS-latest, arch: aarch64, env: { JULIA_NUM_THREADS: 2 } }
