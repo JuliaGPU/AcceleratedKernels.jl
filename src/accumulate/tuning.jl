@@ -144,7 +144,8 @@ function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
           1, max(t.max_items, 1))
 end
 
-function _fill(a::A, t::ScanTuning, ::Type{T}) where {A <: Union{ScanPrefixes, DecoupledLookback, SliceScan}, T}
+function _fill(a::A, t::ScanTuning,
+               ::Type{T}) where {A <: Union{ScanPrefixes, DecoupledLookback, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
     items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
                                                        a.items_per_thread

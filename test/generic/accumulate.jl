@@ -273,6 +273,27 @@ end
 end
 
 
+@testset "accumulate_nd converting elements" begin
+    Random.seed!(0)
+
+    # Elements enter as one-element reductions of the accumulator type as the kernels read
+    # them (`Base.reduce_first`): wider than the source, and narrower than the destination, for
+    # every launch shape
+    for (sz, dims) in (((40, 300), 1), ((40, 5, 30), 2), ((3, 2000), 2), ((2000, 3), 1),
+                       ((64, 3, 500), 2), ((3, 200_000), 2), ((600_000, 1), 1))
+        xh = rand(Int8(-100):Int8(100), sz...)
+        x = array_from_host(xh)
+        @test Array(AK.accumulate(Base.add_sum, x; dims, alg=slice_alg())) ==
+              accumulate(Base.add_sum, xh; dims)
+        bh = rand(Bool, sz...)
+        @test Array(AK.cumsum(array_from_host(bh); dims, alg=slice_alg())) == cumsum(bh; dims)
+        y = array_from_host(zeros(Int32, sz))
+        @test Array(AK.accumulate!(Base.add_sum, y, x; dims, alg=slice_alg())) ==
+              accumulate(Base.add_sum, xh; dims)
+    end
+end
+
+
 @testset "accumulate_nd" begin
     Random.seed!(0)
 

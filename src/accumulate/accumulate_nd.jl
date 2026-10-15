@@ -1,5 +1,7 @@
 function accumulate_nd!(
     op::OP, v::AbstractArray, backend::Backend, alg::Union{SliceScan, CPUThreads.Partitioned};
+    src=v,
+    entry=identity,
     init,
     neutral,
     dims::Int,
@@ -21,13 +23,14 @@ function accumulate_nd!(
 
     seed = _scan_first_seed(v, init, neutral)
     if alg isa CPUThreads.Partitioned
+        @argcheck src === v
         _accumulate_nd_cpu_sections!(op, v; seed, neutral, dims, inclusive,
                                      max_tasks=alg.max_tasks, min_elems=alg.min_elems)
     else
         n_inner, len, n_outer = _slice_extents(vsizes, dims)
         t = scan_tuning(backend, eltype(v))
-        _slice_scan!(op, v, backend, alg, t; seed, neutral, inclusive, n_inner, len, n_outer,
-                     totals)
+        _slice_scan!(op, v, backend, alg, t; src, entry, seed, neutral, inclusive, n_inner, len,
+                     n_outer, totals)
     end
 
     return v
@@ -106,13 +109,14 @@ end
 #
 # When that leaves too few threads or blocks to fill the device, each slice of a large enough
 # array is split into chunks that are scanned independently, in three passes: each chunk is
-# reduced to its total, the totals
-# of each slice are scanned (exclusively, from the scan's seed) into the carry of each chunk, and
-# each chunk is scanned again from its carry. The totals form an `(n_inner, nchunks, n_outer)`
-# array, scanned along its second dimension by the same means. Reducing first, rather than
-# scanning each chunk and adding the carries afterwards, reads the source twice but writes it
-# once, and leaves the source intact until the last pass, so a scan in place needs no other
-# scratch. Chunks and carries keep the elements' order, so `op` need not be commutative.
+# reduced to its total, the totals of each slice are scanned (exclusively, from the scan's seed)
+# into the carry of each chunk, and each chunk is scanned again from its carry. The totals form
+# an `(n_inner, nchunks, n_outer)` array, scanned along its second dimension by the same means.
+# Reducing first, rather than scanning each chunk and adding the carries afterwards, reads the
+# source twice but writes it once, and leaves the source intact until the last pass, so a scan
+# in place needs no other scratch. Every pass reads the elements as `entry(src[i])`, so a scan
+# out of place needs no copy either. Chunks and carries keep the elements' order, so `op` need
+# not be commutative.
 
 # The extents `(n_inner, len, n_outer)` of an array of size `sz` scanned along `dims`
 _slice_extents(sz::Dims{N}, dims::Int) where {N} =
@@ -174,20 +178,21 @@ _slice_scratch(sz::Dims, dims::Int, a::SliceScan, t::ScanTuning, ::Type{S}) wher
     dims > length(sz) || Base.prod(sz; init=1) == 0 ? 0 :
     _slice_scratch(_slice_extents(sz, dims)..., a, t, S)
 
-# Scan the slices of `v` in place, as an `(n_inner, len, n_outer)` array scanned along its second
-# dimension; `totals` holds at least `_slice_scratch` chunk totals after `offset`. (The levels of
-# totals are views of `totals` itself, not of each other, so that every level has the same types.)
+# Scan the slices of the elements `entry(src[i])` into `v` (`src` may be `v`), as an
+# `(n_inner, len, n_outer)` array scanned along its second dimension; `totals` holds at least
+# `_slice_scratch` chunk totals after `offset`. (The levels of totals are views of `totals`
+# itself, not of each other, so that every level has the same types.)
 function _slice_scan!(op::OP, v, backend, a::SliceScan, t::ScanTuning;
-                      seed, neutral, inclusive, n_inner, len, n_outer, totals,
-                      offset=0) where {OP}
+                      src=v, entry=identity, seed, neutral, inclusive, n_inner, len, n_outer,
+                      totals, offset=0) where {OP}
     kind, block_size, nchunks, per_chunk =
         _slice_shape(n_inner, len, n_outer, a, t, typeof(neutral))
     items = a.items_per_thread
     nslices = n_inner * n_outer
 
     if nchunks == 1
-        _slice_pass!(kind, backend, block_size, nslices, v, op, seed, neutral, nothing, nothing,
-                     inclusive, n_inner, len, 1, per_chunk, items)
+        _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, seed, neutral,
+                     nothing, nothing, inclusive, n_inner, len, 1, per_chunk, items)
         return v
     end
 
@@ -195,35 +200,36 @@ function _slice_scan!(op::OP, v, backend, a::SliceScan, t::ScanTuning;
     @argcheck length(totals) >= offset + n
     chunk_totals = @view totals[offset + 1:offset + n]
     # Each chunk's total, without the seed
-    _slice_pass!(kind, backend, block_size, nslices, v, op, neutral, neutral, nothing,
+    _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, neutral, neutral, nothing,
                  chunk_totals, inclusive, n_inner, len, nchunks, per_chunk, items)
     # Each chunk's carry: the seed, then the totals of the chunks before it
     _slice_scan!(op, chunk_totals, backend, a, t; seed, neutral, inclusive=false, n_inner,
                  len=nchunks, n_outer, totals, offset=offset + n)
     # Each chunk, from its carry
-    _slice_pass!(kind, backend, block_size, nslices, v, op, seed, neutral, chunk_totals, nothing,
-                 inclusive, n_inner, len, nchunks, per_chunk, items)
+    _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, seed, neutral,
+                 chunk_totals, nothing, inclusive, n_inner, len, nchunks, per_chunk, items)
     return v
 end
 
 # One pass over all chunks: scan each chunk of `v` from `seed`, or from its carry in `carries`, or
 # when `totals` is given store each chunk's total instead. (The compile-time sizes become `Val`s
 # only at their launch, which takes a runtime dispatch, so that the rest of the scan infers.)
-function _slice_pass!(kind, backend, block_size, nslices, v, op::OP, seed, neutral, carries,
-                      totals, inclusive, n_inner, len, nchunks, per_chunk, items) where {OP}
+function _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op::OP, seed, neutral,
+                      carries, totals, inclusive, n_inner, len, nchunks, per_chunk,
+                      items) where {OP}
     if kind === :rows
         kernel! = _slice_scan_rows!(backend, block_size)
-        kernel!(v, op, seed, neutral, inclusive, len, nslices, Val(per_chunk);
+        kernel!(v, src, entry, op, seed, neutral, inclusive, len, nslices, Val(per_chunk);
                 ndrange=(block_size * cld(nslices, block_size),))
     elseif kind === :columns
         nthreads = nslices * nchunks
         kernel! = _slice_scan_columns!(backend, block_size)
-        kernel!(v, op, seed, neutral, carries, totals, inclusive, n_inner, len, nchunks,
-                per_chunk, nthreads; ndrange=(block_size * cld(nthreads, block_size),))
+        kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
+                nchunks, per_chunk, nthreads; ndrange=(block_size * cld(nthreads, block_size),))
     else
         kernel! = _slice_scan_tiles!(backend, block_size)
-        kernel!(v, op, seed, neutral, carries, totals, inclusive, n_inner, len, nchunks,
-                per_chunk, Val(items); ndrange=(block_size * nslices * nchunks,))
+        kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
+                nchunks, per_chunk, Val(items); ndrange=(block_size * nslices * nchunks,))
     end
     return nothing
 end
@@ -232,7 +238,7 @@ end
 # `block_size * len` consecutive elements from `b * block_size * len`, in local memory of `MAX`
 # elements (`_slice_rows_max`, the same for every `len`)
 @kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_rows!(
-    v, op, seed, neutral, inclusive, len, nslices, ::Val{MAX},
+    v, src, entry, op, seed, neutral, inclusive, len, nslices, ::Val{MAX},
 ) where {MAX}
     @uniform block_size = @groupsize()[1]
     rows = @localmem typeof(neutral) (MAX,)
@@ -245,7 +251,7 @@ end
 
     p = ithread
     while p < n
-        rows[p + 1] = _lift(neutral, v[offset + p + 1])
+        rows[p + 1] = _lift(neutral, entry(src[offset + p + 1]))
         p += block_size
     end
     @synchronize()
@@ -275,7 +281,7 @@ end
 # One thread per chunk of a slice; thread `t` takes chunk `c` of slice `(i, o)` with
 # `t = i + n_inner * (c + nchunks * o)`, the chunk's position in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_columns!(
-    v, op, seed, neutral, carries, totals, inclusive,
+    v, src, entry, op, seed, neutral, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
 )
     _, op = _lanefuncs(_Partials(), op, neutral)
@@ -294,7 +300,7 @@ end
         if isnothing(totals)
             for k in k0:k1 - 1
                 idx = base + k * n_inner + 1
-                x = _lift(neutral, v[idx])
+                x = _lift(neutral, entry(src[idx]))
                 if inclusive
                     running = op(running, x)
                     _store!(v, idx, running)
@@ -305,7 +311,7 @@ end
             end
         else
             for k in k0:k1 - 1
-                running = op(running, _lift(neutral, v[base + k * n_inner + 1]))
+                running = op(running, _lift(neutral, entry(src[base + k * n_inner + 1])))
             end
             totals[tid + 1] = running
         end
@@ -316,7 +322,7 @@ end
 # takes chunk `c` of slice `(i, o)` with `b = c + nchunks * (i + n_inner * o)`, and the chunk's
 # total or carry is at `i + n_inner * (c + nchunks * o)` in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_tiles!(
-    v, op, seed, neutral, carries, totals, inclusive,
+    v, src, entry, op, seed, neutral, carries, totals, inclusive,
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS},
 ) where {ITEMS}
     @uniform block_size = @groupsize()[1]
@@ -342,7 +348,8 @@ end
         while j < ITEMS
             p = j * block_size + ithread
             k = k_tile + p
-            tile[p + 1] = k < k_end ? _lift(neutral, v[base + k * n_inner + 1]) : neutral
+            tile[p + 1] = k < k_end ? _lift(neutral, entry(src[base + k * n_inner + 1])) :
+                                      neutral
             j += 1
         end
         @synchronize()

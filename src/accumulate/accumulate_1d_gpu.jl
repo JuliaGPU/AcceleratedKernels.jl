@@ -52,10 +52,11 @@ function _decoupled_fence end
 end
 
 
-# Register-raking block scan with striped loads and stores. `neutral` seeds partial results (an
-# empty `_Lane` when `op` has no known neutral element), and `seed` is the first block's.
+# Register-raking block scan with striped loads and stores, of the elements `entry(src[i])` into
+# `v` (`src` may be `v`). `neutral` seeds partial results (an empty `_Lane` when `op` has no known
+# neutral element), and `seed` is the first block's.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
-    op, v, seed, neutral,
+    op, v, src, entry, seed, neutral,
     inclusive,
     flags, prefixes,
     ::Val{ITEMS},
@@ -77,7 +78,7 @@ end
     while j < ITEMS
         p = j * block_size + ithread
         gi = block_offset + p
-        tile[p + 0x1] = gi < len ? _lift(neutral, v[gi + 0x1]) : neutral
+        tile[p + 0x1] = gi < len ? _lift(neutral, entry(src[gi + 0x1])) : neutral
         j += 1
     end
     @synchronize()
@@ -283,6 +284,8 @@ _scan_first_seed(v, ::_NoInit, neutral) = neutral
 # DecoupledLookback algorithm
 function accumulate_1d_gpu!(
     op, v::AbstractArray, backend::Backend, alg::DecoupledLookback;
+    src=v,
+    entry=identity,
     init,
     neutral,
     inclusive::Bool,
@@ -305,7 +308,7 @@ function accumulate_1d_gpu!(
     block_inclusive = inclusive || shift_to_exclusive
 
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, seed, neutral, block_inclusive, flags, prefixes, items,
+    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, items,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
@@ -328,6 +331,8 @@ end
 # ScanPrefixes algorithm
 function accumulate_1d_gpu!(
     op, v::AbstractArray, backend, alg::ScanPrefixes;
+    src=v,
+    entry=identity,
     init,
     neutral,
     inclusive::Bool,
@@ -347,15 +352,15 @@ function accumulate_1d_gpu!(
     seed = _scan_first_seed(v, init, neutral)
 
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, seed, neutral, inclusive, nothing, prefixes, items,
+    kernel1!(op, v, src, entry, seed, neutral, inclusive, nothing, prefixes, items,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
 
         # Accumulate prefixes of all blocks; seed with neutral here to not reinclude init
         num_blocks_prefixes = (length(prefixes) + elems_per_block - 1) ÷ elems_per_block
-        kernel1!(op, prefixes, neutral, neutral, true, nothing, nothing, items,
-                 ndrange=num_blocks_prefixes * block_size)
+        kernel1!(op, prefixes, prefixes, identity, neutral, neutral, true, nothing, nothing,
+                 items, ndrange=num_blocks_prefixes * block_size)
 
         # Prefixes are pre-accumulated (completely accumulated if num_blocks_prefixes == 1, or
         # partially, which we will account for in the coupled lookback)
