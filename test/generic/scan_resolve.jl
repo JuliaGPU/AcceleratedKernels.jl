@@ -33,7 +33,7 @@ end
     @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
     @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
     @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
-    @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256)
+    @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
 
     # DecoupledLookback only where the tuning prefers it and the backend supports it
     with_scan_tuning(; prefer_lookback=true) do
@@ -44,7 +44,7 @@ end
     end
     with_scan_tuning(; prefer_lookback=true, lookback=true) do
         @test resolve_scan(AK.Auto()) === AK.DecoupledLookback(256, 8)
-        @test resolve_scan(AK.Auto(); dims=1) === AK.SliceScan(256)
+        @test resolve_scan(AK.Auto(); dims=1) === AK.SliceScan(256, 8)
     end
 
     # On the host backend: the threaded algorithm, filled
@@ -63,7 +63,7 @@ end
         @test resolve_scan(AK.ScanPrefixes(block_size=1024)) === AK.ScanPrefixes(1024, 7)
         @test resolve_scan(AK.ScanPrefixes(block_size=1024, items_per_thread=12)) ===
               AK.ScanPrefixes(1024, 12)
-        @test resolve_scan(AK.SliceScan(); dims=1) === AK.SliceScan(128)
+        @test resolve_scan(AK.SliceScan(); dims=1) === AK.SliceScan(128, 16)
     end
     with_scan_tuning(; local_mem_bytes=1024) do
         @test resolve_scan(AK.ScanPrefixes(block_size=64)) === AK.ScanPrefixes(64, 3)
@@ -76,7 +76,7 @@ end
     # Domains of explicit fields
     for bad in (AK.ScanPrefixes(block_size=0), AK.ScanPrefixes(block_size=96),
                 AK.ScanPrefixes(block_size=2048), AK.ScanPrefixes(items_per_thread=0),
-                AK.SliceScan(block_size=3))
+                AK.SliceScan(block_size=3), AK.SliceScan(items_per_thread=0))
         @test_throws ArgumentError resolve_scan(bad; dims=bad isa AK.SliceScan ? 1 : nothing)
     end
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(block_size=1024, items_per_thread=1 << 22))

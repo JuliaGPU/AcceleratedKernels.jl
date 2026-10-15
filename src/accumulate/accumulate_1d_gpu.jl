@@ -1,13 +1,6 @@
-const ACC_LOG_NUM_BANKS::UInt8 = 5
 
 const ACC_FLAG_A::UInt8 = 0             # Aggregate of all previous prefixes finished
 const ACC_FLAG_P::UInt8 = 1             # Only current block's prefix available
-
-
-# Bank-conflict-avoiding padding, used by the multi-dimensional scan (accumulate_nd.jl)
-@inline function conflict_free_offset(n)
-    n >> ACC_LOG_NUM_BANKS
-end
 
 
 # Device-scope memory fence for the DecoupledLookback scan. Each GPU backend overrides it with a

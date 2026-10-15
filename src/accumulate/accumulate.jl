@@ -157,6 +157,10 @@ function _accumulate_setup(
         p = _buffer(typeof(seed), num_blocks)
         a isa DecoupledLookback ? (; prefixes=p, flags=_buffer(UInt8, num_blocks)) :
                                   (; prefixes=p)
+    elseif a isa SliceScan
+        # The chunk totals of slices split into chunks
+        m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
+        m == 0 ? (;) : (; totals=_buffer(typeof(seed), m))
     else
         (;)
     end
@@ -203,7 +207,8 @@ function _accumulate_run!(op, v, src, s, bufs)
         # over
         inclusive || fill!(w, _unlane(_scan_first_seed(w, init, neutral)))
     else
-        accumulate_nd!(op, w, backend, a; init, neutral, dims=Int(dims), inclusive)
+        accumulate_nd!(op, w, backend, a; init, neutral, dims=Int(dims), inclusive,
+                       totals=get(bufs, :totals, nothing))
     end
     w === v || copyto!(v, w)
     return v

@@ -233,20 +233,41 @@ end
 @testset "accumulate_nd non-commutative" begin
     Random.seed!(0)
 
-    # Both GPU strategies: one thread per slice when there are more slices than elements per
-    # slice, else one block per slice, processing the slice in several chunks of 2 * block_size
+    # Every GPU launch shape: a thread per slice (short contiguous slices staged in local memory,
+    # short slices, or many neighbouring ones) and a block per slice scanning tiles of it, each
+    # with the slices whole or (for the largest arrays) split into chunks whose totals are scanned
+    # in turn. Tiles of exactly one and two blocks' worth, and one element more, for both block
+    # sizes.
     for neutral in (SCAN_I2, nothing), inclusive in (true, false), block_size in (64, 256)
-        # Slices of exactly one and two chunks, and one element more, for both block sizes
-        chunk = 2 * block_size
+        S = neutral === nothing ? AK._Lane{ScanMat2} : ScanMat2
+        tile = !TEST_KERNELS ? 2 * block_size :
+               block_size * AK._resolve_scan(AK.SliceScan(; block_size), BACKEND, ScanMat2, 1,
+                                             S).items_per_thread
         for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
                            ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3),
-                           ((3, chunk), 2), ((3, chunk + 1), 2), ((3, 2chunk), 2), ((2chunk + 1, 3), 1))
+                           ((3, tile), 2), ((3, tile + 1), 2), ((3, 2tile), 2), ((2tile + 1, 3), 1),
+                           ((32, 20_000), 2), ((64, 3, 500), 2), ((9, 4, 3000), 3), ((3, 70_000), 2),
+                           ((8, 6), 2), ((1, 5000, 2), 2), ((3, 200_000), 2), ((600_000, 1), 1),
+                           ((40, 300), 1))
             xh = [scan_randmat() for _ in CartesianIndices(sz)]
             init = scan_randmat()
             y = array_from_host(xh)
             AK.accumulate!(scan_matmul, y; init, neutral, inclusive, dims,
                            alg=slice_alg(; max_tasks=4, block_size))
             @test Array(y) == scan_reference(xh, dims; init, inclusive)
+        end
+    end
+end
+
+
+@testset "accumulate_nd degenerate settings" begin
+    # Tiles of a single element: splitting a slice still shortens it
+    if TEST_KERNELS
+        for dims in 1:2
+            xh = rand(Int32(1):Int32(9), 16, 16)
+            y = AK.accumulate!(+, array_from_host(xh); dims,
+                               alg=AK.SliceScan(block_size=1, items_per_thread=1))
+            @test Array(y) == accumulate(+, xh; dims)
         end
     end
 end
@@ -327,7 +348,9 @@ end
             init = rand(-1000:1000)
             s = AK.accumulate(+, v; init=Float32(init), dims, alg=slice_alg())
             sh = Array(s)
-            @test all(sh .≈ accumulate(+, vh; init=Float32(init), dims))
+            # (as a whole: where a running sum from a negative `init` passes zero, elements
+            # summed in another order differ in their leading digits)
+            @test sh ≈ accumulate(+, vh; init=Float32(init), dims)
         end
     end
 
