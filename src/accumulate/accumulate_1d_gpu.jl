@@ -101,11 +101,13 @@ end
 
 # Register-raking block scan with striped loads and stores, of the elements `entry(src[i])` into
 # `v` (`src` may be `v`). `neutral` seeds partial results (an empty `_Lane` when `op` has no known
-# neutral element), and `seed` is the first block's.
+# neutral element), and `seed` is the first block's. With `block_seeds`, the inclusive scan of
+# the blocks' totals, block `b` is seeded with `block_seeds[b]`, the reduction of the blocks
+# before it; else with `neutral`, to receive its carry from another kernel.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
     op, v, src, entry, seed, neutral,
     inclusive,
-    flags, prefixes,
+    flags, prefixes, block_seeds,
     ::Val{ITEMS}, subgroups::Val,
 ) where ITEMS
     # `block_size` is a power of two.
@@ -141,9 +143,8 @@ end
     end
     thread_totals[ithread + 0x1] = acc
 
-    # Scan the per-thread totals. Later blocks receive their carry from the
-    # second kernel.
-    block_seed = iblock == 0x0 ? seed : neutral
+    # Scan the per-thread totals, from the block's seed
+    block_seed = iblock == 0x0 ? seed : isnothing(block_seeds) ? neutral : block_seeds[iblock]
     thread_prefix, block_total = block_exclusive_scan!(
         @context, op, thread_totals, block_seed, block_size, ithread, subgroups,
     )
@@ -182,6 +183,41 @@ end
     end
 end
 
+
+# The total of each tile of `block_size * ITEMS` elements `entry(src[i])` into `totals`, the
+# first tile's from `seed`. Each thread reduces a run of consecutive elements, in order, and the
+# block then combines the runs; no tile is staged in local memory, as nothing is stored.
+@kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_tile_totals!(
+    op, totals, src, entry, seed, neutral, ::Val{ITEMS}, subgroups::Val,
+) where ITEMS
+    @uniform block_size = @groupsize()[1]
+    thread_totals = @localmem typeof(neutral) (block_size,)
+    _, op = _lanefuncs(_Partials(), op, neutral)
+
+    len = length(src)
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+    run = iblock * block_size * ITEMS + ithread * ITEMS
+
+    acc = neutral
+    k = 0
+    while k < ITEMS
+        gi = run + k
+        if gi < len
+            acc = op(acc, _lift(neutral, entry(src[gi + 0x1])))
+        end
+        k += 1
+    end
+    thread_totals[ithread + 0x1] = acc
+
+    _, block_total = block_exclusive_scan!(
+        @context, op, thread_totals, iblock == 0x0 ? seed : neutral, block_size, ithread,
+        subgroups,
+    )
+    if ithread == 0x0
+        totals[iblock + 0x1] = block_total
+    end
+end
 
 # Add each block's running prefix, stopping at a completed predecessor.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous!(
@@ -238,9 +274,10 @@ end
 end
 
 
-# Add pre-scanned block prefixes to each tile.
-@kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous_coupled_preblocks!(
-    op, v, prefixes, neutral, inclusive, ::Val{ITEMS},
+# Add to each tile after the first the reduction of the tiles before it, from the inclusive scan
+# of the tiles' totals.
+@kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_add_prefixes!(
+    op, v, totals, neutral, inclusive, ::Val{ITEMS},
 ) where ITEMS
     _, op = _lanefuncs(_Partials(), op, neutral)
     len = length(v)
@@ -249,36 +286,23 @@ end
     iblock = @index(Group, Linear)
     ithread = @index(Local, Linear) - 0x1
     block_offset = iblock * block_size * ITEMS
-
-    running_prefix = prefixes[iblock]
-
-    # If there were more than `block_size*ITEMS` prefixes, each chunk was scanned
-    # internally but not across chunks; fold the earlier chunks' totals in here, in order.
-    num_preblocks = (iblock - 0x1) ÷ (block_size * ITEMS)
-    if num_preblocks > 0x0
-        carry = prefixes[block_size * ITEMS]
-        for i in 0x2:num_preblocks
-            carry = op(carry, prefixes[i * block_size * ITEMS])
-        end
-        running_prefix = op(carry, running_prefix)
-    end
+    prefix = totals[iblock]
 
     # An exclusive tile starts with its seed, `neutral`, which may be an empty lane that cannot
-    # be stored: its first element is the running prefix itself
+    # be stored: its first element is the prefix itself
     j = 0
     while j < ITEMS
         gi = block_offset + j * block_size + ithread
         if gi < len
             v[gi + 0x1] = if !inclusive && gi == block_offset
-                _lower(eltype(v), running_prefix)
+                _lower(eltype(v), prefix)
             else
-                _lower(eltype(v), op(running_prefix, _lift(neutral, v[gi + 0x1])))
+                _lower(eltype(v), op(prefix, _lift(neutral, v[gi + 0x1])))
             end
         end
         j += 1
     end
 end
-
 
 # Save the value preceding each tile before shifting the array in place.
 @kernel cpu=false inbounds=true function exclusive_prefixes_kernel!(
@@ -356,8 +380,8 @@ function accumulate_1d_gpu!(
 
     subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, items, subgroups,
-             ndrange=num_blocks * block_size)
+    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, nothing, items,
+             subgroups, ndrange=num_blocks * block_size)
 
     if num_blocks > 1
         kernel2! = _accumulate_previous!(backend, block_size)
@@ -375,6 +399,19 @@ function accumulate_1d_gpu!(
     return v
 end
 
+
+# The length of the scratch of `ScanPrefixes` for `n` elements: the totals of the tiles, of the
+# tiles of those totals, and so on until a single tile.
+function _scan_prefixes_length(n, alg::ScanPrefixes)
+    elems_per_block = alg.block_size * alg.items_per_thread
+    len = 0
+    num_blocks = cld(n, elems_per_block)
+    while num_blocks > 1
+        len += num_blocks
+        num_blocks = cld(num_blocks, elems_per_block)
+    end
+    return len
+end
 
 # ScanPrefixes algorithm
 function accumulate_1d_gpu!(
@@ -400,23 +437,35 @@ function accumulate_1d_gpu!(
     seed = _scan_first_seed(v, init, neutral)
 
     subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
-    kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, src, entry, seed, neutral, inclusive, nothing, prefixes, items, subgroups,
-             ndrange=num_blocks * block_size)
-
-    if num_blocks > 1
-
-        # Accumulate prefixes of all blocks; seed with neutral here to not reinclude init
-        num_blocks_prefixes = (length(prefixes) + elems_per_block - 1) ÷ elems_per_block
-        kernel1!(op, prefixes, prefixes, identity, neutral, neutral, true, nothing, nothing,
-                 items, subgroups, ndrange=num_blocks_prefixes * block_size)
-
-        # Prefixes are pre-accumulated (completely accumulated if num_blocks_prefixes == 1, or
-        # partially, which we will account for in the coupled lookback)
-        kernel2! = _accumulate_previous_coupled_preblocks!(backend, block_size)
-        kernel2!(op, v, prefixes, neutral, inclusive, items,
-                 ndrange=(num_blocks - 1) * block_size)
+    kernel! = _accumulate_block!(backend, block_size)
+    if num_blocks == 1
+        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, nothing, items,
+                subgroups, ndrange=block_size)
+        return v
     end
 
+    # The tiles' totals are scanned the same way, with the rest of `prefixes` for the totals'
+    # totals (from `neutral`, as the first total includes `seed`)
+    totals = view(prefixes, 1:num_blocks)
+    scan_totals!() =
+        accumulate_1d_gpu!(op, totals, backend, alg; init=_NoInit(), neutral, inclusive=true,
+                           prefixes=view(prefixes, num_blocks+1:length(prefixes)), flags=nothing)
+    if scan_tuning(backend, eltype(v)).reduce_then_scan
+        # Reduce the tiles, then scan them from their prefix: this reads the source twice and
+        # writes the result once
+        _accumulate_tile_totals!(backend, block_size)(op, totals, src, entry, seed, neutral,
+                                                      items, subgroups,
+                                                      ndrange=num_blocks * block_size)
+        scan_totals!()
+        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, totals, items,
+                subgroups, ndrange=num_blocks * block_size)
+    else
+        # Scan the tiles, then add their prefix: this reads and writes the result twice
+        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, totals, nothing, items,
+                subgroups, ndrange=num_blocks * block_size)
+        scan_totals!()
+        _accumulate_add_prefixes!(backend, block_size)(op, v, totals, neutral, inclusive, items,
+                                                       ndrange=(num_blocks - 1) * block_size)
+    end
     return v
 end

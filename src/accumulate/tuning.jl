@@ -4,10 +4,12 @@
 """
     ScanPrefixes(; block_size=nothing, items_per_thread=nothing)
 
-GPU scan of a whole array: each block scans a tile of `block_size * items_per_thread` elements
-(`block_size` a power of two up to 1024), then the tiles' totals are scanned and added to later
-tiles. No block waits for another, so it runs on every backend. The default `items_per_thread` is
-at most 8, fewer for wide element types, to keep the tile in local memory.
+GPU scan of a whole array in tiles of `block_size * items_per_thread` elements (`block_size` a
+power of two up to 1024): the blocks reduce their tile, the tiles' totals are scanned the same
+way, and each block then scans its tile from the total of the tiles before it (or, depending on
+the device, the blocks scan their tile, and then add the total of the tiles before it). No block
+waits for another, so it runs on every backend. The default `items_per_thread` is at most 8, fewer for wide
+element types, to keep the tile in local memory.
 """
 Base.@kwdef struct ScanPrefixes <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -74,6 +76,10 @@ returned by [`scan_tuning`](@ref).
   of at least this many elements.
 - `slice_split_tiles`: `SliceScan` splits slices it scans with a block each when there are too
   few to fill the device and a block would scan more than this many tiles.
+- `reduce_then_scan`: whether `ScanPrefixes` reduces the tiles and then scans them from their
+  prefix, which reads the source twice and writes the result once; or scans the tiles and then
+  adds their prefix, which reads and writes the result twice. GPUs are faster with the former,
+  CPUs, whose caches hold the result, with the latter.
 - `subgroups`: whether the kernel algorithms scan the values of a block with sub-group
   operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
   memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
@@ -94,6 +100,7 @@ Base.@kwdef struct ScanTuning
     slice_columns_len::Int = 64
     slice_split_min::Int = 1 << 16
     slice_split_tiles::Int = 4
+    reduce_then_scan::Bool = true
     subgroups::Bool = true
 end
 
@@ -106,7 +113,7 @@ conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
 # (kernels on the host backend run on the CPU)
-scan_tuning(::HostBackend, ::Type) = ScanTuning(subgroups=false)
+scan_tuning(::HostBackend, ::Type) = ScanTuning(reduce_then_scan=false, subgroups=false)
 
 
 """
@@ -175,6 +182,9 @@ function _check_scan(a::Union{ScanPrefixes, DecoupledLookback}, backend, ::Type{
     # Keep the kernels' index arithmetic far from overflow
     widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
         "$(_algname(a)): `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+    # ScanPrefixes scans its tiles' totals in tiles too, which a tile of one element never shrinks
+    a isa ScanPrefixes && a.block_size * a.items_per_thread < 2 && throw(ArgumentError(
+        "ScanPrefixes: `block_size * items_per_thread` must be at least 2"))
     nothing
 end
 

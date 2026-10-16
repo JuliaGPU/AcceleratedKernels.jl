@@ -152,11 +152,11 @@ function _accumulate_setup(
     end
     # A destination of another element type scans in a scratch array of the accumulator type
     work = D === A ? (;) : (; work=_buffer(A, sz))
-    prefixes = if a isa Union{ScanPrefixes, DecoupledLookback}
+    prefixes = if a isa ScanPrefixes
+        (; prefixes=_buffer(typeof(seed), _scan_prefixes_length(n, a)))
+    elseif a isa DecoupledLookback
         num_blocks = cld(n, a.block_size * a.items_per_thread)
-        p = _buffer(typeof(seed), num_blocks)
-        a isa DecoupledLookback ? (; prefixes=p, flags=_buffer(UInt8, num_blocks)) :
-                                  (; prefixes=p)
+        (; prefixes=_buffer(typeof(seed), num_blocks), flags=_buffer(UInt8, num_blocks))
     elseif a isa SliceScan
         # The chunk totals of slices split into chunks
         m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
