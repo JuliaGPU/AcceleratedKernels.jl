@@ -8,8 +8,55 @@ const ACC_FLAG_P::UInt8 = 1             # Only current block's prefix available
 function _decoupled_fence end
 
 
-# Exclusive scan of one value per thread in local memory. All threads in the block must call it.
-# Operands are combined in element order (earlier on the left), so `op` need not be commutative.
+# The sub-group width of the scans of values of type `T` in blocks of `block_size` threads on
+# `backend`, as a `Val` for the kernels: the backend's, where the tuning asks for sub-groups and
+# they are consecutive threads (from KernelAbstractions 0.10), shuffle `T`, and fit a block
+# between one and as many times as their width (the sub-group totals are scanned by a
+# sub-group); else 0, to scan in local memory.
+@static if isdefined(KernelAbstractions, :KernelInterface)
+    function _scan_subgroups(backend, ::Type{T}, block_size) where {T}
+        scan_tuning(backend, T).subgroups || return Val(0)
+        KI.supports_linear_subgroups(backend) && KI.supports_shuffle(backend, T) || return Val(0)
+        W = KI.sub_group_size(backend)
+        return ispow2(W) && W <= block_size <= W * W ? Val(W) : Val(0)
+    end
+else
+    _scan_subgroups(backend, T, block_size) = Val(0)
+end
+
+
+# Exclusive scan of one value per thread, `totals[ithread + 1]`, seeded with `seed`: returns the
+# thread's prefix and the block's total. All threads in the block must call it. Operands are
+# combined in element order (earlier on the left), so `op` need not be commutative. With a
+# sub-group width `W` (see `_scan_subgroups`), it scans with sub-group operations, else in local
+# memory. It overwrites `totals`.
+@inline block_exclusive_scan!(@context, op, totals, seed, block_size, ithread, ::Val{0}) =
+    block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
+
+@inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread,
+                                       ::Val{W}) where {W}
+    # scan each sub-group's values, then the sub-groups' totals, in one sub-group
+    x = totals[ithread + 0x1]
+    lane = ithread % W
+    sg = ithread ÷ W
+    nsg = block_size ÷ W
+    incl = KI.sub_group_scan(op, x)
+    @synchronize()
+    if lane == W - 1
+        totals[sg + 0x1] = incl
+    end
+    @synchronize()
+    # (lanes beyond the sub-groups only affect results that are not used)
+    t = lane < nsg ? totals[lane + 0x1] : seed
+    sg_excl = KI.sub_group_exclusive_scan(op, t, seed)
+    sg_prefix = KI.shfl(sg_excl, sg + 0x1)
+    block_total = KI.shfl(op(sg_excl, t), nsg)
+    prev = KI.shfl_up(incl, 1)
+    @synchronize()
+    return (lane == 0 ? sg_prefix : op(sg_prefix, prev)), block_total
+end
+
+# The scan in local memory
 @inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
     # Up-sweep. Use index-sized counters for block sizes of 256 or more.
     offset = one(ithread)
@@ -59,7 +106,7 @@ end
     op, v, src, entry, seed, neutral,
     inclusive,
     flags, prefixes,
-    ::Val{ITEMS},
+    ::Val{ITEMS}, subgroups::Val,
 ) where ITEMS
     # `block_size` is a power of two.
     @uniform block_size = @groupsize()[1]
@@ -98,7 +145,7 @@ end
     # second kernel.
     block_seed = iblock == 0x0 ? seed : neutral
     thread_prefix, block_total = block_exclusive_scan!(
-        @context, op, thread_totals, block_seed, block_size, ithread,
+        @context, op, thread_totals, block_seed, block_size, ithread, subgroups,
     )
 
     # DecoupledLookback keeps later blocks inclusive until the carry pass.
@@ -307,8 +354,9 @@ function accumulate_1d_gpu!(
     shift_to_exclusive = !inclusive && num_blocks > 1
     block_inclusive = inclusive || shift_to_exclusive
 
+    subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, items,
+    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, items, subgroups,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
@@ -351,8 +399,9 @@ function accumulate_1d_gpu!(
     items = Val(items_per_thread)
     seed = _scan_first_seed(v, init, neutral)
 
+    subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
     kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, src, entry, seed, neutral, inclusive, nothing, prefixes, items,
+    kernel1!(op, v, src, entry, seed, neutral, inclusive, nothing, prefixes, items, subgroups,
              ndrange=num_blocks * block_size)
 
     if num_blocks > 1
@@ -360,7 +409,7 @@ function accumulate_1d_gpu!(
         # Accumulate prefixes of all blocks; seed with neutral here to not reinclude init
         num_blocks_prefixes = (length(prefixes) + elems_per_block - 1) ÷ elems_per_block
         kernel1!(op, prefixes, prefixes, identity, neutral, neutral, true, nothing, nothing,
-                 items, ndrange=num_blocks_prefixes * block_size)
+                 items, subgroups, ndrange=num_blocks_prefixes * block_size)
 
         # Prefixes are pre-accumulated (completely accumulated if num_blocks_prefixes == 1, or
         # partially, which we will account for in the coupled lookback)

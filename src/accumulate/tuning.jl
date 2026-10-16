@@ -74,6 +74,9 @@ returned by [`scan_tuning`](@ref).
   of at least this many elements.
 - `slice_split_tiles`: `SliceScan` splits slices it scans with a block each when there are too
   few to fill the device and a block would scan more than this many tiles.
+- `subgroups`: whether the kernel algorithms scan the values of a block with sub-group
+  operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
+  memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
 
 The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070); the other defaults reproduce
 AK's historical settings. Internal: the fields may change in any release.
@@ -91,6 +94,7 @@ Base.@kwdef struct ScanTuning
     slice_columns_len::Int = 64
     slice_split_min::Int = 1 << 16
     slice_split_tiles::Int = 4
+    subgroups::Bool = true
 end
 
 """
@@ -101,6 +105,8 @@ The scan tuning for element type `T` (the running-value type the scan computes i
 conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
+# (kernels on the host backend run on the CPU)
+scan_tuning(::HostBackend, ::Type) = ScanTuning(subgroups=false)
 
 
 """

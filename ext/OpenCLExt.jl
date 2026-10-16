@@ -17,4 +17,7 @@ function AK.reduce_tuning(::OpenCLBackend, ::Type)
     return AK.ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
 end
 
+# CPU devices (e.g. PoCL) implement sub-group operations with barriers of the whole block
+AK.scan_tuning(::OpenCLBackend, ::Type) = AK.ScanTuning(subgroups=cl.device().device_type !== :cpu)
+
 end

@@ -229,7 +229,8 @@ function _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op::OP,
     else
         kernel! = _slice_scan_tiles!(backend, block_size)
         kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
-                nchunks, per_chunk, Val(items); ndrange=(block_size * nslices * nchunks,))
+                nchunks, per_chunk, Val(items), _scan_subgroups(backend, typeof(neutral), block_size);
+                ndrange=(block_size * nslices * nchunks,))
     end
     return nothing
 end
@@ -323,7 +324,7 @@ end
 # total or carry is at `i + n_inner * (c + nchunks * o)` in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_tiles!(
     v, src, entry, op, seed, neutral, carries, totals, inclusive,
-    n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS},
+    n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
 ) where {ITEMS}
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(neutral) (block_size * ITEMS,)
@@ -368,7 +369,7 @@ end
         # it would be first: a floating-point prefix then rounds at its own magnitude, not at
         # the carry's)
         thread_prefix, block_total = block_exclusive_scan!(
-            @context, op, thread_totals, neutral, block_size, ithread,
+            @context, op, thread_totals, neutral, block_size, ithread, subgroups,
         )
 
         if isnothing(totals)
