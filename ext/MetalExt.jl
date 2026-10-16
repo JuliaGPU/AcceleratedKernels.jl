@@ -17,7 +17,8 @@ AK.predicate_tuning(::MetalBackend, ::Type) = AK.PredicateTuning(prefer_concurre
 
 # Reductions in blocks of 64 threads: on an M1, summing a 512×1000 matrix along either dimension
 # takes 15% less time than with 256 threads, as does `findfirst` over 512k elements, while
-# reductions of 16M elements take at most 4% more.
-AK.reduce_tuning(::MetalBackend, ::Type) = AK.ReduceTuning(block_size=64)
+# reductions of 16M elements take at most 4% more. Groups of threads read runs of up to 2048
+# Float32s, which takes about 20% less time than a block per output on an M1 (and ties at 4096).
+AK.reduce_tuning(::MetalBackend, ::Type) = AK.ReduceTuning(block_size=64, segments_lane_bytes=256)
 
 end

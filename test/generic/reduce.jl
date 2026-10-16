@@ -1103,6 +1103,61 @@ end
 end
 
 
+@testset "segment reductions" begin
+    # Outputs that each reduce a run of consecutive elements, read by groups of threads: runs of
+    # several lengths (with few outputs, taking more threads per run), and a dimension of size 1
+    # among the kept ones
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    if TEST_KERNELS
+        segs = AK._mapreduce_segments((512, 1000), (1, 512), (1,))
+        @test AK._mapreduce_nd_shape(1000, 512, segs, 256, AK.reduce_tuning(BACKEND, Int32),
+                                     Int32)[1] === :segments
+    end
+    for (sz, dims) in (((16, 3000), 1), ((512, 1000), 1), ((513, 47), 1), ((4096, 33), 1),
+                       ((64, 1, 300), 1), ((4, 8, 3000), (1, 2)))
+        h = rand(Int32(-9):Int32(9), sz)
+        a = array_from_host(h)
+        rsz = length.(Base.reduced_indices(axes(h), dims))
+        # `init` applied once, overwriting, and folding into `R`
+        R = array_from_host(zeros(Int32, rsz))
+        AK.mapreducedim!(identity, +, R, a; init=Int32(2), alg)
+        @test Array(R) == sum(h; dims) .+ 2
+        AK.mapreducedim!(identity, max, R, a; overwrite=true, alg)
+        @test Array(R) == maximum(h; dims)
+        R0 = rand(Int32(-9):Int32(9), rsz)
+        R = array_from_host(R0)
+        AK.mapreducedim!(identity, +, R, a; alg)
+        @test Array(R) == R0 .+ sum(h; dims)
+        # A mapping function and an operator without a neutral element
+        R = array_from_host(zeros(Int32, rsz))
+        AK.mapreducedim!(abs2, (x, y) -> x + y, R, a; init=Int32(0), alg)
+        @test Array(R) == sum(abs2, h; dims)
+        # A view at an offset, and a lazy source
+        hp = rand(Int32(-9):Int32(9), prod(sz) + 7)
+        v = reshape(view(array_from_host(hp), 8:prod(sz) + 7), sz)
+        AK.mapreducedim!(identity, +, R, v; init=Int32(0), alg)
+        @test Array(R) == sum(reshape(hp[8:end], sz); dims)
+        bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(*, a, Int32(2)))
+        AK.mapreducedim!(identity, +, R, bc; init=Int32(0), alg)
+        @test Array(R) == 2 .* sum(h; dims)
+    end
+    # Runs inside a strided view, whose kept dimensions are not adjacent in memory
+    h = rand(Int32(-9):Int32(9), 100, 6, 70)
+    v = view(array_from_host(h), :, 2:5, :)
+    @test Array(AK.reduce(+, v; dims=1, init=Int32(0), alg)) == sum(h[:, 2:5, :]; dims=1)
+    # Blocks too small for many threads per run
+    if TEST_KERNELS
+        h = rand(Int32(-9):Int32(9), 512, 100)
+        for block_size in (1, 2, 8, 32)
+            r = AK.reduce(+, array_from_host(h); dims=1, init=Int32(0),
+                          alg=AK.BlockReduce(; block_size))
+            @test Array(r) == sum(h; dims=1)
+        end
+    end
+end
+
+
 @testset "column reductions" begin
     # Few contiguous outputs, each reducing a long strided row, take the column reduction in two
     # passes (with enough elements for every backend's threshold): a tile of 8 outputs, and two
@@ -1115,7 +1170,7 @@ end
         s = sum(Int.(h); dims=2)
         if TEST_KERNELS
             segs = AK._mapreduce_segments((m, n), (1, m), (2,))
-            @test AK._mapreduce_nd_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int))[1] ===
+            @test AK._mapreduce_nd_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int), Int)[1] ===
                   :columns
         end
         # `init` applied once, folding into `R`, into an `R` narrower than the accumulator

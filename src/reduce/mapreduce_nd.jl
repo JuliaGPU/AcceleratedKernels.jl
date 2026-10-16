@@ -8,7 +8,7 @@
 #   2. The inner reduce loop must avoid per-element integer division. For a single segment the
 #      element offset is just `j * stride`; only genuinely non-contiguous dim sets (e.g.
 #      `dims=(1,3)`) fall back to a per-element multi-dimensional decode.
-#   3. Five work decompositions, chosen by the relative sizes and strides of the output and
+#   3. Six work decompositions, chosen by the relative sizes and strides of the output and
 #      the reduction:
 #        - by_thread:     one thread per output (many outputs, small reduction)
 #        - columns:       32 contiguous outputs per block, split across blocks, for long strided
@@ -16,6 +16,8 @@
 #        - tiled_strided: several contiguous outputs per block, for square-like strided reductions
 #        - by_block:      one block per output, grid-stride over outputs (few outputs, large reduction)
 #        - multigroup:    several blocks per output, two-pass (dst_size==1 or very small dst_size)
+#        - segments:      a group of lanes per output, several outputs per block, for reductions
+#                         of consecutive elements
 
 # Below this many output elements, splitting a single output's reduction across multiple
 # blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
@@ -36,6 +38,11 @@ const TILED_STRIDED_ROWS_PER_BLOCK = 8
 # threads issues together
 const COLUMNS_COLS = 32
 const COLUMNS_ITEMS = 8
+# The `:segments` reduction: at most this many lanes per output (the kernel is compiled for each
+# number of lanes), doubling the lanes of runs with few outputs up to this many threads
+const SEGMENTS_MAX_LANES = 32
+const SEGMENTS_MIN_THREADS = 8192
+
 # The fewest outputs the columns kernel is used for: with 4 or fewer, its blocks' scattered loads
 # lose to `:multigroup` on Metal and oneAPI
 const COLUMNS_MIN_OUTPUTS = 8
@@ -100,7 +107,11 @@ end
 _segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 
 # The launch shape of a strided reduction along `dims`, and the number of blocks per output of a
-# `:multigroup` or `:columns` reduction:
+# `:multigroup` or `:columns` reduction, or of threads per output of a `:segments` one:
+#   - at least GS_DST_CUTOFF outputs, each reducing a
+#     run of consecutive elements, of a length the
+#     tuning's `segments_*` settings allow             -> :segments (a group of threads per
+#                                                          output, several outputs per block)
 #   - at least COLUMNS_MIN_OUTPUTS contiguous outputs
 #     with a longer strided reduction, of at least
 #     the tuning's `columns_min_elements` in all        -> :columns (blocks of up to 32
@@ -121,10 +132,25 @@ _segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 # the (large) reduction itself across many blocks via multigroup is still better.
 # For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
 # option regardless of GS_DST_CUTOFF.
-function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning)
+function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
+                             ::Type{A}) where {A}
     target_blocks = t.target_blocks
     (rstrides, rsizes, nr), (ostrides, _, no) = segs
     single_reduce = nr == 1 && rsizes[1] != 0
+
+    # Each output reduces a run of consecutive elements: a group of lanes per output reads it
+    # with consecutive loads, and a block holds several outputs, so that it stays busy on short
+    # runs (where one block per output idles most of its threads, and one thread per output
+    # reads with a stride). Runs too short for two lanes keep one thread per output, and runs
+    # too long for the tuning's bytes per lane keep a block per output, which reads them with
+    # vector loads.
+    if single_reduce && rstrides[1] == 1 && dst_size >= GS_DST_CUTOFF &&
+       (t.segments_short_runs || reduce_size >= block_size)
+        lanes = _segment_lanes(dst_size, reduce_size, block_size)
+        if lanes > 1 && cld(reduce_size, lanes) * _accsize(A) <= t.segments_lane_bytes
+            return :segments, lanes
+        end
+    end
 
     # by_block override 1: when the reduced dimension is the fastest-varying one
     # (reduce_strides==(1,)), by_thread's per-thread strided access is badly
@@ -182,6 +208,24 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
     end
 end
 
+# The lanes per output of a `:segments` reduction: about the square root of the length of the
+# runs, and more (keeping 16 elements per lane) while fewer than SEGMENTS_MIN_THREADS threads
+# would run; a power of two of at most 32 and the block size. Measured on an M1, from runs of 8
+# elements (2 lanes) to 2048 (32 lanes).
+function _segment_lanes(dst_size, reduce_size, block_size)
+    max_lanes = min(SEGMENTS_MAX_LANES, block_size)
+    lanes = clamp(prevpow(2, isqrt(reduce_size)), 1, max_lanes)
+    while lanes < max_lanes && 32 * lanes <= reduce_size &&
+          widemul(dst_size, lanes) < SEGMENTS_MIN_THREADS
+        lanes *= 2
+    end
+    return lanes
+end
+
+# The size of the accumulator, which the lanes of a `:segments` reduction each reduce a share of
+# the run into; an indicative size for types without one
+_accsize(::Type{A}) where {A} = isbitstype(A) && sizeof(A) > 0 ? sizeof(A) : 8
+
 # The outputs per block of the columns kernel
 _columns_cols(dst_size) = min(nextpow(2, dst_size), COLUMNS_COLS)
 
@@ -215,7 +259,7 @@ function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, 
     end
     segs = _mapreduce_segments(src_sizes, _mapreduce_layout(src)[3], dims_valid)
     shape, reduce_groups = _mapreduce_nd_shape(dst_size, len, segs, alg.block_size,
-                                               reduce_tuning(backend, A))
+                                               reduce_tuning(backend, A), A)
     shape === :multigroup || shape === :columns && reduce_groups > 1 || return (;)
     return (; partials=_buffer(typeof(neutral), dst_size, reduce_groups))
 end
@@ -314,7 +358,7 @@ function mapreduce_nd!(
         isnothing(layout) ? _mapreduce_linear_layout(src) : layout
     segs = _mapreduce_segments(src_sizes, src_strides, dims_valid)
     reduce_size = len
-    shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning)
+    shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning, A)
 
     # One output per thread of a source without a dense buffer: iterating over the Cartesian
     # indices of each output's elements saves decoding every linear index
@@ -375,6 +419,15 @@ function _mapreduce_nd_launch!(
             kernel2!(partial, dst, op, neutral, init, dst_size, groups,
                      ndrange=(pass2_block_size * dst_size,))
         end
+    elseif shape === :segments
+        lanes = reduce_groups
+        blocks = cld(dst_size, block_size ÷ lanes)
+        kernel! = _mapreduce_nd_segments!(backend, block_size)
+        kernel!(
+            buffer, dst, f, op, neutral, init,
+            base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(lanes),
+            ndrange=(block_size * blocks,),
+        )
     elseif shape === :tiled_strided
         # Narrow layout-specific path: square-like row reductions with contiguous
         # outputs and strided input reads, e.g. size=(1024,1024), dims=2. Several
@@ -736,6 +789,55 @@ end
 
     if lane == 0x0 && iout < output_size
         dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[row + 0x1])
+    end
+end
+
+# GPU kernel: segments — each output reduces `reduce_size` consecutive elements (from the offset
+# of its outer index), with `lanes` threads that read them in an interleaved order; a block of
+# `N` threads covers `N ÷ lanes` outputs, which are combined in local memory with log2(lanes)
+# steps.
+@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_segments!(
+    @Const(src), dst,
+    f, op, neutral, init,
+    base_offset, outer_strides, outer_sizes,
+    output_size, reduce_size, ::Val{lanes},
+) where {lanes}
+    @uniform N = @groupsize()[1]
+    sdata = @localmem typeof(neutral) (N,)
+    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+
+    iblock  = @index(Group, Linear) - 0x1
+    ithread = @index(Local, Linear) - 0x1
+
+    # (unsigned division by a constant, see `_mapreduce_nd_by_thread_tiled_strided!`)
+    lane = Int(unsigned(ithread) % unsigned(lanes))
+    row  = Int(unsigned(ithread) ÷ unsigned(lanes))
+    iout = iblock * (N ÷ lanes) + row
+
+    acc = neutral
+    if iout < output_size
+        input_base = base_offset + _outer_decode(iout, outer_strides, outer_sizes)
+        j = lane
+        while j < reduce_size
+            acc = op_lanes(acc, f_lanes(src[input_base + j + 0x1]))
+            j += lanes
+        end
+    end
+
+    sdata[ithread + 0x1] = acc
+    @synchronize()
+
+    step = lanes ÷ 2
+    while step >= 1
+        if lane < step
+            sdata[ithread + 0x1] = op_lanes(sdata[ithread + 0x1], sdata[ithread + step + 0x1])
+        end
+        @synchronize()
+        step ÷= 2
+    end
+
+    if lane == 0x0 && iout < output_size
+        dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[ithread + 0x1])
     end
 end
 

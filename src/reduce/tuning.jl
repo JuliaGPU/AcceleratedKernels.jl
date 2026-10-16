@@ -41,10 +41,19 @@ Values that fill unset algorithm fields for reductions on one device, as returne
   for which it splits each output's reduction across blocks of consecutive outputs; that can take
   a second launch, which costs more on some backends.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`.
+- `segments_lane_bytes`: a reduction along `dims` in which every output reduces a run of
+  consecutive elements reads each run with a group of up to 32 threads, several runs per block,
+  as long as each thread reduces at most this many bytes of its run; longer runs get a block per
+  output. 0 disables it.
+- `segments_short_runs`: whether runs shorter than a block are read by such groups too, rather
+  than by one thread per output. GPUs load short runs faster with groups, as one thread per
+  output loads with a stride; CPUs faster with a thread each.
 
 `items_per_thread` defaults to the choice by type, and `columns_min_elements` to 2^18, measured
-on CUDA; the other defaults reproduce AK's historical settings. Internal: the fields may change in
-any release.
+on CUDA. `segments_lane_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
+(at 512, a Ryzen 9950X's integrated GPU and an Iris Xe take up to twice as long as with a block
+per output); the other defaults reproduce AK's historical settings. Internal: the fields may
+change in any release.
 """
 Base.@kwdef struct ReduceTuning
     block_size::Int = 256
@@ -53,6 +62,8 @@ Base.@kwdef struct ReduceTuning
     target_blocks::Int = 256
     columns_min_elements::Int = 1 << 18
     threads_min_elems::Int = 1
+    segments_lane_bytes::Int = 128
+    segments_short_runs::Bool = true
 end
 
 """
@@ -62,6 +73,10 @@ The reduction tuning for accumulator type `T` on `backend`'s current device; see
 [`sort_tuning`](@ref) for the conventions.
 """
 reduce_tuning(::Backend, ::Type) = ReduceTuning()
+# Kernels on the host backend run on the CPU, as with OpenCL's CPU devices (see AK's OpenCL
+# extension)
+reduce_tuning(::HostBackend, ::Type) =
+    ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
 
 # Elements each thread loads per tile of a whole-array reduction: enough for 64 bytes of
 # accumulators, from 4 to 16. The first pass launches at most `target_blocks` blocks, so its
