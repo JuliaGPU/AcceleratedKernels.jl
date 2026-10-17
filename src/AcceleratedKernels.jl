@@ -15,6 +15,10 @@ using ArgCheck: @argcheck
 using GPUArraysCore: AnyGPUArray, @allowscalar, neutral_element
 using KernelAbstractions
 using KernelAbstractions: @context
+# Sub-group operations, with KernelAbstractions 0.10
+@static if isdefined(KernelAbstractions, :KernelInterface)
+    const KI = KernelAbstractions.KernelInterface
+end
 using SIMD: Vec, vloada
 import UnsafeAtomics
 

@@ -17,4 +17,11 @@ function AK.reduce_tuning(::OpenCLBackend, ::Type)
     return AK.ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
 end
 
+# CPU devices (e.g. PoCL) implement sub-group operations with barriers of the whole block, and
+# keep a scanned tile in their caches for adding its prefix
+function AK.scan_tuning(::OpenCLBackend, ::Type)
+    cl.device().device_type === :cpu || return AK.ScanTuning()
+    return AK.ScanTuning(reduce_then_scan=false, subgroups=false)
+end
+
 end

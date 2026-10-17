@@ -230,6 +230,31 @@ end
 end
 
 
+@testset "accumulate_1d levels" begin
+    # With small tiles, the totals of the tiles take several levels of tiles themselves
+    if TEST_KERNELS
+        Random.seed!(0)
+        alg = AK.ScanPrefixes(block_size=32, items_per_thread=2)
+        for n in (4097, 70_001, 300_000)
+            h = rand(Int32(-9):Int32(9), n)
+            v = array_from_host(h)
+            @test Array(AK.accumulate(+, v; alg)) == cumsum(h)
+            @test Array(AK.accumulate(+, v; init=Int32(3), inclusive=false, alg)) ==
+                  vcat(Int32(3), Int32(3) .+ cumsum(h)[1:end-1])
+            xh = [scan_randmat() for _ in 1:n]
+            init = scan_randmat()
+            y = array_from_host(xh)
+            AK.accumulate!(scan_matmul, y; init, alg)
+            @test Array(y) == scan_reference(xh, 1; init, inclusive=true)
+            @test_throws ArgumentError AK.accumulate(+, v; alg=AK.ScanPrefixes(block_size=1, items_per_thread=1))
+            ws = AK.workspace(AK.accumulate!, +, similar(v), v; alg)
+            w = similar(v)
+            AK.accumulate!(+, w, v; alg, workspace=ws)
+            @test Array(w) == cumsum(h)
+        end
+    end
+end
+
 @testset "accumulate_nd non-commutative" begin
     Random.seed!(0)
 
