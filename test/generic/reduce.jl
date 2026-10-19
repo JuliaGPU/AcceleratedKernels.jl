@@ -1097,7 +1097,7 @@ end
             Val(:columns), 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
             init=AK._Fold(), neutral=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
             reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
-            reduce_size=1000, dense_buffer=true)
+            reduce_size=1000, dense_buffer=true, items_per_thread=4)
         @test Array(R) == vec(sum(h; dims=2)) .+ 1
     end
 end
@@ -1524,5 +1524,165 @@ end
         @test AK.mapreduce(code, max, dm; init=0x00, alg) === mapreduce(code, max, hm)
         @test Array(AK.mapreduce(code, max, dm; dims, init=0x00, alg)) ==
               mapreduce(code, max, hm; dims)
+    end
+end
+
+
+# An associative but non-commutative operator: 2x2 matrix products over UInt32 (see the scans'
+# tests). Random products of SL(2, Z) generators stay invertible, so products of many of them do
+# not collapse to zero, which would hide ordering mistakes.
+struct RedMat2
+    a::UInt32
+    b::UInt32
+    c::UInt32
+    d::UInt32
+end
+Base.zero(::Type{RedMat2}) = RedMat2(0, 0, 0, 0)
+red_matmul(x::RedMat2, y::RedMat2) = RedMat2(
+    x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d,
+    x.c * y.a + x.d * y.c, x.c * y.b + x.d * y.d,
+)
+const RED_I2 = RedMat2(1, 0, 0, 1)
+const RED_GENS = (RedMat2(1, 1, 0, 1), RedMat2(1, 0, 1, 1),
+                  RedMat2(1, typemax(UInt32), 0, 1), RedMat2(1, 0, typemax(UInt32), 1))
+red_randmat() = foldl(red_matmul, rand(RED_GENS, 3); init=RED_I2)
+
+# The same on a primitive type, which the kernels can load as vectors: affine maps `x -> a*x + b`
+# of `H`-bit integers packed into twice as many bits, composed first to last. Odd `a`s keep the
+# maps invertible.
+affine_half(::Type{UInt32}) = UInt16
+affine_half(::Type{UInt64}) = UInt32
+function affine_compose(p::T, q::T) where {T <: Union{UInt32, UInt64}}
+    H = affine_half(T)
+    n = 4 * sizeof(T)
+    a1, b1, a2, b2 = p % H, (p >> n) % H, q % H, (q >> n) % H
+    return T(a2 * a1) | T(a2 * b1 + b2) << n
+end
+affine_rand(::Type{T}) where {T} = rand(T) | one(T)
+
+@testset "non-commutative reductions" begin
+    Random.seed!(0)
+
+    # Whole arrays: one tile, one block, several tiles per block, and several blocks (also with
+    # small tiles, so that blocks take many tiles each); with and without a neutral element
+    for (alg, dalg) in ((REDUCE_ALG, REDUCE_ALG),
+                        (reduce_alg(block_size=32, items_per_thread=2, max_tasks=4),
+                         reduce_alg(block_size=32, max_tasks=4))),
+        neutral in (nothing, RED_I2),
+        n in (2, 3, 100, 4097, 70_000, 300_001)
+        xh = [red_randmat() for _ in 1:n]
+        x = array_from_host(xh)
+        init = red_randmat()
+        @test AK.reduce(red_matmul, x; commutative=false, neutral, alg) == foldl(red_matmul, xh)
+        @test AK.reduce(red_matmul, x; commutative=false, neutral, init, alg) ==
+              foldl(red_matmul, xh; init)
+        # into a single output on the device, folding into its value
+        R = array_from_host([init])
+        AK.mapreducedim!(identity, red_matmul, R, x; commutative=false, neutral, alg=dalg)
+        @test Array(R) == [foldl(red_matmul, xh; init)]
+    end
+    # ... finishing on the host, from the source or from the first pass's partial results
+    xh = [red_randmat() for _ in 1:20_000]
+    x = array_from_host(xh)
+    for switch_below in (30_000, 100)
+        alg = reduce_alg(; block_size=32, items_per_thread=2, switch_below)
+        @test AK.reduce(red_matmul, x; commutative=false, alg) == foldl(red_matmul, xh)
+    end
+    # ... sources read with vector loads, contiguous at an offset, strided, fused
+    for T in (UInt32, UInt64)
+        h = [affine_rand(T) for _ in 1:1_000_000]
+        v = array_from_host(h)
+        for r in (1:1_000_000, 3:999_998, 2:2:999_000)
+            @test AK.reduce(affine_compose, view(v, r); commutative=false, alg=REDUCE_ALG) ==
+                  foldl(affine_compose, view(h, r))
+        end
+        @test AK.mapreduce(xor, affine_compose, v, v .+ one(T); commutative=false,
+                           alg=REDUCE_ALG) == foldl(affine_compose, xor.(h, h .+ one(T)))
+    end
+    # ... and a workspace, used twice
+    ws = AK.workspace(AK.reduce, red_matmul, x; commutative=false, alg=REDUCE_ALG)
+    for _ in 1:2
+        @test AK.reduce(red_matmul, x; commutative=false, alg=REDUCE_ALG, workspace=ws) ==
+              foldl(red_matmul, xh)
+    end
+
+    # Along `dims`, the launch shape of every commutative one in order: one thread per output
+    # (for those taking one, and short runs of consecutive elements), the columns kernel (in one
+    # pass or two, for columns and tiles of strided slices), and a block per output, or several
+    # (for long runs, few outputs, and the other shapes); also non-adjacent dimensions. With and
+    # without a neutral element.
+    shapes = Set{Pair{Symbol, Symbol}}()
+    cases = (((3, 2000), 1), ((2000, 3), 1), ((2000, 3), 2), ((40, 5, 30), 1), ((40, 5, 30), 2),
+             ((40, 5, 30), 3), ((40, 5, 30), (1, 3)), ((9, 4, 3000), (2, 3)), ((8, 300_000), 2),
+             ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1),
+             ((300_000, 2), 1), ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1),
+             ((1, 5000, 2), 2))
+    for (sz, dims) in cases
+        if TEST_KERNELS
+            segs = AK._mapreduce_segments(sz, AK._mapreduce_dense_strides(sz),
+                                          AK._reduced_dims(dims, length(sz)))
+            dst_size = prod(d in dims ? 1 : sz[d] for d in eachindex(sz))
+            len = prod(sz) ÷ dst_size
+            block_size = AK._resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, dims).block_size
+            shape, groups = AK._mapreduce_nd_shape(dst_size, len, segs, block_size,
+                                                   AK.reduce_tuning(BACKEND, RedMat2), RedMat2)
+            push!(shapes,
+                  shape => AK._ordered_shape(shape, groups, dst_size, len, block_size)[1])
+        end
+        xh = [red_randmat() for _ in CartesianIndices(sz)]
+        x = array_from_host(xh)
+        ref = reduce(red_matmul, xh; dims, init=RED_I2)
+        alg = REDUCE_ALG
+        for neutral in (nothing, RED_I2)
+            @test Array(AK.reduce(red_matmul, x; dims, commutative=false, neutral, alg)) == ref
+            # `init` applied once, folding into `R`, overwriting it
+            init = red_randmat()
+            R0 = [red_randmat() for _ in CartesianIndices(ref)]
+            R = array_from_host(R0)
+            AK.mapreducedim!(identity, red_matmul, R, x; commutative=false, neutral, alg)
+            @test Array(R) == red_matmul.(R0, ref)
+            AK.mapreducedim!(identity, red_matmul, R, x; commutative=false, neutral, init, alg)
+            @test Array(R) == red_matmul.(Ref(init), ref)
+            AK.mapreducedim!(identity, red_matmul, R, x; commutative=false, neutral,
+                             overwrite=true, alg)
+            @test Array(R) == ref
+        end
+    end
+    if TEST_KERNELS
+        @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
+        # (with the default settings, every shape is taken; tunings can rule some out)
+        t = AK.reduce_tuning(BACKEND, RedMat2)
+        if AK._resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, 1).block_size == 256 &&
+           t.columns_min_elements <= 1 << 18
+            required = Set((:by_thread => :by_thread,
+                            :columns => :columns_ordered, :tiled_strided => :columns_ordered,
+                            :by_block => :ordered, :by_block_each => :ordered,
+                            :multigroup => :ordered))
+            t.segments_short_runs && push!(required, :segments => :by_thread)
+            # (the (512, 40) case has 256 bytes per lane)
+            t.segments_lane_bytes >= 256 && push!(required, :segments => :ordered)
+            @test shapes ⊇ required
+        end
+    end
+    # ... square tiles in blocks too small for the columns kernel
+    xh = [red_randmat() for _ in 1:256, _ in 1:256]
+    @test Array(AK.reduce(red_matmul, array_from_host(xh); dims=2, commutative=false,
+                          alg=reduce_alg(block_size=8))) ==
+          reduce(red_matmul, xh; dims=2, init=RED_I2)
+    # ... sources read with vector loads (contiguous, at an offset), strided views and lazy ones;
+    # few outputs of four-byte elements, whose groups outnumber the tiles
+    for T in (UInt32, UInt64)
+        hm = [affine_rand(T) for _ in 1:4096, _ in 1:300]
+        m = array_from_host(hm)
+        for (src, hsrc) in ((m, hm), (view(m, 2:4095, :), view(hm, 2:4095, :)),
+                            (view(m, 1:2:4096, 2:2:300), view(hm, 1:2:4096, 2:2:300)),
+                            (LazyProduct(m, m), hm .* hm)), dims in (1, 2)
+            @test Array(AK.reduce(affine_compose, src; dims, commutative=false,
+                                  alg=REDUCE_ALG)) ==
+                  reduce(affine_compose, hsrc; dims, init=T(1))
+        end
+        hm = [affine_rand(T) for _ in 1:5000, _ in 1:2]
+        @test Array(AK.reduce(affine_compose, array_from_host(hm); dims=1, commutative=false,
+                              alg=REDUCE_ALG)) == reduce(affine_compose, hm; dims=1, init=T(1))
     end
 end

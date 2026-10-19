@@ -14,9 +14,9 @@ choose among several launch shapes by the sizes and strides of the input and out
 single output, that of whole arrays); `items_per_thread` and `switch_below` cannot be set for
 them, and setting either is an `ArgumentError` there.
 
-Like every GPU reduction in the Julia ecosystem, it requires an associative and commutative
-operator: the combination order is fixed for a given setting and shape, but it is not the
-element order.
+As CUB's reductions, it requires an associative and commutative operator by default: the
+combination order is fixed for a given setting and shape, but it is not the element order. With
+`commutative=false` (see [`mapreducedim!`](@ref)), it combines the elements in their order.
 """
 Base.@kwdef struct BlockReduce <: ReduceAlgorithm
     block_size::Union{Nothing, Int} = nothing

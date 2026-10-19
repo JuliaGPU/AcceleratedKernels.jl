@@ -208,6 +208,21 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
     end
 end
 
+# The launch shape of a reduction in element order (`commutative=false`), from the shape
+# `_mapreduce_nd_shape` chose for it: one thread per output, which reduces its slice in order,
+# where that shape is one, or for runs shorter than a block; the columns kernel in order for
+# strided reductions into contiguous outputs, which it reads coalesced across outputs; else
+# `:ordered`, a block per output, or the groups of a `:multigroup` reduction. The groups are those
+# of the chosen shape, so that partial results take the same scratch.
+function _ordered_shape(shape, reduce_groups, dst_size, reduce_size, block_size)
+    (shape === :by_thread || shape === :segments && reduce_size < block_size) &&
+        return :by_thread, 0
+    shape === :columns && return :columns_ordered, reduce_groups
+    shape === :tiled_strided && min(block_size, COLUMNS_MAX_THREADS) >= _columns_cols(dst_size) &&
+        return :columns_ordered, 1
+    return :ordered, shape === :multigroup ? reduce_groups : 1
+end
+
 # The lanes per output of a `:segments` reduction: about the square root of the length of the
 # runs, and more (keeping 16 elements per lane) while fewer than SEGMENTS_MIN_THREADS threads
 # would run; a power of two of at most 32 and the block size. Measured on an M1, from runs of 8
@@ -282,7 +297,7 @@ end
 
 # Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
 # dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
-# `_Fold()` (see `_finish`).
+# `_Fold()` (see `_finish`). Without `commutative`, the GPU kernels combine elements in order.
 function mapreduce_nd!(
     f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
     alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
@@ -290,6 +305,7 @@ function mapreduce_nd!(
     neutral,
     dims_valid::Tuple,
     bufs::NamedTuple,
+    commutative::Bool=true,
 ) where {F, OP, A}
     # Launch settings of the elementwise passes, and of the reduction kernels
     launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
@@ -346,7 +362,7 @@ function mapreduce_nd!(
             Base.inferencebarrier(mapreduce_1d_gpu)(
                 f, op, linear, backend; init, neutral, block_size,
                 items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
-                partials=get(bufs, :partials, nothing), switch_below=0, dst)
+                partials=get(bufs, :partials, nothing), switch_below=0, commutative, dst)
             return dst
         end
     end
@@ -359,6 +375,8 @@ function mapreduce_nd!(
     segs = _mapreduce_segments(src_sizes, src_strides, dims_valid)
     reduce_size = len
     shape, reduce_groups = _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, tuning, A)
+    commutative || ((shape, reduce_groups) = _ordered_shape(shape, reduce_groups, dst_size,
+                                                            reduce_size, block_size))
 
     # One output per thread of a source without a dense buffer: iterating over the Cartesian
     # indices of each output's elements saves decoding every linear index
@@ -378,6 +396,7 @@ function mapreduce_nd!(
             Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
             init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
             outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(layout),
+            items_per_thread=alg.items_per_thread,
         )
     end
 
@@ -397,9 +416,17 @@ end
 function _mapreduce_nd_launch!(
     ::Val{shape}, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
     init, neutral, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-    dst_size, reduce_size, dense_buffer,
+    dst_size, reduce_size, dense_buffer, items_per_thread,
 ) where {shape, F, OP}
-    if shape === :columns
+    if shape === :ordered
+        partials = reduce_groups > 1 ? bufs.partials : nothing
+        _launch_mapreduce_ordered!(
+            backend, block_size, items_per_thread, buffer, dst, f, op, neutral, init,
+            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+            dst_size, reduce_size, reduce_groups, partials; dense_buffer,
+        )
+    elseif shape === :columns || shape === :columns_ordered
+        ordered = shape === :columns_ordered
         groups = reduce_groups
         blocks = cld(dst_size, _columns_cols(dst_size)) * groups
         threads = min(block_size, COLUMNS_MAX_THREADS)
@@ -407,17 +434,23 @@ function _mapreduce_nd_launch!(
         cols = Val(_columns_cols(dst_size))
         if groups == 1
             kernel!(buffer, dst, f, op, neutral, init, base_offset, reduce_strides[1], dst_size,
-                    reduce_size, 1, cols; ndrange=(threads * blocks,))
+                    reduce_size, 1, cols, Val(ordered); ndrange=(threads * blocks,))
         else
             # (the partial results of each output's groups, combined by a second pass)
             partial = bufs.partials
             kernel!(buffer, partial, f, op, neutral, _NoFinish(), base_offset,
-                    reduce_strides[1], dst_size, reduce_size, groups, cols;
+                    reduce_strides[1], dst_size, reduce_size, groups, cols, Val(ordered);
                     ndrange=(threads * blocks,))
             pass2_block_size = _pass2_block_size(groups)
-            kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
-            kernel2!(partial, dst, op, neutral, init, dst_size, groups,
-                     ndrange=(pass2_block_size * dst_size,))
+            if ordered
+                _mapreduce_ordered_pass!(backend, pass2_block_size, 1, partial, dst, _Partials(),
+                                         op, neutral, init, 0, (1,), (dst_size,), (dst_size,),
+                                         (groups,), dst_size, groups, 1)
+            else
+                kernel2! = _mapreduce_partial_to_dst!(backend, pass2_block_size)
+                kernel2!(partial, dst, op, neutral, init, dst_size, groups,
+                         ndrange=(pass2_block_size * dst_size,))
+            end
         end
     elseif shape === :segments
         lanes = reduce_groups
@@ -845,15 +878,17 @@ end
 # a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs with
 # `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
 # reduction of each output is split across `groups` blocks. With one group the block stores the
-# outputs; with more, `dst` holds `output_size × groups` partial results for
-# `_mapreduce_partial_to_dst!` (and `init` is `_NoFinish()`).
+# outputs; with more, `dst` holds `output_size × groups` partial results for a second pass (and
+# `init` is `_NoFinish()`). The lanes and groups take their elements in turn, or `ordered`, each a
+# contiguous range of them, combined in order; either way a warp's loads of one step are
+# consecutive elements.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_columns!(
     @Const(src), dst,
     f, op, neutral, init,
     base_offset, reduce_stride,
     output_size, reduce_size, groups,
-    ::Val{cols},
-) where {cols}
+    ::Val{cols}, ::Val{ordered},
+) where {cols, ordered}
     @uniform N = @groupsize()[1]
     @uniform lanes = N ÷ cols
     sdata = @localmem typeof(neutral) (N,)
@@ -871,7 +906,24 @@ end
     iout = tile * cols + col
 
     acc = neutral
-    if iout < output_size
+    if ordered && iout < output_size
+        # (the group's range of the slice, and the lane's of that, as evenly divided as they can be)
+        lo = fld(group * reduce_size, groups)
+        len = fld((group + 1) * reduce_size, groups) - lo
+        j = lo + fld(lane * len, lanes)
+        stop = lo + fld((lane + 1) * len, lanes)
+        sbase = base_offset + iout
+        while j + (COLUMNS_ITEMS - 1) < stop
+            for k in 0:(COLUMNS_ITEMS - 1)
+                acc = op_lanes(acc, f_lanes(src[sbase + (j + k) * reduce_stride + 0x1]))
+            end
+            j += COLUMNS_ITEMS
+        end
+        while j < stop
+            acc = op_lanes(acc, f_lanes(src[sbase + j * reduce_stride + 0x1]))
+            j += 1
+        end
+    elseif iout < output_size
         sbase = base_offset + iout
         step = groups * lanes
         j = group * lanes + lane
@@ -892,14 +944,27 @@ end
     sdata[ithread + 0x1] = acc
     @synchronize()
 
-    s = lanes ÷ 2
-    while s >= 1
-        if lane < s
-            sdata[col + lane * cols + 0x1] =
-                op_lanes(sdata[col + lane * cols + 0x1], sdata[col + (lane + s) * cols + 0x1])
+    if ordered
+        # (each step combines neighbouring ranges, the earlier on the left)
+        s = 1
+        while s < lanes
+            if lane % (2 * s) == 0
+                sdata[col + lane * cols + 0x1] =
+                    op_lanes(sdata[col + lane * cols + 0x1], sdata[col + (lane + s) * cols + 0x1])
+            end
+            @synchronize()
+            s *= 2
         end
-        @synchronize()
-        s ÷= 2
+    else
+        s = lanes ÷ 2
+        while s >= 1
+            if lane < s
+                sdata[col + lane * cols + 0x1] =
+                    op_lanes(sdata[col + lane * cols + 0x1], sdata[col + (lane + s) * cols + 0x1])
+            end
+            @synchronize()
+            s ÷= 2
+        end
     end
 
     if lane == 0x0 && iout < output_size

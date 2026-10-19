@@ -16,6 +16,7 @@ function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
 end
 
 include("mapreduce_1d_cpu.jl")
+include("mapreduce_ordered.jl")
 include("mapreduce_1d_gpu.jl")
 include("mapreduce_nd.jl")
 
@@ -23,8 +24,8 @@ include("mapreduce_nd.jl")
 """
     reduce(op, src::AbstractArray; kwargs...)
 
-Reduce `src` with the binary operator `op`, which must be associative and commutative; the
-keywords are those of [`mapreduce`](@ref). Equivalent to `mapreduce(identity, op, src; kwargs...)`.
+Reduce `src` with the binary operator `op`, which must be associative, and commutative unless
+`commutative=false`; the keywords are those of [`mapreduce`](@ref). Equivalent to `mapreduce(identity, op, src; kwargs...)`.
 
 # Examples
 ```julia
@@ -48,6 +49,7 @@ reduce(op::OP, src::AbstractArray; kwargs...) where {OP} = mapreduce(identity, o
         neutral=nothing,
         acctype=nothing,
         dims=:,
+        commutative::Bool=true,
         alg::Algorithm=Auto(),
         workspace=nothing,
     )
@@ -58,7 +60,8 @@ With `dims` an integer or a collection of integers, the result is a new array on
 with size 1 along those dimensions; [`mapreducedim!`](@ref) reduces into an existing array
 instead, and states the contract all reductions follow. In short:
 
-- `op` must be associative and commutative.
+- `op` must be associative, and commutative unless `commutative=false`, which combines the
+  elements in their order.
 - `init`, when given, is applied exactly once, as `op(init, partial)`, and is the result of an
   empty reduction. Without `init`, an empty reduction is an `ArgumentError`: of a whole array, and
   along `dims` of any output whose slice is empty. ([`sum`](@ref), [`prod`](@ref) and
@@ -122,19 +125,20 @@ function mapreduce(
     neutral=nothing,
     acctype=nothing,
     dims=:,
+    commutative::Bool=true,
     alg::Algorithm=Auto(),
     workspace=nothing,
 ) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
     s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
     bufs = _buffers(s.plan, workspace, src)
-    return _mapreduce_run(f, op, _mapreduce_source(src), s, init, bufs)
+    return _mapreduce_run(f, op, _mapreduce_source(src), s, init, bufs; commutative)
 end
 
 function _plan(
     ::typeof(mapreduce), f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
     backend=nothing, init=_NoInit(), neutral=nothing, acctype=nothing, dims=:,
-    alg::Algorithm=Auto(),
+    commutative::Bool=true, alg::Algorithm=Auto(),
 ) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
     return _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
@@ -199,11 +203,11 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
 end
 
 # Run the reduction set up by `_mapreduce_setup`, with the plan's scratch buffers `bufs`
-function _mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
+function _mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :dims_valid)
         return _mapreduce_whole(f, op, src, backend, a, _unval(s.A); init, neutral=s.seed,
-                                partials=get(bufs, :partials, nothing))
+                                partials=get(bufs, :partials, nothing), commutative)
     end
     if init isa _NoInit && Base.any(d -> _srcsize(src, d) == 0, s.dims_valid) &&
        Base.prod(s.dst_sizes) > 0
@@ -212,7 +216,7 @@ function _mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
     end
     dst = KernelAbstractions.allocate(backend, _unval(s.R_type), s.dst_sizes)
     return mapreduce_nd!(f, op, dst, src, backend, a, _unval(s.A);
-                         init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
+                         init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
@@ -231,6 +235,7 @@ _mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=noth
         neutral=nothing,
         overwrite::Bool=false,
         acctype=nothing,
+        commutative::Bool=true,
         alg::Algorithm=Auto(),
         workspace=nothing,
     ) -> R
@@ -242,11 +247,14 @@ dimensions of size 1). `R` must not alias `src`.
 This is the contract of every AcceleratedKernels reduction, modelled on CUB's rather than on
 Base's (see [Differences from Base](@ref)):
 
-- **Algebra.** `op` must be associative and commutative. Like every GPU reduction, AK combines
-  elements in an order that depends on the algorithm, its settings and the shape, not in element
-  order; for a given setting and shape the order is fixed, so results are reproducible on one
-  device. Non-commutative operators such as string concatenation or matrix products are not
-  supported.
+- **Algebra.** `op` must be associative, and by default commutative: as CUB's reductions do, AK
+  then combines elements in an order that depends on the algorithm, its settings and the shape,
+  not in element order. With `commutative=false`, elements are combined in their order (each
+  partial result reduces consecutive elements, and only neighbouring partial results are
+  combined, the earlier on the left), so that operators such as matrix products are reduced
+  correctly; the grouping is still unspecified, as in Base. The GPU kernels that keep the order
+  can be slower, mostly for inputs that fit in the device's cache. Either way the order is fixed
+  for a given setting and shape, so results are reproducible on one device.
 - **Partial results** start from `neutral`, which must be a two-sided identity of `op` and never
   appears in the result. It defaults to `GPUArraysCore.neutral_element(op, T)` where that is
   defined; otherwise each partial result starts from its first element,
@@ -292,24 +300,25 @@ function mapreducedim!(
     neutral=nothing,
     overwrite::Bool=false,
     acctype=nothing,
+    commutative::Bool=true,
     alg::Algorithm=Auto(),
     workspace=nothing,
 ) where {F, OP}
     s = _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
-    _mapreducedim_run!(f, op, R, src, s, workspace)
+    _mapreducedim_run!(f, op, R, src, s, workspace, commutative)
     return R
 end
 
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
-function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace) where {F, OP}
+function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
     bufs = _buffers(s.plan, workspace, R, src)
     mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
-                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs)
+                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
 _plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
       backend=nothing, init=_NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
-      alg::Algorithm=Auto()) where {F, OP} =
+      commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
     _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
 
 function _mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwrite, acctype,
@@ -350,7 +359,7 @@ _check_noalias(R, src) = nothing
 # Reduce all of `src` to a host value, with accumulator type `A` and partial-result seed
 # `neutral`; `partials` is the plan's scratch
 function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
-                          partials) where {F, OP, A}
+                          partials, commutative) where {F, OP, A}
     if length(src) == 0
         init isa _NoInit || return init
         throw(ArgumentError(
@@ -364,18 +373,19 @@ function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neut
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type (asserted, as the
     # threaded reduction is not inferred)
-    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials))::A
+    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials,
+                                           commutative))::A
 end
 
 function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
-                              partials) where {F, OP, A}
+                              partials, commutative) where {F, OP, A}
     if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;
             init, neutral,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
             max_blocks=reduce_tuning(backend, A).target_blocks,
-            partials, switch_below=alg.switch_below,
+            partials, switch_below=alg.switch_below, commutative,
         )
     else
         # (behind a barrier: where `alg` is not inferred, e.g. a non-constant global, inference
