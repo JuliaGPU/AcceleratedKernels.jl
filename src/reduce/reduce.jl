@@ -362,8 +362,9 @@ function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neut
     end
     _check_acctype(op, f, A)
 
-    # The result, `op(init, partial)` or `partial`, has the accumulator type
-    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials))
+    # The result, `op(init, partial)` or `partial`, has the accumulator type (asserted, as the
+    # threaded reduction is not inferred)
+    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials))::A
 end
 
 function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
@@ -377,7 +378,10 @@ function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, 
             partials, switch_below=alg.switch_below,
         )
     else
-        mapreduce_1d_cpu(
+        # (behind a barrier: where `alg` is not inferred, e.g. a non-constant global, inference
+        # would otherwise take this path for device arrays too, and through GPUArrays' `mapreduce`
+        # of its host reductions recurse into `mapreduce` with ever more wrapped operators)
+        Base.inferencebarrier(mapreduce_1d_cpu)(
             f, op, src, backend;
             init, neutral,
             max_tasks=alg.max_tasks, min_elems=alg.min_elems,
