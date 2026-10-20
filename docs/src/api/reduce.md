@@ -9,9 +9,10 @@ Apply a custom binary operator reduction on all elements in an iterable; can be 
 AcceleratedKernels.reduce
 ```
 
-The operator must be associative and commutative: like every GPU reduction, AcceleratedKernels
-combines elements in an order that depends on the algorithm and its settings, not in element
-order. `init` is optional and applied exactly once; without it, an empty reduction is an error,
+The operator must be associative, and by default commutative: as CUB's reductions do,
+AcceleratedKernels then combines elements in an order that depends on the algorithm and its
+settings, not in element order. Pass `commutative=false` for operators such as matrix products,
+to combine the elements in their order. `init` is optional and applied exactly once; without it, an empty reduction is an error,
 except for `sum`, `prod` and `count`, and operators without a known neutral element need none.
 Results have the accumulator type, which `acctype` can set (see
 [`mapreducedim!`](@ref AcceleratedKernels.mapreducedim!) for the contract, and
@@ -22,6 +23,7 @@ AK.sum(CuArray(Int32[]))                # 0, an Int
 AK.minimum(CuArray(Int32[]))            # an ArgumentError
 AK.reduce((a, b) -> a + b, v)           # no neutral element needed
 AK.reduce(+, v; init=10)                # init is added exactly once
+AK.reduce(*, matrices; commutative=false)   # products in element order
 AK.sum(CuArray(rand(Float32, 10^6)); acctype=Float64)   # summed in Float64
 ```
 

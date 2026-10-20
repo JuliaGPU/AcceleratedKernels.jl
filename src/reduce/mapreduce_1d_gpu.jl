@@ -72,6 +72,7 @@ function mapreduce_1d_gpu(
     max_blocks::Int,
     partials::Union{Nothing, AbstractArray},
     switch_below::Int,
+    commutative::Bool=true,
     dst::Union{Nothing, AbstractArray}=nothing,
 ) where {F, OP}
     @argcheck 1 <= block_size <= 1024
@@ -95,8 +96,6 @@ function mapreduce_1d_gpu(
         end
     end
 
-    kernel! = _mapreduce_block!(backend, block_size)
-    NI, K = Val(block_size), Val(items_per_thread)
     # (later passes see the source as a view, so use one for the first pass too)
     src_view = _mapreduce_1d_src_view(src)
     blocks = _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
@@ -105,24 +104,52 @@ function mapreduce_1d_gpu(
     # slot after the first pass's partials, for the host
     last_dst, last_init = dst === nothing ?
         (@view(partials[blocks + 1:blocks + 1]), _NoFinish()) : (dst, init)
+    buffer = commutative ? nothing : _mapreduce_1d_buffer(src)
     if blocks == 1
-        Base.inferencebarrier(kernel!)(src_view, last_dst, f, op, neutral, last_init, 1, NI, K;
-                                       ndrange=(block_size,))
+        _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view,
+                            last_dst, f, op, neutral, last_init, 1; buffer)
     else
         p = @view partials[1:blocks]
-        Base.inferencebarrier(kernel!)(src_view, p, f, op, neutral, _NoFinish(), blocks, NI, K;
-                                       ndrange=(block_size * blocks,))
+        _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view, p,
+                            f, op, neutral, _NoFinish(), blocks; buffer)
         if dst === nothing && blocks < switch_below
             return _finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=neutral))
         end
         # (the second pass reads the partials in unrolled steps of up to 16 loads per thread: in
         # one step for the default settings)
-        K2 = Val(clamp(cld(max_blocks, block_size), 1, 16))
-        Base.inferencebarrier(kernel!)(p, last_dst, _Partials(), op, neutral, last_init, 1,
-                                       NI, K2; ndrange=(block_size,))
+        _mapreduce_1d_pass!(commutative, backend, block_size,
+                            clamp(cld(max_blocks, block_size), 1, 16), p, last_dst,
+                            _Partials(), op, neutral, last_init, 1)
     end
     dst === nothing || return dst
     return _finish(op, init, nothing, 0, @allowscalar(last_dst[1]))
+end
+
+# A pass of `blocks` blocks over the linearly indexed `src`, each storing a partial result in
+# `dst`: with the strided kernel, or in element order, reading `buffer` (see
+# `_mapreduce_1d_buffer`) where one is given
+function _mapreduce_1d_pass!(commutative::Bool, backend, block_size, items_per_thread, src, dst,
+                             f::F, op::OP, neutral, init, blocks; buffer=nothing) where {F, OP}
+    if commutative
+        kernel! = _mapreduce_block!(backend, block_size)
+        Base.inferencebarrier(kernel!)(src, dst, f, op, neutral, init, blocks, Val(block_size),
+                                       Val(items_per_thread); ndrange=(block_size * blocks,))
+    else
+        len = length(src)
+        src, base_offset = something(buffer, (src, 0))
+        _mapreduce_ordered_pass!(backend, block_size, items_per_thread, src, dst, f, op,
+                                 neutral, init, base_offset, (), (), (1,), (len,), 1, len, blocks;
+                                 dense_buffer=buffer !== nothing)
+    end
+end
+
+# A contiguous source as `(buffer, base_offset)`, its elements' dense buffer and their offset in
+# it, which the ordered kernel reads with vector loads; `nothing` for other sources
+function _mapreduce_1d_buffer(src)
+    src isa AbstractArray || return nothing
+    layout = _mapreduce_strided_layout(src)
+    layout !== nothing && layout[3] == _mapreduce_dense_strides(size(src)) || return nothing
+    return layout[1], layout[2]
 end
 
 _host_copy(src::AbstractArray) = Array(src)

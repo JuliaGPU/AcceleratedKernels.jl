@@ -78,8 +78,8 @@ _acctype(op, ::Type, ::Type, acctype) =
 
 # A partial result of a reduction whose operator has no known neutral element. It starts out
 # empty and takes its first value from `Base.mapreduce_first`; combining with an empty lane
-# returns the other operand. For associative and commutative operators this gives the same result
-# as seeding with a neutral element.
+# returns the other operand, keeping the order of the operands. For associative operators this
+# gives the same result as seeding with a neutral element.
 #
 # An empty lane of a bits type (every lane kernels see) holds zero bits; one of another type leaves
 # the value undefined, which is how it is recognised.
