@@ -996,9 +996,34 @@ end
     end
 end
 
+# Aligned load of `W` consecutive elements as one LLVM vector (`load <W x T>, align W*sizeof(T)`),
+# without depending on SIMD.jl. Julia 1.12 (LLVM 17+) passes `LLVMPtr` as an opaque `ptr`; older
+# versions pass it as `i8*`, which needs a bitcast to the vector pointer type.
+@generated function _vloada(::Val{W}, ptr::Core.LLVMPtr{T, AS}) where {W, T, AS}
+    lt = T === Float32 ? "float" : T === Float64 ? "double" : "i$(8 * sizeof(T))"
+    vt = "<$W x $lt>"
+    align = W * sizeof(T)
+    ir = @static if VERSION >= v"1.12-"
+        """
+        %res = load $vt, ptr addrspace($AS) %0, align $align
+        ret $vt %res
+        """
+    else
+        """
+        %ptr = bitcast i8 addrspace($AS)* %0 to $vt addrspace($AS)*
+        %res = load $vt, $vt addrspace($AS)* %ptr, align $align
+        ret $vt %res
+        """
+    end
+    return quote
+        $(Expr(:meta, :inline))
+        Base.llvmcall($ir, NTuple{W, Core.VecElement{T}}, Tuple{Core.LLVMPtr{T, AS}}, ptr)
+    end
+end
+
 # Fold a vector into the thread-local accumulator. `W` is known at compile time.
-@inline _acc_lanes(f, op, acc, v::Vec{W}) where {W} =
-    foldl(op, ntuple(k -> f(@inbounds v[k]), Val(W)); init = acc)
+@inline _acc_lanes(f, op, acc, v::NTuple{W, Core.VecElement}) where {W} =
+    foldl(op, ntuple(k -> f(@inbounds v[k].value), Val(W)); init = acc)
 
 @inline _unval(::Val{V}) where {V} = V
 
@@ -1029,7 +1054,7 @@ end
         jw      = UInt32(ithread) * UInt32(W)
         stridew = UInt32(N) * UInt32(W)
         while jw + UInt32(W - 1) < rs
-            v = vloada(Vec{W, T}, pointer(src, input_base + jw + 0x1))
+            v = _vloada(Val(W), pointer(src, input_base + jw + 0x1))
             acc = _acc_lanes(f_lanes, op_lanes, acc, v)
             jw += stridew
         end

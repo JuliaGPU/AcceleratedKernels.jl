@@ -19,7 +19,6 @@ using KernelAbstractions: @context
 @static if isdefined(KernelAbstractions, :KernelInterface)
     const KI = KernelAbstractions.KernelInterface
 end
-using SIMD: Vec, vloada
 import UnsafeAtomics
 
 
