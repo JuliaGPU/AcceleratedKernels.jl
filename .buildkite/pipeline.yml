@@ -27,7 +27,7 @@ steps:
       build.message !~ /\[skip [^\]]*(tests|cuda)/ &&
       (build.message =~ /\[only [^\]]*(tests|cuda)/ ||
        build.message !~ /\[only / && !build.pull_request.draft)
-    timeout_in_minutes: 60
+    timeout_in_minutes: 30
 
   # AMDGPU
   - label: "AMDGPU - Julia {{matrix.version}}"
@@ -53,7 +53,7 @@ steps:
       build.message !~ /\[skip [^\]]*(tests|amdgpu)/ &&
       (build.message =~ /\[only [^\]]*(tests|amdgpu)/ ||
        build.message !~ /\[only / && !build.pull_request.draft)
-    timeout_in_minutes: 60
+    timeout_in_minutes: 30
 
   # oneAPI
   - label: "oneAPI - Julia {{matrix.version}}"
@@ -78,7 +78,7 @@ steps:
       build.message !~ /\[skip [^\]]*(tests|oneapi)/ &&
       (build.message =~ /\[only [^\]]*(tests|oneapi)/ ||
        build.message !~ /\[only / && !build.pull_request.draft)
-    timeout_in_minutes: 60
+    timeout_in_minutes: 30
 
   # Metal
   - label: "Metal - Julia {{matrix.version}}"
@@ -103,7 +103,7 @@ steps:
       build.message !~ /\[skip [^\]]*(tests|metal)/ &&
       (build.message =~ /\[only [^\]]*(tests|metal)/ ||
        build.message !~ /\[only / && !build.pull_request.draft)
-    timeout_in_minutes: 60
+    timeout_in_minutes: 30
 
 env:
   JULIA_PKG_PRECOMPILE_AUTO: false
