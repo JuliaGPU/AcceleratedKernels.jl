@@ -1,6 +1,6 @@
 name = "AcceleratedKernels"
 uuid = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
-version = "0.5.8"
+version = "0.5.9"
 authors = ["Andrei-Leonard Nicusan <leonard@evophase.co.uk> and contributors"]
 
 [deps]
@@ -36,7 +36,7 @@ GPUArraysCore = "0.2.1"
 KernelAbstractions = "0.9.43, 0.10"
 Markdown = "1"
 Metal = "1.10.1"
-OpenCL = "0.10"
+OpenCL = "0.10, 0.11"
 UnsafeAtomics = "0.3, 0.4"
 julia = "1.10"
 oneAPI = "1, 2"
