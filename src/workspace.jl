@@ -9,7 +9,10 @@ struct _Buf{T, N}
     dims::NTuple{N, Int}
 end
 _buffer(::Type{T}, dims::Integer...) where {T} = _Buf{T, length(dims)}(Int.(dims))
-_buffer(::Type{T}, dims::Tuple) where {T} = _Buf{T, length(dims)}(Int.(dims))
+# (a buffer that is not `needed` for this call keeps its place without elements, so that an
+# operation lists the same buffers for every length, and its plan infers)
+_buffer(::Type{T}, dims::Tuple; needed::Bool=true) where {T} =
+    _Buf{T, length(dims)}(needed ? Int.(dims) : Base.map(_ -> 0, dims))
 Base.show(io::IO, b::_Buf{T}) where {T} = print(io, (T, b.dims))
 
 # The public form of the sizes: `(eltype, dims)` pairs

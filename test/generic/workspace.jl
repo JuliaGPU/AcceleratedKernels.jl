@@ -51,6 +51,31 @@
         @test Base.all(k -> haskey(sizes, k), (:temp, :hist, :scan, :key_range))
         @test sizes.temp == (Float32, (10_000,))
         @test AK.workspace_size(AK.sort!, v; alg=AK.BitonicSort()) == (;)
+        # Merge sort lists the same buffers for every length, empty where the call does not need
+        # them: tiles that need no merging need no swap buffers, the low-memory permutation copies
+        # no keys
+        alg = AK.MergeSort(block_size=64)
+        @test AK.workspace_size(AK.sort!, v[1:100]; alg) == (; temp=(Float32, (0,)))
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int, 100), v[1:100]; alg) ==
+              (; keys=(Float32, (100,)), temp_keys=(Float32, (0,)), temp_values=(Int, (0,)))
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int), v; alg=AK.MergeSort(lowmem=true)) ==
+              (; keys=(Float32, (0,)), temp_keys=(Float32, (0,)), temp_values=(Int, (10_000,)))
+        # ... with which the calls run, of empty arrays too
+        for n in (0, 1, 100, 1000)
+            h = rand(Float32, n)
+            hk = rand(Int32(1):Int32(9), n)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg)) == sort(h)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, by=x -> -x)) ==
+                  sort(h; rev=true)
+            for lowmem in (false, true)
+                x = array_from_host(h)
+                a = AK.MergeSort(; block_size=64, lowmem)
+                @test Array(with_workspace(AK.sortperm!, similar(x, Int), x; alg=a)) == sortperm(h)
+            end
+            ks, vs = with_workspace(AK.sort_by_key!, array_from_host(hk), array_from_host(1:n, Int);
+                                    alg)
+            @test Array(ks) == sort(hk) && Array(vs) == sortperm(hk)
+        end
         # A whole-array reduction keeps the partial results of its first pass, at most
         # `target_blocks`, and a slot for the last one
         @test haskey(AK.workspace_size(AK.sum, v; alg=AK.BlockReduce()), :partials)
@@ -211,6 +236,20 @@ end
     @test only(Base.return_types(x -> AK.reduce(+, x), (V,))) === Float32
     @test only(Base.return_types(x -> AK.sum(x; dims=1), (V,))) <: AbstractVector{Float32}
     @test only(Base.return_types(x -> AK.accumulate(+, x), (V,))) <: AbstractVector{Float32}
+    # ... and so do merge sort's plans, whatever the length and `lowmem`, and its workspaces where
+    # the backend's allocations infer (OpenCL.jl chooses their memory at run time)
+    infers(f, types...) = isconcretetype(only(Base.return_types(f, types)))
+    I = typeof(similar(v, Int))
+    allocates = infers(b -> KernelAbstractions.allocate(b, Float32, (1,)), typeof(BACKEND))
+    for g in (allocates ? (AK._plan, AK.workspace) : (AK._plan,))
+        TEST_KERNELS || continue
+        @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort()), V)
+        @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort(), by=abs), V)
+        @test infers((ix, x, lowmem) -> g(AK.sortperm!, ix, x; alg=AK.MergeSort(; lowmem)),
+                     I, V, Bool)
+        @test infers((x, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem)), V, Bool)
+        @test infers((k, x) -> g(AK.sort_by_key!, k, x; alg=AK.MergeSort()), V, I)
+    end
 end
 
 
