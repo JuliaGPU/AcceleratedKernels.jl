@@ -221,7 +221,11 @@ end
 
     # MergeSort
     @test rejects(AK.MergeSort(block_size=0))
-    @test !rejects(AK.MergeSort(block_size=100))                    # any positive size
+    @test rejects(AK.MergeSort(block_size=100))
+    with_tuning(AK.SortTuning(merge_block_size=96)) do             # tuned sizes are checked too
+        @test rejects(AK.MergeSort())
+        @test rejects(AK.Auto(); perm=true)
+    end
     @test rejects(AK.MergeSort(lowmem=true))                        # sort!
     @test rejects(AK.MergeSort(lowmem=true); pairs=true)            # sort_by_key!
     @test !rejects(AK.MergeSort(lowmem=true); perm=true)
