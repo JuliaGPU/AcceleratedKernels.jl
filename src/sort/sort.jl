@@ -15,8 +15,8 @@ include("bitonic_sort.jl")
 
 GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
 kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
-(any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
-passes merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
+(a power of two) sorts a tile of `2 * block_size` elements in local memory, then global passes
+merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
 the cost of reading them from global memory in every comparison; other operations reject it.
 """
 Base.@kwdef struct MergeSort <: SortAlgorithm

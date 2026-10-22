@@ -179,7 +179,7 @@ function _merge_sort_by_key!(
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
-    @argcheck block_size > 0
+    @argcheck block_size > 0 && ispow2(block_size)
     @argcheck length(keys) == length(values)
     layout = slice_layout(keys, dims)
     if !(dims isa Colon)

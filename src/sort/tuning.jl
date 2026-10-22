@@ -102,7 +102,7 @@ _rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 # Domain checks of explicitly set fields, before any arithmetic uses them
 
-_checkdomain(a::MergeSort) = _check_positive(a, :block_size)
+_checkdomain(a::MergeSort) = _check_pow2(a, :block_size)
 
 function _checkdomain(a::RadixSort)
     # Bounded, so that the local-memory footprints computed from them cannot overflow

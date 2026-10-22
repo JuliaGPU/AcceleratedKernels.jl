@@ -278,6 +278,11 @@ end
         @test_throws ArgumentError AK.sortperm!(ix, v; alg=AK.RadixSort())
         @test_throws ArgumentError AK.sortperm!(ix, v; alg=AK.BitonicSort())
         @test_throws ArgumentError AK.sort!(copy(v); alg=AK.MergeSort(lowmem=true))
+        for alg in (AK.MergeSort(block_size=3), AK.MergeSort(block_size=96))
+            @test_throws ArgumentError AK.sort!(copy(v); alg)
+            @test_throws ArgumentError AK.sortperm!(ix, v; alg)
+            @test_throws ArgumentError AK.sort_by_key!(copy(v), copy(ix); alg)
+        end
     end
 
     if AK._runs_threads(BACKEND)
