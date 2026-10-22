@@ -242,6 +242,9 @@ end
     I = typeof(similar(v, Int))
     allocates = infers(b -> KernelAbstractions.allocate(b, Float32, (1,)), typeof(BACKEND))
     for g in (allocates ? (AK._plan, AK.workspace) : (AK._plan,))
+        # (as are those of `Auto()` for a permutation or a key/value sort, on every backend)
+        @test infers((ix, x) -> g(AK.sortperm!, ix, x), I, V)
+        @test infers((k, x) -> g(AK.sort_by_key!, k, x), V, I)
         TEST_KERNELS || continue
         @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort()), V)
         @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort(), by=abs), V)
