@@ -60,6 +60,9 @@
               (; keys=(Float32, (100,)), temp_keys=(Float32, (0,)), temp_values=(Int, (0,)))
         @test AK.workspace_size(AK.sortperm!, similar(v, Int), v; alg=AK.MergeSort(lowmem=true)) ==
               (; keys=(Float32, (0,)), temp_keys=(Float32, (0,)), temp_values=(Int, (10_000,)))
+        # (of the array's shape along `dims`)
+        @test AK.workspace_size(AK.sort!, reshape(v, 100, 100); alg, dims=1) ==
+              (; temp=(Float32, (0, 0)))
         # ... with which the calls run, of empty arrays too
         for n in (0, 1, 100, 1000)
             h = rand(Float32, n)
@@ -75,6 +78,23 @@
             ks, vs = with_workspace(AK.sort_by_key!, array_from_host(hk), array_from_host(1:n, Int);
                                     alg)
             @test Array(ks) == sort(hk) && Array(vs) == sortperm(hk)
+        end
+        # ... and along `dims`, with slices that need no merging and slices that do
+        for (shape, dims) in (((100, 3), 1), ((3, 300), 2))
+            h = rand(Float32, shape)
+            hk = rand(Int32(1):Int32(9), shape)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, dims)) == sort(h; dims)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, dims, by=x -> -x)) ==
+                  sort(h; dims, rev=true)
+            for lowmem in (false, true)
+                x = array_from_host(h)
+                a = AK.MergeSort(; block_size=64, lowmem)
+                @test Array(with_workspace(AK.sortperm!, similar(x, Int), x; alg=a, dims)) ==
+                      sortperm(h; dims)
+            end
+            ks, vs = with_workspace(AK.sort_by_key!, array_from_host(hk),
+                                    array_from_host(reshape(1:length(hk), shape), Int); alg, dims)
+            @test Array(ks) == sort(hk; dims) && Array(vs) == sortperm(hk; dims)
         end
         # A whole-array reduction keeps the partial results of its first pass, at most
         # `target_blocks`, and a slot for the last one
@@ -240,6 +260,7 @@ end
     # the backend's allocations infer (OpenCL.jl chooses their memory at run time)
     infers(f, types...) = isconcretetype(only(Base.return_types(f, types)))
     I = typeof(similar(v, Int))
+    M = typeof(reshape(v, 100, 100))
     allocates = infers(b -> KernelAbstractions.allocate(b, Float32, (1,)), typeof(BACKEND))
     for g in (allocates ? (AK._plan, AK.workspace) : (AK._plan,))
         # (as are those of `Auto()` for a permutation or a key/value sort, on every backend)
@@ -252,6 +273,9 @@ end
                      I, V, Bool)
         @test infers((x, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem)), V, Bool)
         @test infers((k, x) -> g(AK.sort_by_key!, k, x; alg=AK.MergeSort()), V, I)
+        @test infers((x, dims) -> g(AK.sort!, x; alg=AK.MergeSort(), dims), M, Int)
+        @test infers((x, dims, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem), dims),
+                     M, Int, Bool)
     end
 end
 

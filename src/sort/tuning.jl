@@ -60,9 +60,9 @@ _sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!
 
 Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `backend`, for
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
-concrete algorithm with every field set, or throws an `ArgumentError`. Constant `perm` and
-`pairs` are propagated, so that `Auto()` infers as the one algorithm a permutation or a key/value
-sort can use on the backend, and so do the plans and workspaces of `sortperm!` and `sort_by_key!`.
+concrete algorithm with every field set, or throws an `ArgumentError`. `perm` and `pairs` are
+constant-propagated so that, with `Auto()`, the algorithm of `sortperm!` and `sort_by_key!` infers
+as the only one they can use on the backend, and their plans and workspaces infer with it.
 """
 Base.@constprop :aggressive function _resolve_sort(
     alg::Algorithm, backend::Backend, v::AbstractArray, dims, ord::Base.Order.Ordering;
