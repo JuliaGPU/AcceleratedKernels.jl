@@ -146,13 +146,15 @@ end
 _sort_plan(a, v, backend, dims, by) = _sort_sizes(a, v, backend, dims, by), (;)
 _sort_plan(a::RadixSort, v, backend, dims, by) = _radix_plan(a, v, backend, dims)
 
+# Merge sort lists the same buffers for every length, without elements where the call does not
+# need them, so that its plans infer: the swap buffer of the global passes, or the keys `by`
+# computes, sorted carrying the elements along
 function _sort_sizes(a::MergeSort, v, backend, dims, by)
-    layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return (;)
-    by === identity || return (; keys=_buffer(Base.promote_op(by, eltype(v)), size(v)),
-                                 _merge_by_key_sizes(a, layout, size(v), Base.promote_op(by, eltype(v)),
-                                                     size(v), eltype(v))...)
-    return layout.len > 2 * a.block_size ? (; temp=_buffer(eltype(v), size(v))) : (;)
+    len = _merge_len(v, dims)
+    by === identity && return (; temp=_buffer(eltype(v), size(v); needed=len > 2 * a.block_size))
+    K = Base.promote_op(by, eltype(v))
+    return (; keys=_buffer(K, size(v); needed=len > 1),
+            _merge_by_key_sizes(a, len, size(v), K, size(v), eltype(v))...)
 end
 _sort_sizes(a::BitonicSort, v, backend, dims, by) = (;)
 _sort_sizes(a::CPUThreads.SampleSort, v, backend, dims, by) =
@@ -266,12 +268,14 @@ end
 
 # The scratch of `sortperm!` with each algorithm
 function _sortperm_sizes(a::MergeSort, ix, v, dims)
-    layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return (;)
-    a.lowmem && return layout.len > 2 * a.block_size ? (; temp=_buffer(eltype(ix), size(ix))) : (;)
-    # The keys are sorted in a copy, carrying the indices along
-    return (; keys=_buffer(eltype(v), size(v)),
-            _merge_by_key_sizes(a, layout, size(v), eltype(v), size(ix), eltype(ix))...)
+    len = _merge_len(v, dims)
+    merges = len > 2 * a.block_size
+    # The keys are sorted in a copy, carrying the indices along (`_merge_by_key_sizes`). The
+    # low-memory path sorts the indices alone: it lists the same buffers, without keys, so that
+    # the plan infers whatever `lowmem` is
+    return (; keys=_buffer(eltype(v), size(v); needed=!a.lowmem && len > 1),
+            temp_keys=_buffer(eltype(v), size(v); needed=!a.lowmem && merges),
+            temp_values=_buffer(eltype(ix), size(ix); needed=merges))
 end
 _sortperm_sizes(a::CPUThreads.SampleSort, ix, v, dims) =
     dims isa Colon ? _sample_sort_sizes(a, eltype(ix), length(ix)) : (;)
@@ -395,11 +399,9 @@ function _sort_by_key_setup(
     return _Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
 end
 
-function _sort_by_key_sizes(a::MergeSort, keys, values, dims)
-    layout = slice_layout(keys, dims)
-    (isempty(keys) || layout.len <= 1) && return (;)
-    return _merge_by_key_sizes(a, layout, size(keys), eltype(keys), size(values), eltype(values))
-end
+_sort_by_key_sizes(a::MergeSort, keys, values, dims) =
+    _merge_by_key_sizes(a, _merge_len(keys, dims), size(keys), eltype(keys), size(values),
+                        eltype(values))
 function _sort_by_key_sizes(a::CPUThreads.SampleSort, keys, values, dims)
     # The sorting permutation (sorted by `_sample_sortperm!` for `dims=:`), and the old keys and
     # values to gather from

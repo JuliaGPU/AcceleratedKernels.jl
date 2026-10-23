@@ -238,8 +238,14 @@ function _merge_sort_by_key!(
 end
 
 
-# The scratch of `_merge_sort_by_key!` over slices `layout` of keys of size `ksize` and type `K`,
-# with values of size `vsize` and type `V`: swap buffers, if the tiles need merging
-_merge_by_key_sizes(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
-    layout.len > 2 * a.block_size ?
-        (; temp_keys=_buffer(K, ksize), temp_values=_buffer(V, vsize)) : (;)
+# The scratch of `_merge_sort_by_key!` over slices of `len` elements (`_merge_len`) of keys of
+# size `ksize` and type `K`, with values of size `vsize` and type `V`: swap buffers, used if the
+# tiles need merging
+function _merge_by_key_sizes(a, len, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V}
+    merges = len > 2 * a.block_size
+    return (; temp_keys=_buffer(K, ksize; needed=merges),
+            temp_values=_buffer(V, vsize; needed=merges))
+end
+
+# The length of the slices that a merge sort of `v` along `dims` sorts (none in an empty array)
+_merge_len(v, dims) = isempty(v) ? 0 : slice_layout(v, dims).len

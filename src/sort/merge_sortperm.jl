@@ -79,7 +79,7 @@ function _merge_sortperm_lowmem!(
     size_group = half_size_group * 2
     if len > half_size_group
         p1 = ix
-        p2 = bufs.temp
+        p2 = bufs.temp_values
 
         kernel! = _merge_sort_global!(backend, block_size)
 

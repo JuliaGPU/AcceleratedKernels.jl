@@ -60,10 +60,14 @@ _sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!
 
 Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `backend`, for
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
-concrete algorithm with every field set, or throws an `ArgumentError`.
+concrete algorithm with every field set, or throws an `ArgumentError`. `perm` and `pairs` are
+constant-propagated so that, with `Auto()`, the algorithm of `sortperm!` and `sort_by_key!` infers
+as the only one they can use on the backend, and their plans and workspaces infer with it.
 """
-function _resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
-                       ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
+Base.@constprop :aggressive function _resolve_sort(
+    alg::Algorithm, backend::Backend, v::AbstractArray, dims, ord::Base.Order.Ordering;
+    perm::Bool=false, pairs::Bool=false,
+)
     T = eltype(v)
     layout = slice_layout(v, dims)
     _checkdomain(alg)
