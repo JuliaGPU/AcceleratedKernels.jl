@@ -172,11 +172,12 @@ function reverse!(
     @argcheck length(dst) == length(src)
     length(src) == 0 && return dst
 
-    hi_src = lastindex(src)
-    lo_dst = firstindex(dst)
+    # In linear order, which arrays with Cartesian indices (a strided view, a lazy array) support
+    lo_src = firstindex(src)
+    hi_dst = lastindex(dst)
 
-    _foreachindex(eachindex(src), backend; launch...) do i
-        @inbounds dst[lo_dst + (hi_src - i)] = src[i]
+    _foreachindex(Base.OneTo(length(src)), backend; launch...) do k
+        @inbounds dst[hi_dst - k + 1] = src[lo_src + k - 1]
     end
 
     dst
