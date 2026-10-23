@@ -44,7 +44,7 @@
         acc = neutral
         if W > 0 && (tile + 1) * tile_size <= reduce_size
             for k in 0x0:W:(K - 0x1)
-                v = vloada(Vec{W, eltype(src)}, pointer(src, input_base + run + k + 0x1))
+                v = _vloada(Val(W), pointer(src, input_base + run + k + 0x1))
                 acc = _acc_lanes(f_lanes, op_lanes, acc, v)
             end
         elseif (tile + 1) * tile_size <= reduce_size
