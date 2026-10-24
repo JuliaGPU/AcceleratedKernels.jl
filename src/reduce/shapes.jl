@@ -95,7 +95,7 @@ split_groups(shape) = shape isa Union{ByBlocks, Columns, Ordered} ? shape.groups
 #   - outputs in runs of contiguous ones, each reducing elements a stride apart: see
 #     `strided_shape`, where it takes them;
 #   - at least FEW_OUTPUTS outputs, each reducing a run of consecutive elements of a length the
-#     tuning's `segments_*` settings allow: `ByLanes`;
+#     tuning's `lanes_*` settings allow: `ByLanes`;
 #   - at least as many outputs as elements each: `ByThread`, or `ByBlock` where that reads
 #     with a stride or fills too few blocks (see below);
 #   - fewer than FEW_OUTPUTS outputs: `ByBlocks`, its blocks per output launching about the
@@ -119,9 +119,9 @@ function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
     # too long for the tuning's bytes per lane keep a block per output, which reads them with
     # vector loads.
     if single_reduce && rstrides[1] == 1 && dst_size >= FEW_OUTPUTS &&
-       (t.segments_short_runs || reduce_size >= block_size)
+       (t.lanes_short_runs || reduce_size >= block_size)
         lanes = lanes_per_output(dst_size, reduce_size, block_size)
-        if lanes > 1 && cld(reduce_size, lanes) * accsize(A) <= t.segments_lane_bytes
+        if lanes > 1 && cld(reduce_size, lanes) * accsize(A) <= t.lanes_max_bytes
             return ByLanes(lanes)
         end
     end
@@ -163,8 +163,8 @@ end
 #     block, in one pass;
 #   - else the columns kernel, with tiles of up to 32 outputs of a run, and each output's
 #     reduction split across enough blocks to launch `target_blocks`. A split reduction takes a
-#     second pass, which only reductions of at least the tuning's `columns_min_elements` elements
-#     afford.
+#     second pass, which only reductions of at least the tuning's `columns_split_min_elems`
+#     elements afford.
 # Tiles of 32 outputs that need splitting take longer than the tiled kernel where its 8 outputs
 # per block launch enough blocks, from 1.7 times as long on an RTX 5080 for a 1024×1024 matrix to
 # 2.5 times on an Arc A770; with more outputs, the columns kernel's several loads in flight beat
@@ -186,7 +186,7 @@ function strided_shape(dst_size, reduce_size, run, block_size, t::ReduceTuning,
     run >= COLUMNS_MIN_OUTPUTS && threads >= outputs || return nothing
     lanes = threads ÷ outputs
     groups = clamp(cld(t.target_blocks, tiles), 1, cld(reduce_size, lanes * SPLIT_MIN_ITEMS))
-    groups > 1 && widemul(dst_size, reduce_size) < t.columns_min_elements && return nothing
+    groups > 1 && widemul(dst_size, reduce_size) < t.columns_split_min_elems && return nothing
     return Columns(outputs, groups, false)
 end
 

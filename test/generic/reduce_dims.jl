@@ -766,14 +766,14 @@ if TEST_KERNELS
     @test Set(last.(shapes)) == Set((:ByThread, :ColumnsOrdered, :Ordered))
     t = AK.reduce_tuning(BACKEND, Mat2)
     if AK.resolve_reduce(REDUCE_ALG, BACKEND, Mat2, 1).block_size == 256 &&
-       t.columns_min_elements <= 1 << 18
+       t.columns_split_min_elems <= 1 << 18
         required = Set((:ByThread => :ByThread,
                         :Columns => :ColumnsOrdered, :Tiled => :ColumnsOrdered,
                         :ByBlockStrided => :Ordered, :ByBlock => :Ordered,
                         :ByBlocks => :Ordered))
-        t.segments_short_runs && push!(required, :ByLanes => :ByThread)
+        t.lanes_short_runs && push!(required, :ByLanes => :ByThread)
         # (the (512, 40) case has 256 bytes per lane)
-        t.segments_lane_bytes >= 256 && push!(required, :ByLanes => :Ordered)
+        t.lanes_max_bytes >= 256 && push!(required, :ByLanes => :Ordered)
         @test shapes ⊇ required
     end
 
