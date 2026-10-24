@@ -17,7 +17,7 @@ s = AK.sum(v; init=Int32(0))            # an Int as well
 s = AK.sum(v; acctype=Int32)            # an Int32, summed as Int32
 
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
-s = AK.sum(m; dims=1)                   # row-wise
+s = AK.sum(m; dims=1)                   # column sums, a 1×100_000 MtlArray
 ```
 """
 sum(src::AbstractArray; kwargs...) = reduce_or_empty(zero, Base.add_sum, src; kwargs...)

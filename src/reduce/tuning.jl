@@ -12,7 +12,8 @@ a scalar finish on the host instead once fewer than `switch_below` values remain
 `block_size * items_per_thread` must be between 2 and `typemax(Int32)`. Reductions along `dims`
 choose among several launch shapes by the sizes and strides of the input and output (into a
 single output, that of whole arrays); `items_per_thread` and `switch_below` cannot be set for
-them, and setting either is an `ArgumentError` there.
+them, and setting either is an `ArgumentError` there (they finish on the device, and those that
+read runs of elements per thread take the tuning's `items_per_thread`).
 
 As CUB's reductions, it requires an associative and commutative operator by default: the
 combination order is fixed for a given setting and shape, but it is not the element order. With
@@ -32,8 +33,8 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 [`reduce_tuning`](@ref).
 
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields;
-  `items_per_thread=nothing` chooses it by the size of the accumulator type (see
-  `default_items_per_thread`).
+  `items_per_thread=nothing` chooses it by the size of the accumulator type, enough elements for
+  64 bytes, from 4 to 16.
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.

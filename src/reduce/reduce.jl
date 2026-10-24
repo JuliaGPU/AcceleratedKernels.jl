@@ -33,7 +33,8 @@ include("kernels_nd.jl")
     reduce(op, src::AbstractArray; kwargs...)
 
 Reduce `src` with the binary operator `op`, which must be associative, and commutative unless
-`commutative=false`; the keywords are those of [`mapreduce`](@ref). Equivalent to `mapreduce(identity, op, src; kwargs...)`.
+`commutative=false`; the keywords are those of [`mapreduce`](@ref). Equivalent to
+`mapreduce(identity, op, src; kwargs...)`.
 
 # Examples
 ```julia
@@ -66,25 +67,19 @@ Apply `f` to each element of `src` and reduce the results with the binary operat
 `dims=:` (the default; `nothing` is accepted too) the result is a scalar, returned on the host.
 With `dims` an integer or a collection of integers, the result is a new array on `src`'s backend
 with size 1 along those dimensions; [`mapreducedim!`](@ref) reduces into an existing array
-instead, and states the contract all reductions follow. In short:
+instead.
 
-- `op` must be associative, and commutative unless `commutative=false`, which combines the
-  elements in their order.
-- `init`, when given, is applied exactly once, as `op(init, partial)`, and is the result of an
-  empty reduction. Without `init`, an empty reduction is an `ArgumentError`: of a whole array, and
-  along `dims` of any output whose slice is empty. ([`sum`](@ref), [`prod`](@ref) and
-  [`count`](@ref) give zero or one instead.)
-- The result has the accumulator type: `acctype` when it is given, else the type the fold of `op`
-  settles on from `init`'s type (when given) and the mapped elements; `op(init, partial)` is
-  converted to it. So `AK.sum(Int8[1, 2])` is an `Int`, and `AK.sum(Int8[1 2]; dims=1,
-  init=Int16(0))` an array of `Int`s. A single element has that type too:
-  `AK.reduce((a, b) -> a + b, [true]) === 1`. (An empty reduction returns `init` as it is.)
-- `neutral`, a two-sided identity of `op`, only seeds partial results and never appears in the
-  result. It defaults to `GPUArraysCore.neutral_element(op, T)` where that is defined; for other
-  operators, each partial result starts from its first element instead.
-
-These rules are AcceleratedKernels' own, and differ from Base's in a few places, e.g. for empty
-reductions without `init`; see [Differences from Base](@ref).
+Both follow the contract that [`mapreducedim!`](@ref) states: `op` must be associative, and
+commutative unless `commutative=false`, `neutral` only seeds partial results, and `init`, when
+given, is applied once, as `op(init, partial)`. Here the accumulator type, which the result has,
+is `acctype` when given, else the type the fold of `op` settles on from `init`'s type (when given)
+and the mapped elements: `AK.sum(Int8[1, 2])` is an `Int`, and so is the reduction of a single
+element, `AK.reduce((a, b) -> a + b, [true]) === 1`; `AK.sum(Int8[1 2]; dims=1, init=Int16(0))`
+is an array of `Int`s. An empty reduction gives `init` as it is, and without `init` is an
+`ArgumentError`: of a whole array, and along `dims` of any output whose slice is empty
+([`sum`](@ref), [`prod`](@ref) and [`count`](@ref) give zero or one instead). These rules are
+AcceleratedKernels' own, and differ from Base's in a few places; see
+[Differences from Base](@ref).
 
 Several source arrays with equal axes are reduced without materializing the mapped array
 (`f` takes one argument per array); mismatched axes throw a `DimensionMismatch`. A `Broadcasted`
@@ -111,19 +106,19 @@ v = CuArray{Int16}(rand(1:1000, 100_000))
 vsumsq = AK.mapreduce(x -> Int(x) * x, +, v)
 ```
 
-Computing dimensionwise sums of squares in a 2D matrix:
+Computing the sums of squares of the columns of a matrix:
 ```julia
 import AcceleratedKernels as AK
 using Metal
 
 f(x) = x * x
 m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
-mrowsumsq = AK.mapreduce(f, +, m; dims=1)
+colsumsq = AK.mapreduce(f, +, m; dims=1)        # a 1×100_000 MtlArray
 ```
 
-Computing a two-input dimensional reduction:
+Computing a two-input reduction along `dims`:
 ```julia
-rows = AK.mapreduce((x, y) -> x * y, +, a, b; dims=1)
+colsums = AK.mapreduce((x, y) -> x * y, +, a, b; dims=1)
 ```
 """
 function mapreduce(
@@ -251,7 +246,7 @@ end
 """
     mapreducedim!(
         f, op, R::AbstractArray, src;
-        backend=get_backend(R),
+        backend=nothing,
         init=<none>,
         neutral=nothing,
         overwrite::Bool=false,
@@ -263,43 +258,45 @@ end
 
 Reduce `src` (an array or a `Broadcasted` object) into `R`: the dimensions along which `R` has
 size 1 and `src` does not are reduced, and the others must match (`R` may leave off trailing
-dimensions of size 1). `R` must not alias `src`.
+dimensions of size 1). `R` must not alias `src`. `backend` is derived from `R` and `src`.
 
 This is the contract of every AcceleratedKernels reduction, modelled on CUB's rather than on
-Base's (see [Differences from Base](@ref)):
+Base's (see [Differences from Base](@ref)).
 
-- **Algebra.** `op` must be associative, and by default commutative: as CUB's reductions do, AK
-  then combines elements in an order that depends on the algorithm, its settings and the shape,
-  not in element order. With `commutative=false`, elements are combined in their order (each
-  partial result reduces consecutive elements, and only neighbouring partial results are
-  combined, the earlier on the left), so that operators such as matrix products are reduced
-  correctly; the grouping is still unspecified, as in Base. The GPU kernels that keep the order
-  can be slower, mostly for inputs that fit in the device's cache. Either way the order is fixed
-  for a given setting and shape, so results are reproducible on one device.
-- **Partial results** start from `neutral`, which must be a two-sided identity of `op` and never
-  appears in the result. It defaults to `GPUArraysCore.neutral_element(op, T)` where that is
-  defined; otherwise each partial result starts from its first element,
-  `Base.mapreduce_first(f, op, x)`, so no neutral element is needed.
-- **Accumulator type.** Partial results have one type, and are converted to `eltype(R)` only when
-  stored. It is `acctype` when that is given; otherwise the type the fold of `op` settles on,
-  starting from `eltype(R)` and the mapped elements. Every element is also a one-element partial
-  result, and partial results are combined with each other, so those types are joined in as well
-  (`R`'s values and `init` are applied once, and are not partial results). A sum of `Int8`s
-  accumulates in `Int`, and `Float32`s reduced into a `Float64` array accumulate in `Float64`.
-  An `acctype` that cannot hold the partial results at all is an `ArgumentError`; whether their
-  values fit is the caller's obligation (a value that does not fit throws an `InexactError`,
-  where the backend reports errors thrown in kernels).
-- **Result.** For each output whose slice is not empty, with `partial` its reduction:
-  `R[i] = op(init, partial)` when `init` is given (applied once); else `partial` with
-  `overwrite=true`; else `op(R[i], partial)`, folding into `R`'s previous value as
-  `Base.mapreducedim!` does.
-- **Empty slices.** An output whose slice is empty is set to `init` when that is given, and is
-  otherwise not written, with or without `overwrite`.
-- **Errors.** Mismatched shapes are a `DimensionMismatch`. An `R` that aliases `src`, an `op`
-  that inference shows always throws for these types (when there is something to combine; an
-  explicit `acctype` that `op` cannot combine at all is rejected whatever the input), a
-  non-bits accumulator type for a kernel algorithm, and an algorithm that cannot run on the
-  backend are `ArgumentError`s.
+`op` must be associative, and by default commutative: as CUB's reductions do, AK then combines
+elements in an order that depends on the algorithm, its settings and the shape, not in element
+order. With `commutative=false`, elements are combined in their order (each partial result
+reduces consecutive elements, and only neighbouring partial results are combined, the earlier on
+the left), so that operators such as matrix products are reduced correctly; the grouping is still
+unspecified, as in Base. The GPU kernels that keep the order can be slower, mostly for inputs that
+fit in the device's cache. Either way the order is fixed for a given setting and shape, so
+results are reproducible on one device.
+
+Partial results start from `neutral`, which must be a two-sided identity of `op` and never
+appears in the result. It defaults to `GPUArraysCore.neutral_element(op, T)` where that is
+defined; otherwise each partial result starts from its first element,
+`Base.mapreduce_first(f, op, x)`, so no neutral element is needed.
+
+Partial results have one type, the accumulator type, and are converted to `eltype(R)` only when
+stored. It is `acctype` when that is given; otherwise the type the fold of `op` settles on,
+starting from `eltype(R)` and the mapped elements. Every element is also a one-element partial
+result, and partial results are combined with each other, so those types are joined in as well
+(`R`'s values and `init` are applied once, and are not partial results). A sum of `Int8`s
+accumulates in `Int`, and `Float32`s reduced into a `Float64` array accumulate in `Float64`. An
+`acctype` that cannot hold the partial results at all is an `ArgumentError`; whether their values
+fit is the caller's obligation (a value that does not fit throws an `InexactError`, where the
+backend reports errors thrown in kernels).
+
+For each output whose slice is not empty, with `partial` its reduction, `R[i]` becomes
+`op(init, partial)` when `init` is given (applied once); else `partial` with `overwrite=true`;
+else `op(R[i], partial)`, folding into `R`'s previous value as `Base.mapreducedim!` does. An
+output whose slice is empty is set to `init` when that is given, and is otherwise not written,
+with or without `overwrite`.
+
+Mismatched shapes are a `DimensionMismatch`. An `R` that aliases `src`, an `op` that inference
+shows always throws for these types (when there is something to combine; an explicit `acctype`
+that `op` cannot combine at all is rejected whatever the input), a non-bits accumulator type for
+a kernel algorithm, and an algorithm that cannot run on the backend are `ArgumentError`s.
 
 `workspace` takes the scratch memory of a [`workspace`](@ref) made for the same call.
 
