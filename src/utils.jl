@@ -16,6 +16,19 @@ similar_on(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T} =
 # A copy of `v`, likewise
 copy_on(backend, v) = backendless(v) ? copyto!(similar_on(backend, v), collect(v)) : copy(v)
 
+# The destination of an operation (`what`, for the messages) that writes the elements of `src`
+# to `dst`: `src` itself where the operation runs in place, else an array that does not overlap
+# it, with the same `shape` (`axes`, `size` or `length`)
+function check_dst(dst, src, what; shape=axes, in_place::Bool=true)
+    in_place && dst === src && return nothing
+    Base.mightalias(dst, src) && throw(ArgumentError(in_place ?
+        "the destination of $what must be its source or not overlap it" :
+        "the destination of $what must not overlap its source"))
+    shape(dst) == shape(src) || throw(DimensionMismatch(
+        "the destination of $what must have the source's $shape $(shape(src)), got $(shape(dst))"))
+    nothing
+end
+
 # `A` with axes starting at 1, as the kernels and threaded loops index it, for an `A` whose axes
 # start elsewhere (an `OffsetArray`, for instance), and likewise the arrays of a `Broadcasted`
 # object. The operations pass these on, and keep `A` for their checks.

@@ -100,7 +100,7 @@ function accumulate!(
     workspace=nothing,
     kwargs...
 )
-    check_scan_dst(dst, src)
+    check_dst(dst, src, "a scan")
     s = scan_setup(op, eltype(dst), eltype(src), size(dst),
                    resolve_backend(backend, dst, src); kwargs...)
     scan_run!(op, one_based(dst), one_based(src), s,
@@ -113,18 +113,9 @@ plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
                kwargs...).plan
 function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
               backend=nothing, kwargs...)
-    check_scan_dst(dst, src)
+    check_dst(dst, src, "a scan")
     scan_setup(op, eltype(dst), eltype(src), size(dst),
                resolve_backend(backend, dst, src); kwargs...).plan
-end
-
-function check_scan_dst(dst, src)
-    dst === src && return nothing
-    Base.mightalias(dst, src) && throw(ArgumentError(
-        "the destination of a scan must be its source or not overlap it"))
-    axes(dst) == axes(src) || throw(DimensionMismatch(
-        "the destination of a scan must have the source's axes $(axes(src)), got $(axes(dst))"))
-    nothing
 end
 
 

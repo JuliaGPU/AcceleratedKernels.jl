@@ -145,10 +145,10 @@ end
         min_elems::Int=1,
     ) -> dst
 
-Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` and `src`
-must not alias. With `dims=:` (the default), the whole array is reversed and only the lengths
-must match. With an integer or iterable of distinct dimensions, the sizes must match. `dims=()`
-copies `src` unchanged. Elements are converted to the destination element type on assignment.
+Write the reverse of `src` into `dst` and return `dst`; `src` is left unchanged. `dst` must not
+overlap `src` (an `ArgumentError`). With `dims=:` (the default), the whole array is reversed and
+only the lengths must match; with an integer or iterable of distinct dimensions, the sizes must
+match (else a `DimensionMismatch`). `dims=()` copies `src` unchanged. Elements are converted to the destination element type on assignment.
 `backend` is derived from `dst` and `src`; the other keywords are those of
 [`foreachindex`](@ref).
 """
@@ -164,15 +164,12 @@ function reverse!(
     launch = (; block_size, max_tasks, min_elems)
     check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(src, dims)
+    check_dst(dst, src, "reverse!"; shape=dims isa Colon ? length : size, in_place=false)
+    length(src) == 0 && return dst
     if !(dims isa Colon)
-        @argcheck size(dst) == size(src)
-        length(src) == 0 && return dst
         reverse_dims!(one_based(dst), one_based(src), dims, backend; launch...)
         return dst
     end
-
-    @argcheck length(dst) == length(src)
-    length(src) == 0 && return dst
 
     len = length(src)
     lo_src = firstindex(src)
