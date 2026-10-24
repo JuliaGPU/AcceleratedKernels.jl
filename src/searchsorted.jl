@@ -112,16 +112,8 @@ function searchsortedfirst!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = resolve_backend(backend, ix, v, xs)
-    length(ix) == length(xs) || throw(ArgumentError(
-        "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
-    ord = Base.Order.ord(lt, by, rev, order)
-    # (`ix` and `xs` are paired by position)
-    ix1, xs1 = one_based(ix), one_based(xs)
-    foreachindex_on(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = searchsorted_first(v, xs1[i], firstindex(v), lastindex(v), ord)
-    end
-    ix
+    searchsorted_each!(searchsorted_first, ix, v, xs, resolve_backend(backend, ix, v, xs),
+                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
 end
 
 
@@ -151,14 +143,18 @@ function searchsortedlast!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = resolve_backend(backend, ix, v, xs)
+    searchsorted_each!(searchsorted_last, ix, v, xs, resolve_backend(backend, ix, v, xs),
+                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
+end
+
+# `ix[i] = search(v, xs[i], ...)` for every query
+function searchsorted_each!(search, ix, v, xs, backend, ord; launch...)
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
-    ord = Base.Order.ord(lt, by, rev, order)
     # (`ix` and `xs` are paired by position)
     ix1, xs1 = one_based(ix), one_based(xs)
-    foreachindex_on(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = searchsorted_last(v, xs1[i], firstindex(v), lastindex(v), ord)
+    foreachindex_on(eachindex(xs1), backend; launch...) do i
+        @inbounds ix1[i] = search(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end
