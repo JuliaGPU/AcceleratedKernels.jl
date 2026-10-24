@@ -1,7 +1,7 @@
 function accumulate_1d_cpu!(
     op, v::AbstractArray, backend::Backend, alg::CPUThreads.Partitioned;
     init,
-    neutral,
+    seed,
     inclusive::Bool,
 )
     # Trivial case
@@ -14,34 +14,34 @@ function accumulate_1d_cpu!(
     # resolution checks `min_elems`
     max_tasks, min_elems = alg.max_tasks, alg.min_elems
 
-    seed = _scan_first_seed(v, init, neutral)
-    _, op = seeded_ops(PartialInputs(), op, neutral)
+    start = scan_start(v, init, seed)
+    _, op = seeded_ops(PartialInputs(), op, seed)
 
     if task_count(length(v), max_tasks, min_elems) == 1
-        _accumulate_1d_cpu_section!(op, v; seed, neutral, inclusive)
+        serial_scan!(op, v; start, seed, inclusive)
         return v
     end
 
     # Scan each task's section with the requested inclusivity, seeding only the first one with
-    # `seed`, and save each section's total
+    # `start`, and save each section's total
     tp = TaskPartitioner(length(v), max_tasks, min_elems)
-    shared = Vector{typeof(neutral)}(undef, tp.num_tasks)
+    shared = Vector{typeof(seed)}(undef, tp.num_tasks)
     itask_partition(tp) do itask, irange
-        shared[itask] = _accumulate_1d_cpu_section!(
+        shared[itask] = serial_scan!(
             op, @view(v[irange]);
-            seed=itask == 1 ? seed : neutral,
-            neutral,
+            start=itask == 1 ? start : seed,
+            seed,
             inclusive,
         )
     end
 
     # Now accumulate the totals of each task; the number of tasks is small enough (even for
     # 144-thread HPC nodes) that there is no need to do decoupled lookbacks
-    _accumulate_1d_cpu_section!(op, shared; seed=neutral, neutral, inclusive=true)
+    serial_scan!(op, shared; start=seed, seed, inclusive=true)
 
     # Now prepend the running total of all previous tasks to each element, except in the first
-    # task. An exclusive section starts with its seed, `neutral`, which may be an unset `Optional`
-    # that cannot be stored: its first element is the running total itself.
+    # task. An exclusive section starts from `seed`, which may be an unset `Optional` that cannot
+    # be stored: its first element is the running total itself.
     itask_partition(tp) do itask, irange
         @inbounds begin
             if itask != 1
@@ -50,7 +50,7 @@ function accumulate_1d_cpu!(
                     v[i] = if !inclusive && i == first(irange)
                         lower(eltype(v), carry)
                     else
-                        lower(eltype(v), op(carry, lift(neutral, v[i])))
+                        lower(eltype(v), op(carry, lift(seed, v[i])))
                     end
                 end
             end
@@ -61,13 +61,13 @@ function accumulate_1d_cpu!(
 end
 
 
-# Scan a section sequentially from `seed`, returning its total. `op` combines partial results
-# (`Optional`s when `neutral` is an unset one); elements are lifted to them and stored back lowered.
-function _accumulate_1d_cpu_section!(op, v; seed, neutral, inclusive)
+# Scan a section sequentially from `start`, returning its total. `op` combines partial results
+# (`Optional`s when `seed` is an unset one); elements are lifted to them and stored back lowered.
+function serial_scan!(op, v; start, seed, inclusive)
     @inbounds begin
-        running = seed
+        running = start
         for i in eachindex(v)
-            x = lift(neutral, v[i])
+            x = lift(seed, v[i])
             if inclusive
                 running = op(running, x)
                 store_partial!(v, i, running)

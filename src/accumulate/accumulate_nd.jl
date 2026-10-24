@@ -1,9 +1,9 @@
 function accumulate_nd!(
     op::OP, v::AbstractArray, backend::Backend, alg::Union{SliceScan, CPUThreads.Partitioned};
     src=v,
-    entry=identity,
+    load=identity,
     init,
-    neutral,
+    seed,
     dims::Int,
     inclusive::Bool,
     totals::Union{Nothing, AbstractVector}=nothing,
@@ -21,16 +21,16 @@ function accumulate_nd!(
 
     # Degenerate cases end
 
-    seed = _scan_first_seed(v, init, neutral)
+    start = scan_start(v, init, seed)
     if alg isa CPUThreads.Partitioned
         @argcheck src === v
-        _accumulate_nd_cpu_sections!(op, v; seed, neutral, dims, inclusive,
-                                     max_tasks=alg.max_tasks, min_elems=alg.min_elems)
+        accumulate_nd_threads!(op, v; start, seed, dims, inclusive,
+                               max_tasks=alg.max_tasks, min_elems=alg.min_elems)
     else
-        n_inner, len, n_outer = _slice_extents(vsizes, dims)
+        n_inner, len, n_outer = slice_extents(vsizes, dims)
         t = scan_tuning(backend, eltype(v))
-        _slice_scan!(op, v, backend, alg, t; src, entry, seed, neutral, inclusive, n_inner, len,
-                     n_outer, totals)
+        slice_scan!(op, v, backend, alg, t; src, load, start, seed, inclusive, n_inner, len,
+                    n_outer, totals)
     end
 
     return v
@@ -41,12 +41,12 @@ end
 # of its size (`Base.size_to_strides`), not with `strides(v)`: a wrapper's storage layout, such as a
 # `PermutedDimsArray`'s, differs from its linear indices.
 
-function _accumulate_nd_cpu_sections!(
+function accumulate_nd_threads!(
     op, v::AbstractArray;
-    seed, neutral, dims, inclusive,
+    start, seed, dims, inclusive,
     max_tasks, min_elems,
 )
-    _, op = seeded_ops(PartialInputs(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, seed)
     vsizes = size(v)
     vstrides = Base.size_to_strides(1, vsizes...)
 
@@ -71,10 +71,10 @@ function _accumulate_nd_cpu_sections!(
             end
 
             # Go over each element in the accumulated dimension
-            running = seed
+            running = start
             for i in 0:length_dims - 1
                 v_idx = input_base_idx + i * vstrides[dims]
-                x = lift(neutral, v[v_idx + 1])
+                x = lift(seed, v[v_idx + 1])
                 if inclusive
                     running = op(running, x)
                     v[v_idx + 1] = unwrap(running)
@@ -109,17 +109,17 @@ end
 #
 # When that leaves too few threads or blocks to fill the device, each slice of a large enough
 # array is split into chunks that are scanned independently, in three passes: each chunk is
-# reduced to its total, the totals of each slice are scanned (exclusively, from the scan's seed)
+# reduced to its total, the totals of each slice are scanned (exclusively, from the scan's start)
 # into the carry of each chunk, and each chunk is scanned again from its carry. The totals form
 # an `(n_inner, nchunks, n_outer)` array, scanned along its second dimension by the same means.
 # Reducing first, rather than scanning each chunk and adding the carries afterwards, reads the
 # source twice but writes it once, and leaves the source intact until the last pass, so a scan
-# in place needs no other scratch. Every pass reads the elements as `entry(src[i])`, so a scan
+# in place needs no other scratch. Every pass reads the elements as `load(src[i])`, so a scan
 # out of place needs no copy either. Chunks and carries keep the elements' order, so `op` need
 # not be commutative.
 
 # The extents `(n_inner, len, n_outer)` of an array of size `sz` scanned along `dims`
-_slice_extents(sz::Dims{N}, dims::Int) where {N} =
+slice_extents(sz::Dims{N}, dims::Int) where {N} =
     (Base.prod(ntuple(d -> d < dims ? sz[d] : 1, Val(N))), sz[dims],
      Base.prod(ntuple(d -> d > dims ? sz[d] : 1, Val(N))))
 
@@ -130,15 +130,15 @@ _slice_extents(sz::Dims{N}, dims::Int) where {N} =
 #
 # A split makes chunks of at least two elements (but the last), so that the totals scanned next
 # are fewer than the elements, whatever the settings.
-function _slice_shape(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{S}) where {S}
+function slice_shape(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{S}) where {S}
     nslices = n_inner * n_outer
     max_block, items = a.block_size::Int, a.items_per_thread::Int
     if n_inner == 1 && nslices >= t.target_blocks
         # The most slices whose elements fit the local-memory budget, in a block of at least 32
         # threads (with fewer slices, a block per slice keeps more threads busy)
-        rows = _slice_rows_max(t, S) ÷ len
+        rows = slice_rows_max(t, S) ÷ len
         if rows >= min(32, max_block)
-            return (:rows, min(prevpow(2, rows), max_block), 1, _slice_rows_max(t, S))
+            return (:rows, min(prevpow(2, rows), max_block), 1, slice_rows_max(t, S))
         end
     end
     # Neighbouring slices get a thread each: whole when there are enough of them or they are
@@ -165,71 +165,72 @@ function _slice_shape(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type
 end
 
 # The elements of type `S` that the local memory of a `:rows` block holds
-_slice_rows_max(t::ScanTuning, ::Type{S}) where {S} = t.local_mem_bytes ÷ max(sizeof(S), 1)
+slice_rows_max(t::ScanTuning, ::Type{S}) where {S} = t.local_mem_bytes ÷ max(sizeof(S), 1)
 
 # The number of chunk totals a scan of slices of `len` elements stores, at every level
-function _slice_scratch(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{S}) where {S}
-    _, _, nchunks, _ = _slice_shape(n_inner, len, n_outer, a, t, S)
+function slice_scratch(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{S}) where {S}
+    _, _, nchunks, _ = slice_shape(n_inner, len, n_outer, a, t, S)
     nchunks == 1 && return 0
     n = n_inner * nchunks * n_outer
-    return n + _slice_scratch(n_inner, nchunks, n_outer, a, t, S)
+    return n + slice_scratch(n_inner, nchunks, n_outer, a, t, S)
 end
-_slice_scratch(sz::Dims, dims::Int, a::SliceScan, t::ScanTuning, ::Type{S}) where {S} =
+slice_scratch(sz::Dims, dims::Int, a::SliceScan, t::ScanTuning, ::Type{S}) where {S} =
     dims > length(sz) || Base.prod(sz; init=1) == 0 ? 0 :
-    _slice_scratch(_slice_extents(sz, dims)..., a, t, S)
+    slice_scratch(slice_extents(sz, dims)..., a, t, S)
 
-# Scan the slices of the elements `entry(src[i])` into `v` (`src` may be `v`), as an
+# Scan the slices of the elements `load(src[i])` into `v` (`src` may be `v`), as an
 # `(n_inner, len, n_outer)` array scanned along its second dimension; `totals` holds at least
-# `_slice_scratch` chunk totals after `offset`. (The levels of totals are views of `totals`
+# `slice_scratch` chunk totals after `offset`. (The levels of totals are views of `totals`
 # itself, not of each other, so that every level has the same types.)
-function _slice_scan!(op::OP, v, backend, a::SliceScan, t::ScanTuning;
-                      src=v, entry=identity, seed, neutral, inclusive, n_inner, len, n_outer,
-                      totals, offset=0) where {OP}
+function slice_scan!(op::OP, v, backend, a::SliceScan, t::ScanTuning;
+                     src=v, load=identity, start, seed, inclusive, n_inner, len, n_outer,
+                     totals, offset=0) where {OP}
     kind, block_size, nchunks, per_chunk =
-        _slice_shape(n_inner, len, n_outer, a, t, typeof(neutral))
+        slice_shape(n_inner, len, n_outer, a, t, typeof(seed))
     items = a.items_per_thread
     nslices = n_inner * n_outer
 
     if nchunks == 1
-        _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, seed, neutral,
-                     nothing, nothing, inclusive, n_inner, len, 1, per_chunk, items)
+        slice_pass!(kind, backend, block_size, nslices, v, src, load, op, start, seed,
+                    nothing, nothing, inclusive, n_inner, len, 1, per_chunk, items)
         return v
     end
 
     n = nslices * nchunks
     @argcheck length(totals) >= offset + n
     chunk_totals = @view totals[offset + 1:offset + n]
-    # Each chunk's total, without the seed
-    _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, neutral, neutral, nothing,
-                 chunk_totals, inclusive, n_inner, len, nchunks, per_chunk, items)
-    # Each chunk's carry: the seed, then the totals of the chunks before it
-    _slice_scan!(op, chunk_totals, backend, a, t; seed, neutral, inclusive=false, n_inner,
-                 len=nchunks, n_outer, totals, offset=offset + n)
+    # Each chunk's total, without the start
+    slice_pass!(kind, backend, block_size, nslices, v, src, load, op, seed, seed, nothing,
+                chunk_totals, inclusive, n_inner, len, nchunks, per_chunk, items)
+    # Each chunk's carry: the start, then the totals of the chunks before it
+    slice_scan!(op, chunk_totals, backend, a, t; start, seed, inclusive=false, n_inner,
+                len=nchunks, n_outer, totals, offset=offset + n)
     # Each chunk, from its carry
-    _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op, seed, neutral,
-                 chunk_totals, nothing, inclusive, n_inner, len, nchunks, per_chunk, items)
+    slice_pass!(kind, backend, block_size, nslices, v, src, load, op, start, seed,
+                chunk_totals, nothing, inclusive, n_inner, len, nchunks, per_chunk, items)
     return v
 end
 
-# One pass over all chunks: scan each chunk of `v` from `seed`, or from its carry in `carries`, or
+# One pass over all chunks: scan each chunk of `v` from `start`, or from its carry in `carries`, or
 # when `totals` is given store each chunk's total instead. (The compile-time sizes become `Val`s
 # only at their launch, which takes a runtime dispatch, so that the rest of the scan infers.)
-function _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op::OP, seed, neutral,
-                      carries, totals, inclusive, n_inner, len, nchunks, per_chunk,
-                      items) where {OP}
+function slice_pass!(kind, backend, block_size, nslices, v, src, load, op::OP, start, seed,
+                     carries, totals, inclusive, n_inner, len, nchunks, per_chunk,
+                     items) where {OP}
     if kind === :rows
-        kernel! = _slice_scan_rows!(backend, block_size)
-        kernel!(v, src, entry, op, seed, neutral, inclusive, len, nslices, Val(per_chunk);
+        kernel! = slice_rows_kernel!(backend, block_size)
+        kernel!(v, src, load, op, start, seed, inclusive, len, nslices, Val(per_chunk);
                 ndrange=(block_size * cld(nslices, block_size),))
     elseif kind === :columns
         nthreads = nslices * nchunks
-        kernel! = _slice_scan_columns!(backend, block_size)
-        kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
+        kernel! = slice_columns_kernel!(backend, block_size)
+        kernel!(v, src, load, op, start, seed, carries, totals, inclusive, n_inner, len,
                 nchunks, per_chunk, nthreads; ndrange=(block_size * cld(nthreads, block_size),))
     else
-        kernel! = _slice_scan_tiles!(backend, block_size)
-        kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
-                nchunks, per_chunk, Val(items), scan_subgroup_width(backend, typeof(neutral), block_size);
+        kernel! = slice_tiles_kernel!(backend, block_size)
+        kernel!(v, src, load, op, start, seed, carries, totals, inclusive, n_inner, len,
+                nchunks, per_chunk, Val(items),
+                scan_subgroup_width(backend, typeof(seed), block_size);
                 ndrange=(block_size * nslices * nchunks,))
     end
     return nothing
@@ -237,13 +238,13 @@ end
 
 # One thread per contiguous slice: block `b` stages slices `b * block_size` onwards, the
 # `block_size * len` consecutive elements from `b * block_size * len`, in local memory of `MAX`
-# elements (`_slice_rows_max`, the same for every `len`)
-@kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_rows!(
-    v, src, entry, op, seed, neutral, inclusive, len, nslices, ::Val{MAX},
+# elements (`slice_rows_max`, the same for every `len`)
+@kernel inbounds=true cpu=false unsafe_indices=true function slice_rows_kernel!(
+    v, src, load, op, start, seed, inclusive, len, nslices, ::Val{MAX},
 ) where {MAX}
     @uniform block_size = @groupsize()[1]
-    rows = @localmem typeof(neutral) (MAX,)
-    _, op = seeded_ops(PartialInputs(), op, neutral)
+    rows = @localmem typeof(seed) (MAX,)
+    _, op = seeded_ops(PartialInputs(), op, seed)
 
     iblock = @index(Group, Linear) - 1
     ithread = @index(Local, Linear) - 1
@@ -252,13 +253,13 @@ end
 
     p = ithread
     while p < n
-        rows[p + 1] = lift(neutral, entry(src[offset + p + 1]))
+        rows[p + 1] = lift(seed, load(src[offset + p + 1]))
         p += block_size
     end
     @synchronize()
 
     if ithread * len < n
-        running = seed
+        running = start
         for k in ithread * len:(ithread + 1) * len - 1
             x = rows[k + 1]
             if inclusive
@@ -281,11 +282,11 @@ end
 
 # One thread per chunk of a slice; thread `t` takes chunk `c` of slice `(i, o)` with
 # `t = i + n_inner * (c + nchunks * o)`, the chunk's position in the array of totals
-@kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_columns!(
-    v, src, entry, op, seed, neutral, carries, totals, inclusive,
+@kernel inbounds=true cpu=false unsafe_indices=true function slice_columns_kernel!(
+    v, src, load, op, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
 )
-    _, op = seeded_ops(PartialInputs(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, seed)
     block_size = @groupsize()[1]
     tid = (@index(Group, Linear) - 1) * block_size + (@index(Local, Linear) - 1)
     if tid < nthreads
@@ -297,11 +298,11 @@ end
         k0 = c * chunk_len
         k1 = min(k0 + chunk_len, len)
 
-        running = isnothing(carries) ? seed : carries[tid + 1]
+        running = isnothing(carries) ? start : carries[tid + 1]
         if isnothing(totals)
             for k in k0:k1 - 1
                 idx = base + k * n_inner + 1
-                x = lift(neutral, entry(src[idx]))
+                x = lift(seed, load(src[idx]))
                 if inclusive
                     running = op(running, x)
                     store_partial!(v, idx, running)
@@ -312,7 +313,7 @@ end
             end
         else
             for k in k0:k1 - 1
-                running = op(running, lift(neutral, entry(src[base + k * n_inner + 1])))
+                running = op(running, lift(seed, load(src[base + k * n_inner + 1])))
             end
             totals[tid + 1] = running
         end
@@ -322,14 +323,14 @@ end
 # One block per chunk of a slice, scanning `tiles_per_chunk` tiles of the slice in turn; block `b`
 # takes chunk `c` of slice `(i, o)` with `b = c + nchunks * (i + n_inner * o)`, and the chunk's
 # total or carry is at `i + n_inner * (c + nchunks * o)` in the array of totals
-@kernel inbounds=true cpu=false unsafe_indices=true function _slice_scan_tiles!(
-    v, src, entry, op, seed, neutral, carries, totals, inclusive,
+@kernel inbounds=true cpu=false unsafe_indices=true function slice_tiles_kernel!(
+    v, src, load, op, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
 ) where {ITEMS}
     @uniform block_size = @groupsize()[1]
-    tile = @localmem typeof(neutral) (block_size * ITEMS,)
-    thread_totals = @localmem typeof(neutral) (block_size,)
-    _, op = seeded_ops(PartialInputs(), op, neutral)
+    tile = @localmem typeof(seed) (block_size * ITEMS,)
+    thread_totals = @localmem typeof(seed) (block_size,)
+    _, op = seeded_ops(PartialInputs(), op, seed)
 
     iblock = @index(Group, Linear) - 1
     ithread = @index(Local, Linear) - 1
@@ -341,7 +342,7 @@ end
     tile_len = block_size * ITEMS
     k_end = min((c + 1) * tiles_per_chunk * tile_len, len)
 
-    running = isnothing(carries) ? seed : carries[i + n_inner * (c + nchunks * o) + 1]
+    running = isnothing(carries) ? start : carries[i + n_inner * (c + nchunks * o) + 1]
     k_tile = c * tiles_per_chunk * tile_len
     while k_tile < k_end
         # Load the tile in striped order
@@ -349,15 +350,15 @@ end
         while j < ITEMS
             p = j * block_size + ithread
             k = k_tile + p
-            tile[p + 1] = k < k_end ? lift(neutral, entry(src[base + k * n_inner + 1])) :
-                                      neutral
+            tile[p + 1] = k < k_end ? lift(seed, load(src[base + k * n_inner + 1])) :
+                                      seed
             j += 1
         end
         @synchronize()
 
         # Scan each thread's run of consecutive elements, then the runs' totals
         run = ithread * ITEMS
-        acc = neutral
+        acc = seed
         j = 0
         while j < ITEMS
             acc = op(acc, tile[run + j + 1])
@@ -369,11 +370,11 @@ end
         # it would be first: a floating-point prefix then rounds at its own magnitude, not at
         # the carry's)
         thread_prefix, block_total = block_exclusive_scan!(
-            @context, op, thread_totals, neutral, block_size, ithread, subgroups,
+            @context, op, thread_totals, seed, block_size, ithread, subgroups,
         )
 
         if isnothing(totals)
-            prev = neutral
+            prev = seed
             j = 0
             while j < ITEMS
                 r = tile[run + j + 1]

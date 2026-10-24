@@ -129,7 +129,7 @@ end
 
 # The largest number of items per thread whose tile fits the tuning's local-memory budget. Types
 # without a definite size and block sizes that `check_scan` rejects get a placeholder.
-function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
+function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
     clamp(t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1,
           1, max(t.max_items, 1))
@@ -138,7 +138,7 @@ end
 function fill_defaults(a::A, t::ScanTuning,
                        ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
-    items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
+    items_per_thread = isnothing(a.items_per_thread) ? default_items_per_thread(t, block_size, T) :
                                                        a.items_per_thread
     return A(block_size, items_per_thread)
 end
@@ -149,7 +149,7 @@ fill_defaults(a::Algorithm, t::ScanTuning, T) =
 function check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
     check_fields(a)
     require_kernels(a, backend)
-    _check_scan_eltype(a, T)
+    check_bits_eltype(a, T)
     dims === nothing || throw(ArgumentError(
         "$(algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
     # ScanPrefixes scans its tiles' totals in tiles too, which a tile of one element never shrinks
@@ -160,7 +160,7 @@ end
 function check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
     check_fields(a)
     require_kernels(a, backend)
-    _check_scan_eltype(a, T)
+    check_bits_eltype(a, T)
     dims === nothing && throw(ArgumentError(
         "SliceScan scans along `dims`; scan whole arrays with `ScanPrefixes` or `Auto()`"))
     check_tile(a)
@@ -176,5 +176,5 @@ function check_scan(a::CPUThreads.Partitioned, backend, T, dims)
     nothing
 end
 
-_check_scan_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
+check_bits_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
     "$(algname(a)): the element type $T is not a bits type, which the kernels need"))
