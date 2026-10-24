@@ -1,4 +1,3 @@
-
 @testset "foreachindex" begin
     Random.seed!(0)
 
@@ -54,7 +53,7 @@
     end
     f3(x)
     @test Array(x) == [1:500; zeros(Int, 500)]
-    # ... without one, it runs on the host
+    # Without a backend, the loop over a range runs on the host
     y = zeros(Int, 10)
     AK.foreachindex(i -> (y[i] = i), 1:10)
     @test y == 1:10

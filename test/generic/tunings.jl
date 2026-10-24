@@ -23,6 +23,7 @@ const FWD = Base.Order.Forward
     end
 end
 
+
 @testset "tunings: reductions, scans, findall, any and all" begin
     kernels = AK.runs_kernels(BACKEND)
     for T in (Bool, TUNING_ELTYPES...)

@@ -1,7 +1,4 @@
-# Tests that do not choose an algorithm use `REDUCE_ALG`: `Auto()`, except in the `--cpu-ka`
-# configuration, whose point is to run AK's kernels on the host backend. `reduce_alg` builds an
-# explicitly tuned algorithm for the configuration from both kinds of settings.
-REDUCE_ALG = HOST_KERNELS ? AK.BlockReduce() : AK.Auto()
+REDUCE_ALG = default_alg(AK.BlockReduce())
 reduce_alg(; block_size=nothing, items_per_thread=nothing, switch_below=nothing,
            max_tasks=nothing, min_elems=nothing) =
     TEST_KERNELS ? AK.BlockReduce(; block_size, items_per_thread, switch_below) :
@@ -289,7 +286,7 @@ end
             @test T <: AbstractFloat ? rw ≈ sum(wh; dims=1) : rw == sum(wh; dims=1)
         end
 
-        # ... with a mapping function, and with neutral elements other than zero
+        # A mapping function, and neutral elements other than zero
         fh = rand(Float32, 256, 1024)
         fv = array_from_host(fh)
         @test Array(AK.mapreduce(abs2, +, fv; alg=REDUCE_ALG, init=0.0f0, dims=1)) ≈
@@ -333,14 +330,13 @@ end
     end
 
     if !TEST_KERNELS
-        # The CPU fallback should not require strided storage.
+        # A source without strided storage
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.reduce(+, vh; alg=REDUCE_ALG, backend=BACKEND, init=0, dims=(1,2))) ==
             sum(vh; init=0, dims=(1,2))
     else
-        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
-        # fast path over their dense parent buffer; the offset view exercises a nonzero
-        # base offset.
+        # Strided views, adjoints and permuted dimensions of a dense array, read through its
+        # buffer; the second view starts at an offset
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.reduce(+, @view(v[:, 1:2:end]); alg=REDUCE_ALG, init=Int32(0), dims=2)) ==
@@ -744,8 +740,8 @@ end
 
     @test_throws ArgumentError AK.mapreduce(-, +, array_from_host(rand(Int32, 3, 4)); alg=REDUCE_ALG, init=Int32(0), dims=[1.0, 2.0])
 
-    # Tiled strided GPU path coverage for mapreduce, including a 3D case with
-    # a partial output tile.
+    # Contiguous outputs, each reducing as many elements a stride apart as there are outputs; the
+    # 3-d case's outputs do not fill whole tiles
     for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
         vh = rand(Int32(1):Int32(3), shape...)
         v = array_from_host(vh)
@@ -754,14 +750,13 @@ end
     end
 
     if !TEST_KERNELS
-        # The CPU fallback should not require strided storage.
+        # A source without strided storage
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.mapreduce(x -> 2x, +, vh; alg=REDUCE_ALG, backend=BACKEND, init=0, dims=(1,2))) ==
             mapreduce(x -> 2x, +, vh; init=0, dims=(1,2))
     else
-        # Strided GPU sources (views, adjoints, permuted dims) take the stride-based
-        # fast path over their dense parent buffer; the offset view exercises a nonzero
-        # base offset.
+        # Strided views, adjoints and permuted dimensions of a dense array, read through its
+        # buffer; the second view starts at an offset
         vh = reshape(Int32(1):Int32(40), 5, 8)
         v = array_from_host(vh)
         @test Array(AK.mapreduce(x -> x - Int32(1), +, @view(v[:, 1:2:end]); alg=REDUCE_ALG, init=Int32(0), dims=2)) ==
@@ -798,6 +793,8 @@ end
         neutral=Int32(0),
     )
 end
+
+
 @testset "sum" begin
 
     Random.seed!(0)
@@ -1131,7 +1128,7 @@ end
         @test Array(R) == vec(s) .+ 1
         AK.mapreducedim!(identity, +, R, a; acctype=Int32, init=Int16(7), alg)
         @test Array(R) == vec(s) .+ 7
-        # ... with a workspace, used twice
+        # A workspace, used twice
         ws = AK.workspace(AK.mapreducedim!, identity, +, R, a; acctype=Int32, alg)
         AK.mapreducedim!(identity, +, R, a; acctype=Int32, overwrite=true, alg, workspace=ws)
         @test Array(R) == vec(s)
@@ -1186,7 +1183,7 @@ end
         @test Array(R) == [1 + sum(h)]
         AK.mapreducedim!(identity, +, R, m; overwrite=true, alg)
         @test Array(R) == [sum(h)]
-        # ... in the accumulator type, and without a neutral element
+        # The accumulator type, and an operator without a neutral element
         r = AK.sum(m; dims=(1, 2), alg)
         @test eltype(r) === Int && Array(r) == sum(hm; dims=(1, 2))
         @test Array(AK.reduce((a, b) -> max(a, b), m; dims=(1, 2), alg)) == fill(maximum(h), 1, 1)
@@ -1205,7 +1202,7 @@ end
         @test Array(R) == Int8[5]
         AK.mapreducedim!(identity, +, R, v8; acctype=Int32, init=Int8(-10), alg)
         @test Array(R) == Int8[-5]
-        # ... with a workspace, used twice
+        # A workspace, used twice
         R = array_from_host(Int8[0])
         ws = AK.workspace(AK.mapreducedim!, identity, +, R, v8; acctype=Int32, alg)
         AK.mapreducedim!(identity, +, R, v8; acctype=Int32, alg, workspace=ws)
@@ -1231,7 +1228,7 @@ end
         lazy, h = LazyProduct(da, db), ha .* hb
         @test Array(AK.reduce(+, lazy; dims, alg)) == sum(h; dims)
         @test Array(AK.reduce(+, lazy; dims, init=Int32(7), alg)) == reduce(+, h; dims, init=7)
-        # (without a neutral element)
+        # An operator without a neutral element
         @test Array(AK.reduce((a, b) -> max(a, b), lazy; dims, alg)) == maximum(h; dims)
         @test Array(AK.mapreduce(*, +, da, db; dims, alg)) == sum(h; dims)
         @test Array(AK.mapreduce(*, +, lazy, lazy; dims, alg)) == sum(h .* h; dims)
@@ -1278,7 +1275,7 @@ end
         @test AK.reduce(+, m; alg, commutative) == sum(hm)
         bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(abs, m))
         @test AK.mapreduce(identity, +, bc; alg, commutative) == sum(abs, hm)
-        # ... and one with explicit offset axes, larger than its argument's
+        # A Broadcasted with explicit offset axes, larger than its argument's
         bc1 = Base.Broadcast.Broadcasted(identity, (array_from_host(Int32[2]),),
                                          (Base.IdentityUnitRange(0:999),))
         @test AK.mapreduce(identity, +, bc1; alg, commutative) == 2000
@@ -1347,13 +1344,13 @@ end
     @test AK.reduce(+, v8; init=0, alg) === 227
     @test AK.sum(array_from_host([1, 2]); init=Int8(0), alg) === 3
     @test AK.reduce(+, array_from_host(Float32[1, 2]); init=0, alg) === 3.0f0
-    # (`init` is not a partial result: only the type of `op(init, x)` counts)
+    # `init` is not a partial result: only the type of `op(init, x)` counts
     @test AK.reduce((a, b) -> something(a, 0) + something(b, 0), array_from_host(Int32[1, 2]);
                     init=nothing, alg) === 3
     @test AK.reduce((a, b) -> Base.add_sum(a, b), v8; alg) === 227
     @test AK.maximum(v8; alg) === Int8(100)
-    # ... joined with the one-element partial results': here the element type, not the narrower
-    # one the fold produces
+    # It joins the type of the one-element partial results: here the element type, not the
+    # narrower one the fold produces
     @test AK.reduce(Returns(Int8(0)), array_from_host(Int32[5, 6, 7]); alg) === Int32(0)
     if !TEST_KERNELS
         @test AK.reduce(coalesce, [missing, 1, 2]; init=0, alg) === 0
@@ -1394,18 +1391,18 @@ end
         r = AK.sum(dm8; dims, acctype=Int16, alg)
         @test eltype(r) === Int16 && Array(r) == sum(m8; dims)
     end
-    # ... which `init` does not change (only an empty reduction returns it as it is)
+    # `init` does not change it; only an empty reduction returns `init` as it is
     @test AK.sum(array_from_host(Int32[1, 2]); init=0, acctype=Int32, alg) === Int32(3)
     @test AK.count(array_from_host([true, true]); acctype=Int32, alg) === Int32(2)
     @test AK.sum(array_from_host(Int32[]); init=0, acctype=Int32, alg) === 0
     if !TEST_KERNELS
         @test_throws InexactError AK.reduce(+, Int8[1, 2]; init=0.5, acctype=Int16, alg)
     end
-    # ... and must be able to hold the partial results
+    # It must be able to hold the partial results
     @test_throws ArgumentError AK.sum(v8; acctype=String, alg)
     @test_throws ArgumentError AK.reduce((a, b) -> "", v8; acctype=Int, alg)
     @test_throws ArgumentError AK.sum(v8; acctype=1, alg)
-    # (whether their values fit is the caller's obligation)
+    # Whether their values fit is the caller's obligation
     if !TEST_KERNELS
         @test_throws InexactError AK.sum([100, 100]; acctype=Int8, alg)
     end
@@ -1434,7 +1431,7 @@ end
     @test_throws ArgumentError AK.mapreduce(x -> x + 1, +, array_from_host(zeros(Int32, 0, 2));
                                             dims=1, alg)
     @test size(AK.maximum(array_from_host(zeros(Int8, 3, 0)); dims=1, alg)) == (1, 0)
-    # ... an error only where an output has an empty slice
+    # An error only where an output has an empty slice
     @test size(AK.minimum(array_from_host(zeros(Int32, 0, 0)); dims=1, alg)) == (1, 0)
 
     # An operator that always throws for the element types: an error only where something is
@@ -1605,14 +1602,14 @@ const ORDERED_CASES = (
         AK.mapreducedim!(identity, matmul2, R, x; commutative=false, neutral, alg=dalg)
         @test Array(R) == [foldl(matmul2, xh; init)]
     end
-    # ... finishing on the host, from the source or from the first pass's partial results
+    # Finishing on the host, from the source or from the first pass's partial results
     xh = [randmat2() for _ in 1:20_000]
     x = array_from_host(xh)
     for switch_below in (30_000, 100)
         alg = reduce_alg(; block_size=32, items_per_thread=2, switch_below)
         @test AK.reduce(matmul2, x; commutative=false, alg) == foldl(matmul2, xh)
     end
-    # ... sources read with vector loads, contiguous at an offset, strided, fused
+    # Sources read with vector loads, contiguous at an offset, strided and fused ones
     for T in (UInt32, UInt64)
         h = [affine_rand(T) for _ in 1:1_000_000]
         v = array_from_host(h)
@@ -1623,7 +1620,7 @@ const ORDERED_CASES = (
         @test AK.mapreduce(xor, affine_compose, v, v .+ one(T); commutative=false,
                            alg=REDUCE_ALG) == foldl(affine_compose, xor.(h, h .+ one(T)))
     end
-    # ... and a workspace, used twice
+    # A workspace, used twice
     ws = AK.workspace(AK.reduce, matmul2, x; commutative=false, alg=REDUCE_ALG)
     for _ in 1:2
         @test AK.reduce(matmul2, x; commutative=false, alg=REDUCE_ALG, workspace=ws) ==
@@ -1651,12 +1648,12 @@ const ORDERED_CASES = (
             @test Array(R) == ref
         end
     end
-    # ... square tiles in blocks too small for the columns kernel
+    # Square tiles in blocks too small for the columns kernel
     xh = [randmat2() for _ in 1:256, _ in 1:256]
     @test Array(AK.reduce(matmul2, array_from_host(xh); dims=2, commutative=false,
                           alg=reduce_alg(block_size=8))) ==
           reduce(matmul2, xh; dims=2, init=I2)
-    # ... sources read with vector loads (contiguous, at an offset), strided views and lazy ones;
+    # Sources read with vector loads (contiguous, at an offset), strided views and lazy ones;
     # few outputs of four-byte elements, whose groups outnumber the tiles
     for T in (UInt32, UInt64)
         hm = [affine_rand(T) for _ in 1:4096, _ in 1:300]
@@ -1742,7 +1739,7 @@ if TEST_KERNELS
     end
     @test vector_width(view(array_from_host(zeros(Float32, 1027, 2048)), 1:1024, :), 1) == 0
     @test vector_width(view(array_from_host(zeros(Int32, 260, 1024)), 3:260, :), 1) == 0
-    # ... and so do buffers that are not 16-byte aligned
+    # Buffers that are not 16-byte aligned take scalar loads
     storage = Vector{UInt8}(undef, 64)
     GC.@preserve storage begin
         offset = Int(mod(-UInt(pointer(storage)), 16)) + 4

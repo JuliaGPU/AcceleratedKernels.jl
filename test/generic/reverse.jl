@@ -255,6 +255,7 @@
     end
 end
 
+
 @testset "reverse: backend-free inputs" begin
     r = AK.reverse(1:5; backend=BACKEND)
     @test get_backend(r) == BACKEND

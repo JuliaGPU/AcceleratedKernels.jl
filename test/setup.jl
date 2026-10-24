@@ -16,6 +16,12 @@ end
 with_workspace(op, args...; kwargs...) =
     op(args...; kwargs..., workspace=AK.workspace(op, args...; kwargs...))
 
+# The algorithm of tests that do not choose one: `Auto()`, except where `HOST_KERNELS`, whose point
+# is to run AK's kernels on the host backend, on which `Auto()` picks the threaded algorithms.
+# Each test file also has a function that builds an algorithm of the configuration from the
+# settings of both kinds (`reduce_alg`, ...).
+default_alg(kernel_alg) = HOST_KERNELS ? kernel_alg : AK.Auto()
+
 # The element types the backend supports
 valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
 

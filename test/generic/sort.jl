@@ -1,7 +1,5 @@
-# Tests that do not choose an algorithm use `SORT_ALG`: `Auto()`, except in the `--cpu-ka`
-# configuration, whose point is to run AK's kernels on the host backend. `SETTINGS_ALG` is an
-# explicitly tuned algorithm for the configuration.
-SORT_ALG = HOST_KERNELS ? AK.MergeSort() : AK.Auto()
+# `SETTINGS_ALG` is an explicitly set algorithm of the configuration
+SORT_ALG = default_alg(AK.MergeSort())
 SETTINGS_ALG = TEST_KERNELS ? AK.MergeSort(block_size=64) :
                               AK.CPUThreads.SampleSort(max_tasks=64, min_elems=8)
 

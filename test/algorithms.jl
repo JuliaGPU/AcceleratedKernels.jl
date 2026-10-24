@@ -144,7 +144,7 @@ end
         @test resolve(AK.RadixSort(chunk_size=16), v) === AK.RadixSort(512, 8, 16)
         @test resolve(AK.BitonicSort(block_size=128), v) === AK.BitonicSort(128, 16)
     end
-    # (on the host, `max_tasks` defaults to the number of threads)
+    # On the host, `max_tasks` defaults to the number of threads
     min_elems = AK.sort_tuning(HOST, Float32).threads_min_elems
     @test resolve(AK.CPUThreads.SampleSort(max_tasks=3), v; backend=HOST) ===
           AK.CPUThreads.SampleSort(3, min_elems)
@@ -261,7 +261,7 @@ end
                              1.0, Ref(2), (3, 1:2), nothing) === FAKE
     @test AK.resolve_backend(nothing, 1:4, d) === FAKE
     @test AK.resolve_backend(nothing, h, 1:4) == HOST
-    # ... nor do Base's views, reshapes and permutations of them, while those of arrays vote
+    # Neither do Base's views, reshapes and permutations of those leaves; those of arrays do
     @test AK.resolve_backend(nothing, d, reshape(1:6, 2, 3), view(1:10, 2:4),
                              PermutedDimsArray(reshape(1:6, 2, 3), (2, 1))) === FAKE
     @test AK.resolve_backend(nothing, view(d, 1:2)) === FAKE
@@ -271,7 +271,7 @@ end
     @test_throws ArgumentError AK.resolve_backend(nothing, d, h)
     @test_throws ArgumentError AK.resolve_backend(nothing, h, d)
     @test_throws ArgumentError AK.resolve_backend(nothing, h, (1, d))
-    # ... unless the backend is explicit
+    # An explicit backend wins over the votes
     @test AK.resolve_backend(FAKE, h) === FAKE
     @test AK.resolve_backend(HOST, d, h) == HOST
 
@@ -279,7 +279,7 @@ end
     bc = Base.Broadcast.broadcasted(+, d, Base.Broadcast.broadcasted(*, 2, 1:4))
     @test AK.resolve_backend(nothing, bc) === FAKE
     @test_throws ArgumentError AK.resolve_backend(nothing, h, bc)
-    # ... including the arrays of a preprocessed one
+    # Also the arrays of a preprocessed one
     pbc = Base.Broadcast.preprocess(nothing,
         Base.Broadcast.instantiate(Base.Broadcast.broadcasted(identity, d)))
     @test AK.resolve_backend(nothing, pbc) === FAKE
@@ -292,7 +292,7 @@ end
     # Array types without `get_backend` keep raising KernelAbstractions' error
     @test_throws ArgumentError AK.resolve_backend(nothing, NoBackendArray())
     @test AK.resolve_backend(FAKE, NoBackendArray()) === FAKE
-    # ... and allocating operations, given the backend, do not ask for it either
+    # Allocating operations given the backend do not ask the arrays either
     @test AK.sortperm(NoBackendArray(); backend=HOST) == [1, 2, 3]
     @test AK.backendless(reshape(1:6, 2, 3)) && !AK.backendless(NoBackendArray())
 
@@ -586,7 +586,7 @@ end
               AK.ViaReduce(AK.resolve_reduce(AK.BlockReduce(block_size=64), FAKE, Bool, :))
         @test_throws ArgumentError AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)),
                                                         FAKE, Float32)
-        # (a tuning only guides `Auto`)
+        # `prefer_concurrent_write` only guides `Auto`
         @test AK.resolve_predicate(AK.ConcurrentWrite(), FAKE, Float32) === AK.ConcurrentWrite(128)
     end
     for bad in (AK.ConcurrentWrite(block_size=0), AK.ConcurrentWrite(block_size=96),

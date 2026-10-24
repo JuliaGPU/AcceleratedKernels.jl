@@ -3,10 +3,7 @@ struct FindallCallable end
 
 struct OtherFindallAlgorithm <: AK.FindallAlgorithm end
 
-# Tests that do not choose an algorithm use `FINDALL_ALG`: `Auto()`, except in the `--cpu-ka`
-# configuration, whose point is to run AK's kernels on the host backend. `findall_alg` builds an
-# explicitly tuned algorithm for the configuration from both kinds of settings.
-FINDALL_ALG = HOST_KERNELS ? AK.ScanScatter() : AK.Auto()
+FINDALL_ALG = default_alg(AK.ScanScatter())
 findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, min_elems=nothing) =
     TEST_KERNELS ? AK.ScanScatter(; block_size, items_per_thread) :
                    AK.CPUThreads.Partitioned(; max_tasks, min_elems)
@@ -126,7 +123,7 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
         @test Array(AK.findall(array_from_host(hb); items=v, alg=FINDALL_ALG)) == h[hb]
         @test Array(AK.findall(array_from_host(hb); items=CartesianIndices(v), alg=FINDALL_ALG)) ==
               findall(hb)
-        # ... of another shape or on another array, paired by position
+        # Items of another shape, or another array, are paired by position
         w = array_from_host(collect(Int32, 1:length(h)))
         @test Array(AK.findall(pred, v; items=w, alg=FINDALL_ALG)) == findall(sel)
         @test Array(AK.findall(isodd, 1:10; items=array_from_host(collect(Int32, 11:20)),
@@ -196,7 +193,7 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
         @test Array(with_workspace(AK.findall, bools; alg)) == findall(Array(bools))
         @test haskey(AK.workspace_size(AK.findall, x -> x > 0.5f0, v; alg), :mask)
         @test !haskey(AK.workspace_size(AK.findall, bools; alg), :mask)
-        # ... made for another call
+        # A workspace made for another call
         @test_throws ArgumentError AK.findall(bools; alg,
                                               workspace=AK.workspace(AK.findall, bools[1:1]; alg))
 
@@ -215,6 +212,6 @@ end
     # cannot, before launching (not every backend reports an error thrown in a kernel)
     @test_throws ArgumentError AK.findall(x -> 1, array_from_host(Int32[1, 2]))
     @test_throws ArgumentError AK.findall(array_from_host(Int32[1, 0]))
-    # ... except on an empty array, where Base never calls it
+    # On an empty array, where Base never calls it, there is nothing to check
     @test isempty(AK.findall(x -> 1, array_from_host(Int32[])))
 end

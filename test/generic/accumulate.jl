@@ -1,19 +1,18 @@
-# `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for the configuration from
-# both kinds of settings; without settings they give `Auto()`, except in the `--cpu-ka`
-# configuration, whose point is to run AK's kernels on the host backend.
+# Whole-array and `dims` algorithms of the configuration; without settings, the default ones
 function scan_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing,
                   min_elems=nothing)
     Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
-        return HOST_KERNELS ? AK.ScanPrefixes() : AK.Auto()
+        return default_alg(AK.ScanPrefixes())
     TEST_KERNELS ? AK.ScanPrefixes(; block_size, items_per_thread) :
                    AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 end
 
 function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
     Base.all(isnothing, (block_size, max_tasks, min_elems)) &&
-        return HOST_KERNELS ? AK.SliceScan() : AK.Auto()
+        return default_alg(AK.SliceScan())
     TEST_KERNELS ? AK.SliceScan(; block_size) : AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 end
+
 
 @testset "accumulate: whole arrays" begin
     Random.seed!(0)
@@ -195,30 +194,31 @@ end
 end
 
 
+if TEST_KERNELS
 @testset "accumulate: tile levels" begin
     # With small tiles, the totals of the tiles take several levels of tiles themselves
-    if TEST_KERNELS
-        Random.seed!(0)
-        alg = AK.ScanPrefixes(block_size=32, items_per_thread=2)
-        for n in (4097, 70_001, 300_000)
-            h = rand(Int32(-9):Int32(9), n)
-            v = array_from_host(h)
-            @test Array(AK.accumulate(+, v; alg)) == cumsum(h)
-            @test Array(AK.accumulate(+, v; init=Int32(3), inclusive=false, alg)) ==
-                  vcat(Int32(3), Int32(3) .+ cumsum(h)[1:end-1])
-            xh = [randmat2() for _ in 1:n]
-            init = randmat2()
-            y = array_from_host(xh)
-            AK.accumulate!(matmul2, y; init, alg)
-            @test Array(y) == scan_reference(xh, 1; init, inclusive=true)
-            @test_throws ArgumentError AK.accumulate(+, v; alg=AK.ScanPrefixes(block_size=1, items_per_thread=1))
-            ws = AK.workspace(AK.accumulate!, +, similar(v), v; alg)
-            w = similar(v)
-            AK.accumulate!(+, w, v; alg, workspace=ws)
-            @test Array(w) == cumsum(h)
-        end
+    Random.seed!(0)
+    alg = AK.ScanPrefixes(block_size=32, items_per_thread=2)
+    for n in (4097, 70_001, 300_000)
+        h = rand(Int32(-9):Int32(9), n)
+        v = array_from_host(h)
+        @test Array(AK.accumulate(+, v; alg)) == cumsum(h)
+        @test Array(AK.accumulate(+, v; init=Int32(3), inclusive=false, alg)) ==
+              vcat(Int32(3), Int32(3) .+ cumsum(h)[1:end-1])
+        xh = [randmat2() for _ in 1:n]
+        init = randmat2()
+        y = array_from_host(xh)
+        AK.accumulate!(matmul2, y; init, alg)
+        @test Array(y) == scan_reference(xh, 1; init, inclusive=true)
+        @test_throws ArgumentError AK.accumulate(+, v; alg=AK.ScanPrefixes(block_size=1, items_per_thread=1))
+        ws = AK.workspace(AK.accumulate!, +, similar(v), v; alg)
+        w = similar(v)
+        AK.accumulate!(+, w, v; alg, workspace=ws)
+        @test Array(w) == cumsum(h)
     end
 end
+end
+
 
 @testset "accumulate: dims, non-commutative" begin
     Random.seed!(0)
@@ -250,16 +250,16 @@ end
 end
 
 
+if TEST_KERNELS
 @testset "accumulate: dims, tiles of one element" begin
     # Tiles of a single element: splitting a slice still shortens it
-    if TEST_KERNELS
-        for dims in 1:2
-            xh = rand(Int32(1):Int32(9), 16, 16)
-            y = AK.accumulate!(+, array_from_host(xh); dims,
-                               alg=AK.SliceScan(block_size=1, items_per_thread=1))
-            @test Array(y) == accumulate(+, xh; dims)
-        end
+    for dims in 1:2
+        xh = rand(Int32(1):Int32(9), 16, 16)
+        y = AK.accumulate!(+, array_from_host(xh); dims,
+                           alg=AK.SliceScan(block_size=1, items_per_thread=1))
+        @test Array(y) == accumulate(+, xh; dims)
     end
+end
 end
 
 
@@ -400,6 +400,8 @@ end
     AK.accumulate((x, y) -> x + 1, array_from_host(rand(Int32, 3, 4, 5)); init=Int32(0),
                   neutral=Int32(0), dims=3, alg=slice_alg(; block_size=64))
 end
+
+
 @testset "cumsum" begin
 
     Random.seed!(0)
@@ -564,14 +566,14 @@ end
                                array_from_host(reshape(fh, 1, 3));
                                init=0.5f0, dims=2, alg=slice_alg())) ==
           accumulate!(+, zeros(Int32, 1, 3), reshape(fh, 1, 3); init=0.5f0, dims=2)
-    # ... in which the elements are one-element partial results: `addmod`'s operands need not
-    # fit its result type
+    # Elements enter as one-element partial results, so `addmod`'s operands need not fit its
+    # result type
     addmod(a, b) = Int32(mod(Int64(a) + Int64(b), 97))
     bigs = Int64[2147483648, 1, 2]
     @test Array(AK.accumulate(addmod, array_from_host(bigs); init=Int32(0), alg=scan_alg())) ==
           accumulate(addmod, bigs; init=Int32(0))
-    # ... which starts from the destination's element type as well, so a wider destination
-    # holds the running values without a scratch array
+    # The running-value type starts from the destination's element type as well, so a wider
+    # destination holds the running values without a scratch array
     @test Array(AK.accumulate!(*, array_from_host(zeros(Int, 4)), array_from_host(fill(0x10, 4));
                                alg=scan_alg())) == [16, 256, 4096, 65536]
     @test Array(AK.accumulate!(*, array_from_host(zeros(Int, 2, 3)),
@@ -602,7 +604,7 @@ end
         @test AK.accumulate(coalesce, [missing, 1, 2]; init=0, alg=scan_alg()) ==
               accumulate(coalesce, [missing, 1, 2]; init=0)
     end
-    # ... from the exact neutral element, so the first element stays as it is
+    # Scans start from the exact neutral element, so the first element stays as it is
     z = Array(AK.accumulate(+, array_from_host([-0.0f0, -0.0f0]); alg=scan_alg()))
     @test Base.all(signbit, z)
     if !TEST_KERNELS

@@ -43,7 +43,7 @@
     y = array_from_host(zeros(Int, 4, 3))
     AK.map!(i -> 2i, y, view(x, :, :))
     @test vec(Array(y)) == 2:2:24
-    # ... also through views that do not support linear indexing
+    # Also through views that do not support linear indexing
     x = array_from_host(reshape(1:20, 4, 5))
     v = view(x, 1:3, 2:5)
     y = array_from_host(zeros(Int, 12))
@@ -67,6 +67,7 @@
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.map(x -> x^2, x; bad=:kwarg)
 end
+
 
 @testset "map: backend-free inputs" begin
     # A range has no backend: the result is allocated on the one given

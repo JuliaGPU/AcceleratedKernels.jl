@@ -40,7 +40,7 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     x = array_from_host(rand(Float32, 1000))
     @test AK.any(i -> x[i] > 2, 1:length(x); backend=BACKEND, alg) === false
     @test AK.all(i -> x[i] < 2, 1:length(x); backend=BACKEND, alg) === true
-    # ... with offset axes
+    # Offset axes
     @test AK.any(iszero, Base.IdentityUnitRange(0:999); backend=BACKEND, alg) === true
     @test AK.all(i -> i < 1000, Base.IdentityUnitRange(0:999); backend=BACKEND, alg) === true
     v = offset_from_host(Int32.(1:1000), (-5,))
@@ -53,7 +53,7 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     # The predicate must return a Bool, as in Base
     @test_throws ArgumentError AK.any(identity, array_from_host(Int32[2, 3]); alg)
     @test_throws ArgumentError AK.all(identity, array_from_host(Int32[2, 3]); alg)
-    # ... which it never calls on an empty array
+    # It is never called on an empty array
     @test AK.any(identity, array_from_host(Int32[]); alg) === false
     @test AK.all(identity, array_from_host(Int32[]); alg) === true
 
