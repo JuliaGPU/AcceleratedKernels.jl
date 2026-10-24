@@ -164,12 +164,12 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = predicate_setup(pred, |, v, backend, alg).plan
+    p = predicate_setup(pred, |, false, v, backend, alg).plan
     _any(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    predicate_setup(pred, |, v, backend, alg).plan
+    predicate_setup(pred, |, false, v, backend, alg).plan
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
@@ -182,17 +182,17 @@ function _check_bool_result(pred, v)
     nothing
 end
 
-# The plan of `any`/`all` (whose `ViaReduce` reduces with `op`): the flag of `ConcurrentWrite`,
-# or the scratch of the reduction
-function predicate_setup(pred, op, v, backend, alg)
+# The plan of `any`/`all` (whose `ViaReduce` reduces with `op` from `init`): the flag of
+# `ConcurrentWrite`, or the scratch of the reduction
+function predicate_setup(pred, op, init, v, backend, alg)
     _check_bool_result(pred, v)
     backend = resolve_backend(backend, v)
     a = resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
         (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
-        (; reduce=mapreduce_setup(BoolResult(pred), op, v, backend, op === (|) ? false : true,
-                                  nothing, nothing, :, a.reduce).plan.sizes)
+        (; reduce=mapreduce_setup(BoolResult(pred), op, v, backend, init, nothing, nothing, :,
+                                  a.reduce).plan.sizes)
     else
         (;)
     end
@@ -254,12 +254,12 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 """
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = predicate_setup(pred, &, v, backend, alg).plan
+    p = predicate_setup(pred, &, true, v, backend, alg).plan
     _all(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    predicate_setup(pred, &, v, backend, alg).plan
+    predicate_setup(pred, &, true, v, backend, alg).plan
 
 _all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
 _all(pred, v, backend, alg::ViaReduce, bufs) =
