@@ -3,7 +3,6 @@ using KernelAbstractions
 using GPUArrays
 
 using BenchmarkTools
-using BenchmarkPlots, StatsPlots, FileIO
 using StableRNGs
 rng = StableRNG(123)
 
@@ -23,13 +22,10 @@ end
 backend_arg in BACKENDS || throw(ArgumentError("\"$backend_arg\" is not a valid backend."))
 
 other_args = ARGS[.!b_opt_idx]
-# other_args = ["accumulate_1"]
-
-bench_to_include = isempty(other_args) ? nothing : other_args
 
 # Files to ignore by default. Includes non-benchmark files and
 #  backends can add incompatible benchmarks to this list
-noinclude = ["runbenchmarks.jl", "benchmark_graphs_nb.jl"]
+noinclude = ["runbenchmarks.jl"]
 
 if backend_arg == "--CUDA"
     using CUDA
@@ -40,7 +36,6 @@ if backend_arg == "--CUDA"
             (CUDA.@sync blocking=true $(esc.(ex)...))
         end
     end
-    append!(noinclude, ["sortperm.jl"])
 elseif backend_arg == "--oneAPI"
     using oneAPI
     oneAPI.versioninfo()
@@ -51,11 +46,9 @@ elseif backend_arg == "--oneAPI"
         end
     end
 elseif backend_arg == "--AMDGPU"
-    Pkg.add("AMDGPU")
     using AMDGPU
     AMDGPU.versioninfo()
-    AMDGPU.versioninfo()
-    const BACKEND = ROCBackend()
+    const ArrayType = ROCArray
     macro sb(ex...)
         quote
             AMDGPU.@sync($(esc.(ex)...))
@@ -127,14 +120,3 @@ reclaim_mem()
 results = run(SUITE, verbose=true)
 
 BenchmarkTools.save("benchmarkresults.json", median(results))
-
-# save plots for each file/datatype
-# for l1 in keys(results)
-#     l1_res = results[l1]
-#     for l2 in keys(l1_res)
-#         title = "$l1/$l2"
-#         fname = "plots/$(l1)_$(l2).svg"
-#         @info "Saving $title plot"
-#         save(fname, plot(l1_res[l2]; title, xrotation = 30))
-#     end
-# end

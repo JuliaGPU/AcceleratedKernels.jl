@@ -1,7 +1,0 @@
-[deps]
-AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
-Cthulhu = "f68482b8-f384-11e8-15f7-abe071a5a75f"
-OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"

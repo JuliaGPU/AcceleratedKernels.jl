@@ -244,7 +244,7 @@ Some arithmetic-heavy benchmarks are given below - see [this repository](https:/
 
 ![Arithmetic benchmark](https://github.com/anicusan/AcceleratedKernels-Benchmark/blob/main/ArithmeticBenchmark/ArithmeticBenchmarkTable.png?raw=true)
 
-See `prototype/sort_benchmark.jl` for a small-scale sorting benchmark code and `prototype/thrust_sort` for the Nvidia Thrust wrapper. The results below are from a system with Linux 6.6.30-2-MANJARO, Intel Core i9-10885H CPU, Nvidia Quadro RTX 4000 with Max-Q Design GPU, Thrust 1.17.1-1, Julia Version 1.10.4.
+The sorting results below are from a system with Linux 6.6.30-2-MANJARO, Intel Core i9-10885H CPU, Nvidia Quadro RTX 4000 with Max-Q Design GPU, Thrust 1.17.1-1, Julia Version 1.10.4.
 
 ![Sorting benchmark](https://github.com/juliagpu/AcceleratedKernels.jl/blob/main/docs/src/assets/sort_benchmark.png?raw=true)
 
@@ -286,7 +286,7 @@ If you need other algorithms in your work that may be of general use, please ope
 
 ## 5. API and Examples
 
-All publicly-exposed functions are [documented in the Manual](https://juliagpu.github.io/AcceleratedKernels.jl), along with examples to help you get started with AcceleratedKernels.jl. There are also plenty of examples and benchmarks in the `prototype` directory within slightly more involved scripts.
+All publicly-exposed functions are [documented in the Manual](https://juliagpu.github.io/AcceleratedKernels.jl), along with examples to help you get started with AcceleratedKernels.jl.
 
 
 ## 6. Custom Structs
