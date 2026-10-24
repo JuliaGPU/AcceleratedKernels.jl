@@ -303,8 +303,8 @@ end
     end
 end
 
-# `ByBlock`: each block reduces the outputs `iblock`, `iblock + num_blocks`,
-# ..., one at a time.
+# `ByBlock`, and the second pass of the commutative split reductions (`combine_groups!`): each
+# block reduces the outputs `iblock`, `iblock + num_blocks`, ..., one at a time.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -437,38 +437,5 @@ end
 
     if ithread == 0x0
         partial[iout + igroup * output_size + 0x1] = sdata[0x1]
-    end
-end
-
-# The second pass of `ByBlocks` and the commutative `Columns`: one block per output combines
-# its `groups` partial results and applies `init` (see `finish`).
-@kernel inbounds=true cpu=false unsafe_indices=true function combine_groups_kernel!(
-    @Const(partial), dst,
-    op, seed, init,
-    output_size, groups,
-)
-    @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
-    _, accop = seeded_ops(PartialInputs(), op, seed)
-
-    iblock  = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
-
-    if iblock < output_size
-        acc = seed
-        g = ithread
-        while g < groups
-            acc = accop(acc, partial[iblock + g * output_size + 0x1])
-            g += N
-        end
-
-        sdata[ithread + 0x1] = acc
-        @synchronize()
-
-        @inline reduce_group!(@context, accop, sdata, ithread)
-
-        if ithread == 0x0
-            dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
-        end
     end
 end

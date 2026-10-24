@@ -123,8 +123,6 @@ function launch_ordered!(
                   seed, Unfinished(), base_offset, outer_strides, outer_sizes,
                   reduce_strides, reduce_sizes, output_size, reduce_size, groups;
                   dense_buffer)
-    ordered_pass!(backend, combine_block_size(groups), 1, partials, dst, PartialInputs(),
-                  op, seed, init, 0, (1,), (output_size,), (output_size,),
-                  (groups,), output_size, groups, 1)
+    combine_groups!(backend, partials, dst, op, seed, init, output_size, groups, true)
     return nothing
 end

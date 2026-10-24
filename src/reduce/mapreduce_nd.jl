@@ -222,18 +222,19 @@ function launch!(shape::Ordered, f::F, op::OP, dst, src, buffer, backend, alg, b
     )
 end
 
-# The second pass of a reduction split across `groups` blocks per output: combine the partial
-# results `partials` of each output's groups (`dst_size` apart) into `dst`, in order if `ordered`
+# The second pass of a reduction split across `groups` blocks per output: a block per output
+# combines the partial results `partials` of its groups (`dst_size` apart) into `dst`, in order if
+# `ordered`
 function combine_groups!(backend, partials, dst, op::OP, seed, init, dst_size, groups,
                          ordered) where {OP}
     block_size = combine_block_size(groups)
     if ordered
-        ordered_pass!(backend, block_size, 1, partials, dst, PartialInputs(),
-                      op, seed, init, 0, (1,), (dst_size,), (dst_size,),
-                      (groups,), dst_size, groups, 1)
+        ordered_pass!(backend, block_size, 1, partials, dst, PartialInputs(), op, seed, init,
+                      0, (1,), (dst_size,), (dst_size,), (groups,), dst_size, groups, 1)
     else
-        combine_groups_kernel!(backend, block_size)(partials, dst, op, seed, init, dst_size,
-                                                    groups, ndrange=(block_size * dst_size,))
+        by_block_kernel!(backend, block_size)(
+            partials, dst, PartialInputs(), op, seed, init, 0, (1,), (dst_size,), (dst_size,),
+            (groups,), dst_size, groups, dst_size, ndrange=(block_size * dst_size,))
     end
 end
 
