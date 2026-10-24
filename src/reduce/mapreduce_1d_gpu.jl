@@ -17,10 +17,7 @@
     mapf, accop = seeded_ops(f, op, seed)
     len = length(src)
 
-    # NOTE: for many index calculations in this library, computation using zero-indexing leads to
-    # fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-    # indexing). Internal calculations will be done using zero indexing except when actually
-    # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
+    # Index arithmetic is zero-based, with half-open ranges; one is added only to access memory.
 
     # Group (block) and local (thread) indices
     iblock = @index(Group, Linear) - 0x1

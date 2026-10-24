@@ -1,18 +1,16 @@
 # The launch shapes of a reduction along `dims`: which kernel reduces it, with how many threads
 # or blocks per output, and the scratch that takes.
 
-# Below this many output elements, splitting a single output's reduction across multiple
-# blocks (multigroup) is preferred over grid-striding by_block, because grid-stride with
-# too few blocks cannot fill the GPU on its own. At or above this, by_block grid-strides.
+# Fewer outputs than this split their reductions across blocks (`:multigroup`), as a block per
+# output leaves most of a GPU idle (5 or 9 blocks on an 84-SM one); `:by_lanes` needs at least this
+# many
 const FEW_OUTPUTS = 32
 
-# Minimum reduction-loop iterations per thread in the multigroup first pass.
-# Caps reduce_groups so splitting a reduction doesn't shrink per-thread work
-# below the point where launch/scheduling overhead dominates actual work.
+# The fewest elements each thread reduces in a reduction split across blocks, which bounds the
+# blocks per output
 const SPLIT_MIN_ITEMS = 8
 
-# Number of contiguous output rows handled by each tiled-strided block. With the default
-# 256-thread block this gives 32 lanes per row.
+# The outputs per block of the tiled kernel (`:tiled_strided`): 32 lanes each in a block of 256
 const TILED_OUTPUTS = 8
 
 # The most consecutive outputs per block of the columns kernel (fewer outputs take the next power
@@ -42,29 +40,19 @@ const BY_THREAD_ROW_BYTES = 64 * 1024
 const COLUMNS_MIN_REDUCE = 32
 
 
-# The launch shape of a strided reduction along `dims`, and the number of blocks per output of a
-# `:multigroup` or `:columns` reduction, or of threads per output of a `:by_lanes` one:
-#   - at least FEW_OUTPUTS outputs, each reducing a
-#     run of consecutive elements, of a length the
-#     tuning's `segments_*` settings allow             -> :by_lanes (a group of threads per
-#                                                          output, several outputs per block)
-#   - runs of contiguous outputs, each reducing one
-#     strided segment                                  -> :by_thread, :tiled_strided or :columns,
-#                                                          see `strided_shape`
-#   - dst_size >= reduce_size                          -> :by_thread
-#   - dst_size == 1, or dst_size < FEW_OUTPUTS
-#     (and dst_size < reduce_size)                     -> :multigroup (split one reduction
-#                                                          across blocks, needs a second-pass
-#                                                          combine and `partials` scratch), or
-#                                                          :by_block_each when that is one block
-#   - otherwise (FEW_OUTPUTS <= dst_size < reduce_size) -> :by_block, grid-striding over
-#                                                            outputs, single pass
-#
-# Rationale: grid-striding by_block launches `min(dst_size, target_blocks)` blocks;
-# for very small dst_size (e.g. 5 or 9) that under-fills an 84-SM GPU, so splitting
-# the (large) reduction itself across many blocks via multigroup is still better.
-# For dst_size==1 there is nothing to grid-stride over, so multigroup is the only
-# option regardless of FEW_OUTPUTS.
+# The launch shape of a strided reduction along `dims` into `dst_size` outputs of `reduce_size`
+# elements each (merged into the segments `segs`), and its parameter: the blocks per output of
+# `:multigroup` and `:columns`, the lanes per output of `:by_lanes`, else 0. In order:
+#   - outputs in runs of contiguous ones, each reducing elements a stride apart: see
+#     `strided_shape`, where it takes them;
+#   - at least FEW_OUTPUTS outputs, each reducing a run of consecutive elements of a length the
+#     tuning's `segments_*` settings allow: `:by_lanes`;
+#   - at least as many outputs as elements each: `:by_thread`, or `:by_block` where that reads
+#     with a stride or fills too few blocks (see below);
+#   - fewer than FEW_OUTPUTS outputs: `:multigroup`, its blocks per output launching about the
+#     tuning's `target_blocks` blocks, or `:by_block_each` where that is one block per output;
+#   - else `:by_block`, a block per output, grid-striding over the outputs with at most
+#     `target_blocks` blocks.
 function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
                       ::Type{A}) where {A}
     target_blocks = t.target_blocks
@@ -90,18 +78,13 @@ function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
         end
     end
 
-    # by_block override 1: when the reduced dimension is the fastest-varying one
-    # (reduce_strides==(1,)), by_thread's per-thread strided access is badly
-    # uncoalesced, while by_block lets consecutive threads read consecutive elements.
+    # A block per output rather than a thread, for slices of at least a block of elements: where
+    # each slice is consecutive elements, which a thread per output would read with a stride
+    # (and the lanes did not take), and for as many outputs as elements each that would fill
+    # too few blocks (more outputs read faster with a thread each, coalesced across outputs)
     use_by_block_for_coalescing =
         dst_size >= reduce_size && reduce_size >= block_size &&
         single_reduce && rstrides[1] == 1
-
-    # by_block override 2: when by_thread would launch too few blocks for a square-like
-    # output/reduction shape, split each output reduction across a full block. This
-    # fallback is for layouts `strided_shape` does not take. Avoid applying this to
-    # wide-output shapes, where by_thread's cross-output coalescing is better than a
-    # strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
         cld(dst_size, block_size) < target_blocks && single_reduce

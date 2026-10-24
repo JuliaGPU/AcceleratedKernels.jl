@@ -1,8 +1,9 @@
 # The kernels of a reduction along `dims`, and their index helpers.
 
-# Index helpers. Both decode a linear index into a byte-offset by walking compile-time-sized
-# segment tuples. The single-segment case (the common one after canonicalization) needs no
-# division; multi-segment falls back to a per-element decode (rare: non-adjacent dim sets).
+# The element offset of output `tid` (`outer_offset`), or of element `j` of a slice
+# (`reduce_offset`), from the strides and sizes of the merged segments. A single segment, the
+# common case, needs no division; several (reductions over non-adjacent dimensions) take one per
+# segment and element.
 
 @inline function outer_offset(tid, outer_strides, outer_sizes)
     isempty(outer_sizes) && return 0
@@ -20,7 +21,6 @@ end
 
 @inline function reduce_offset(j, reduce_strides, reduce_sizes)
     isempty(reduce_sizes) && return 0
-    # Single segment: j < reduce_size, so the decode is just j * stride — no division.
     length(reduce_sizes) == 1 && return j * reduce_strides[1]
     off = 0
     tmp = j
@@ -41,9 +41,8 @@ end
     off
 end
 
-# GPU kernel: one thread per output element, reducing sequentially over the reduced extents
-# using Cartesian indexing; the by_thread kernel of sources without a dense buffer. Mirrors the
-# CPU `mapreduce_nd_threads!` path.
+# `:by_thread` for sources without a dense buffer: one thread per output, iterating over the
+# Cartesian indices of its slice as `mapreduce_nd_threads!` does on the host.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_cartesian_kernel!(
     src, dst,
     f, op, seed, init,
@@ -66,6 +65,9 @@ end
     end
 end
 
+# `:tiled_strided`: each block reduces `rows` contiguous outputs, whose elements are
+# `reduce_stride` apart, with `N ÷ rows` lanes each, so that a warp's loads of one step are
+# consecutive elements.
 @kernel inbounds=true cpu=false unsafe_indices=true function tiled_strided_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -89,8 +91,7 @@ end
 
     acc = seed
     if iout < output_size
-        # Contiguous outputs (outer_strides == (1,)), so the source base is just iout;
-        # base_offset (0 for a dense source) is folded in once, outside the reduce loop.
+        # (contiguous outputs: the slice of output `iout` starts at its element `iout`)
         sbase = base_offset + iout
         j = lane
         while j < reduce_size
@@ -118,7 +119,7 @@ end
     end
 end
 
-# GPU kernel: segments — each output reduces `reduce_size` consecutive elements (from the offset
+# `:by_lanes`: each output reduces `reduce_size` consecutive elements (from the offset
 # of its outer index), with `lanes` threads that read them in an interleaved order; a block of
 # `N` threads covers `N ÷ lanes` outputs, which are combined in local memory with log2(lanes)
 # steps.
@@ -167,7 +168,7 @@ end
     end
 end
 
-# GPU kernel: columns — a long strided reduction into contiguous outputs, e.g. the row sums of
+# `:columns`: a long strided reduction into contiguous outputs, e.g. the row sums of
 # a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs of a run of
 # `run` (the outputs at an offset of the other kept dimensions, `run_strides` and `run_sizes`),
 # with `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
@@ -273,10 +274,8 @@ end
     end
 end
 
-# GPU kernel: by_thread — one thread per output element, reducing sequentially.
-# Used when there are more output elements than elements in the reduced dimension(s),
-# e.g. reduce(+, rand(3, 1000), dims=1) — only 3 elements to reduce per output.
-
+# `:by_thread`: one thread per output, which reduces its slice sequentially; for at least as
+# many outputs as elements each, e.g. `dims=1` of a 3×1000 matrix.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -286,10 +285,6 @@ end
     output_size, reduce_size,
 )
     mapf, accop = seeded_ops(f, op, seed)
-    # NOTE: index calculations use zero-indexing (fewer ops, matches the CUDA / ROCm / oneAPI /
-    # Metal code this is transpiled to), converting to one-indexing only at memory accesses.
-    # `base_offset` (the source's element offset within its dense buffer; 0 for a dense
-    # source) is folded into the per-output base, so it costs at most one add per thread.
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -308,16 +303,8 @@ end
     end
 end
 
-# GPU kernel: by_block — each block reduces one output element, then grid-strides to
-# the next output (iout += num_blocks) until all outputs are covered. When
-# num_blocks >= output_size, each block handles at most one output (the original,
-# non-striding behavior) at zero extra cost — the while loop runs once.
-#
-# Used for FEW_OUTPUTS <= dst_size < reduce_size (grid-stride, num_blocks ==
-# min(dst_size, target_blocks) < dst_size in general), and also for the
-# reduce_groups==1 fallback inside the multigroup branch (num_blocks == dst_size,
-# so the loop runs exactly once per block — identical to the pre-grid-stride kernel).
-
+# `:by_block` and `:by_block_each`: each block reduces the outputs `iblock`, `iblock + num_blocks`,
+# ..., one at a time.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -361,8 +348,8 @@ end
     end
 end
 
-# Stride-1 by-block reduction using one aligned 128-bit load per thread iteration.
-# The host launcher verifies the pointer, row alignment, and UInt32 index bound.
+# The by-block kernel for slices of consecutive elements, read with aligned 128-bit loads of `W`
+# elements; `vector_width` checks the alignment and the 32-bit index bound.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_vector_kernel!(
     src, dst,
     f, op, seed, init,
@@ -412,10 +399,8 @@ end
     end
 end
 
-# GPU kernel: multi-group first pass — several blocks per output element. Block `iblock`
-# handles output `iout` and group `igroup`, reducing its interleaved slice of the reduction
-# into partial[iout, igroup]. The second pass combines the groups.
-
+# `:multigroup`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + reduce_groups`,
+# ... of `N` elements of output `iout`'s slice into `partial[iout + igroup * output_size + 1]`.
 @kernel inbounds=true cpu=false unsafe_indices=true function multigroup_kernel!(
     @Const(src), partial,
     f, op, seed,
@@ -431,7 +416,7 @@ end
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
 
-    # Int(...) keeps the index decode signed (see tiled kernel): avoids a CUDA throw guard.
+    # (unsigned division, see `tiled_strided_kernel!`)
     iout   = Int(unsigned(iblock) % unsigned(output_size))
     igroup = Int(unsigned(iblock) ÷ unsigned(output_size))
 
@@ -455,11 +440,8 @@ end
     end
 end
 
-# GPU kernel: multi-group second pass — one block per output reduces over the `reduce_groups`
-# partials and applies `init` (see `finish`). Launched with a block size sized to `reduce_groups`
-# (see combine_block_size), avoiding an oversubscribed tree-reduce when reduce_groups
-# is much smaller than 256.
-
+# The second pass of `:multigroup` and the commutative `:columns`: one block per output combines
+# its `reduce_groups` partial results and applies `init` (see `finish`).
 @kernel inbounds=true cpu=false unsafe_indices=true function combine_groups_kernel!(
     @Const(partial), dst,
     op, seed, init,

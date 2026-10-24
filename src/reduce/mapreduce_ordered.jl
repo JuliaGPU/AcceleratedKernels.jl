@@ -5,13 +5,14 @@
 
 # Block `iblock` reduces group `g` of output `iout` (`iblock = iout + g * output_size`): the
 # outputs' slices are split into tiles of `N * K` elements, and each of the `groups` groups takes
-# a contiguous range of them. In each tile, every thread reduces a run of `K` consecutive
-# elements, and the block combines the runs in order (with the scans' block scan, which uses
-# sub-groups where `subgroups` says so) and appends the tile's total to the group's. Indices and
-# `f`, `seed` and `init` are those of the other reduction kernels (see `by_block_kernel!`
-# and `mapreduce_1d_kernel!`); with several groups, `dst` holds `output_size × groups` partial
-# results, for a second pass of this kernel with `f === PartialInputs()`. With a vector width `W`, the
-# runs of full tiles are read with `K ÷ W` aligned vector loads (see `ordered_vector_width`).
+# a contiguous range of them (an even share, as CUB's `GridEvenShare`). In each tile, every thread
+# reduces a run of `K` consecutive elements, and the block combines the runs in order (with the
+# scans' block scan, which uses sub-groups where `subgroups` says so) and appends the tile's total
+# to the group's. Indices and `f`, `seed` and `init` are those of the other reduction kernels (see
+# `by_block_kernel!` and `mapreduce_1d_kernel!`); with several groups, `dst` holds
+# `output_size × groups` partial results, for a second pass of this kernel with
+# `f === PartialInputs()`. With a vector width `W`, the runs of full tiles are read with `K ÷ W`
+# aligned vector loads (see `ordered_vector_width`).
 @kernel inbounds=true cpu=false unsafe_indices=true function ordered_kernel!(
     src, dst,
     f, op, seed, init,
@@ -32,7 +33,7 @@
     g    = Int(unsigned(iblock) ÷ unsigned(output_size))
     input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
 
-    # This group's tiles, as evenly divided as they can be
+    # (this group's tiles)
     tile_size = N * K
     ntiles = cld(reduce_size, tile_size)
     tile = fld(g * ntiles, groups)

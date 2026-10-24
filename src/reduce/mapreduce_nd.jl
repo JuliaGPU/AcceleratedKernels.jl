@@ -1,23 +1,13 @@
-# Generalized N-dimensional mapreduce for GPU and CPU backends, reducing one or more
-# dimensions (`dims::Integer` or a collection of integers) of `src` into `dst`.
-#
-# Design (see references: CUDA.jl / GPUArrays mapreducedim!, PyTorch Reduce.cuh, CUB):
-#   1. Canonicalize dims: collapse adjacent dimensions with matching strides into contiguous
-#      segments. A plain `dims=2` reduction, or any reduction over a contiguous block of dims
-#      (e.g. `dims=(1,2)`), collapses to a *single* reduce segment.
-#   2. The inner reduce loop must avoid per-element integer division. For a single segment the
-#      element offset is just `j * stride`; only genuinely non-contiguous dim sets (e.g.
-#      `dims=(1,3)`) fall back to a per-element multi-dimensional decode.
-#   3. Six work decompositions, chosen by the relative sizes and strides of the output and
-#      the reduction:
-#        - by_thread:     one thread per output (many outputs, small reduction)
-#        - columns:       32 contiguous outputs per block, split across blocks, for long strided
-#                         reductions (e.g. `dims=2` of a wide matrix)
-#        - tiled_strided: several contiguous outputs per block, for square-like strided reductions
-#        - by_block:      one block per output, grid-stride over outputs (few outputs, large reduction)
-#        - multigroup:    several blocks per output, two-pass (dst_size==1 or very small dst_size)
-#        - segments:      a group of lanes per output, several outputs per block, for reductions
-#                         of consecutive elements
+# Reductions along `dims`. `mapreduce_nd!` merges adjacent dimensions of the source into segments
+# (`merge_dims`), so that `dims=2` of a matrix or `dims=(1, 2)` of a 3-d array reduce one segment
+# of elements a stride apart, and only reductions over non-adjacent dimensions decode an index per
+# element. It then picks a launch shape from the sizes and strides of the outputs and of the
+# reduction (`reduce_shape`) and launches its kernels (kernels_nd.jl). The shapes follow CUB's
+# `DeviceSegmentedReduce`: a thread (`:by_thread`), a group of lanes (`:by_lanes`) or a block
+# (`:by_block`, `:by_block_each`) per output, or several blocks per output in two passes
+# (`:multigroup`); strided reductions into contiguous outputs give each block a tile of outputs
+# (`:tiled_strided`, `:columns`), and reductions in element order have their own kernels
+# (`:ordered`, `:columns_ordered`).
 
 # Main entry point
 
@@ -37,8 +27,7 @@ function mapreduce_nd!(
     launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
                                    (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
 
-    # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
-    # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
+    # (the blocks that fill the device, which the shapes of few outputs aim to launch)
     tuning = reduce_tuning(backend, A)
     target_blocks = tuning.target_blocks
 
@@ -137,7 +126,8 @@ function mapreduce_singles!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
     end
 end
 
-# Launch the kernels of a strided reduction of shape `shape` (see `reduce_shape`).
+# Launch the kernels of a strided reduction of shape `shape`, with the shape's parameter
+# `reduce_groups` (see `reduce_shape`).
 #
 # This and the other GPU launches of a reduction are called through `Base.inferencebarrier`.
 # Inferring a launch through KernelAbstractions and the back-end takes far longer than the launch,
@@ -201,11 +191,6 @@ function launch_shape!(
             ndrange=(block_size * blocks,),
         )
     elseif shape === :tiled_strided
-        # Narrow layout-specific path: square-like row reductions with contiguous
-        # outputs and strided input reads, e.g. size=(1024,1024), dims=2. Several
-        # outputs share a block: small lane groups reduce one output each, preserving
-        # more cross-output memory coalescing than by_block while launching many more
-        # blocks than by_thread.
         rows_per_block = TILED_OUTPUTS
         blocks = cld(dst_size, rows_per_block)
         kernel! = tiled_strided_kernel!(backend, block_size)
@@ -215,7 +200,6 @@ function launch_shape!(
             ndrange=(block_size * blocks,),
         )
     elseif shape === :by_thread
-        # Many outputs, small reduction: one thread per output reduces sequentially
         blocks = cld(dst_size, block_size)
         kernel! = by_thread_kernel!(backend, block_size)
         kernel!(
@@ -225,8 +209,6 @@ function launch_shape!(
             ndrange=(block_size * blocks,),
         )
     elseif shape === :multigroup
-        # Very few outputs, large reduction: split each output's reduction across
-        # `reduce_groups` blocks, combine the partials in a second pass
         partial = bufs.partials
         kernel! = multigroup_kernel!(backend, block_size)
         kernel!(
@@ -236,9 +218,6 @@ function launch_shape!(
             ndrange=(block_size * dst_size * reduce_groups,),
         )
 
-        # Second pass: reduce partial (dst_size × reduce_groups) → dst, one block
-        # per output. reduce_groups is small (<=block_size by construction), so use
-        # a small block size for this pass to avoid an oversubscribed tree-reduce.
         pass2_block_size = combine_block_size(reduce_groups)
         kernel2! = combine_groups_kernel!(backend, pass2_block_size)
         kernel2!(
@@ -247,9 +226,7 @@ function launch_shape!(
             ndrange=(pass2_block_size * dst_size,),
         )
     else
-        # One block per output: grid-striding over the outputs with at most
-        # `target_blocks` blocks, or (a multigroup reduction that collapsed to one group,
-        # e.g. reduce_size <= block_size) one block for each of the few outputs
+        # (`:by_block_each` launches a block for each of its few outputs)
         launch_blocks = shape === :by_block ? min(dst_size, target_blocks) : dst_size
         launch_by_block!(
             backend, block_size, buffer, dst, f, op, seed, init,
@@ -261,6 +238,8 @@ function launch_shape!(
     return nothing
 end
 
+# Launch the by-block kernel with `num_blocks` blocks, each reducing the outputs `iblock`,
+# `iblock + num_blocks`, ...; with vector loads where `buffer` is a dense buffer they suit
 function launch_by_block!(
     backend, block_size, buffer, dst, f::F, op::OP, seed, init,
     base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
@@ -288,9 +267,8 @@ function launch_by_block!(
     end
 end
 
-# Smallest power-of-two >= n, capped at 256 (the original fixed block size) and
-# floored at 32 (one warp) — used for the multigroup second pass, which only ever
-# combines `reduce_groups` values (reduce_groups <= block_size by construction).
+# The block size of a second pass that combines `n` partial results per output: the next power
+# of two, from 32 to 256
 @inline function combine_block_size(n::Int)
     n <= 32  && return 32
     n <= 64  && return 64
@@ -301,6 +279,7 @@ end
 
 # CPU path
 
+# Reduce `src` into `dst` on Julia threads, one output after the other in each task
 function mapreduce_nd_threads!(
     f::F, op::OP, dst, src;
     init, seed, max_tasks, min_elems,

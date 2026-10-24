@@ -1,13 +1,12 @@
 # How a reduction along `dims` indexes its source: the reduced and kept dimensions merged into
 # segments, and the buffer, offset, strides and vector width of the source's memory.
 
-# Host-side canonicalization: split the dimensions into reduced and kept ("outer") segments,
-# merging adjacent dimensions whose strides are contiguous. Returns the `(stride, size)` pairs of
-# the reduced and of the kept segments, each as `N`-tuples of strides and sizes padded with
-# zeros, and the number of segments. (The fixed length keeps this type stable: the reduction's
+# Split the dimensions into reduced and kept ("outer") segments, merging adjacent dimensions of
+# the same kind where the second's stride continues the first's. Returns the `(stride, size)`
+# pairs of the reduced and of the kept segments, each as `N`-tuples of strides and sizes padded
+# with zeros, and the number of segments. (The fixed length keeps this type stable: the reduction's
 # host path runs on every call, and dynamic dispatch there costs more than small kernels take.)
-function merge_dims(src_sizes::NTuple{N, Int}, src_strides::NTuple{N, Int},
-                    rdims) where {N}
+function merge_dims(src_sizes::NTuple{N, Int}, src_strides::NTuple{N, Int}, rdims) where {N}
     pad = ntuple(_ -> 0, Val(N))
     rstrides, rsizes, nr = pad, pad, 0
     ostrides, osizes, no = pad, pad, 0
@@ -85,13 +84,11 @@ linear_layout(src) = (; buffer=linear_view(src), offset=0, strides=dense_strides
 linear_view(src::AbstractArray) = vec(src)
 linear_view(src::Base.Broadcast.Broadcasted) = src
 
-# Resolve the layout the stride-based fast-path kernels need. Those kernels index a
-# flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`, so they work for any
-# source backed by a single dense column-major buffer — a dense array, but also a
-# strided view, adjoint, permuted-dims, or reshape over one. Returns
-# `(; buffer, offset, strides)` for such sources, or `nothing` (→ linear indexing, see
-# `source_layout`) for `Broadcasted` and anything not backed by a dense buffer
-# (lazy/computed arrays, complex adjoints without `strides`, nested wrappers).
+# The layout of a source backed by a single dense column-major buffer, which the kernels index
+# at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`: a dense array, or a strided view, adjoint,
+# permuted-dims array or reshape of one. `nothing` for other sources (lazy arrays, `Broadcasted`
+# objects, complex adjoints, wrappers of wrappers), which are indexed linearly (see
+# `source_layout`).
 function strided_layout(src::AbstractArray)
     s = try
         strides(src)
@@ -101,12 +98,9 @@ function strided_layout(src::AbstractArray)
         return nothing
     end
 
-    # Dense or contiguous (column-major) — index the source directly, no offset.
     s == dense_strides(size(src)) && return (; buffer=src, offset=0, strides=s)
 
-    # Non-dense but strided: index the dense parent buffer at the source's offset.
-    # Only one level of wrapping over a dense buffer is supported; deeper nesting
-    # falls back to the generic kernel.
+    # (a wrapper of a dense array: its parent, at the source's offset)
     p = parent(src)
     (p === src || !isdense(p)) && return nothing
     offset = parent_offset(src, p)
@@ -125,9 +119,8 @@ function isdense(p::AbstractArray)
     end
 end
 
-# Offset (0-based, in elements) of the wrapper's first element within its dense
-# parent buffer. SubArrays start at their first selected index; permuted-dims,
-# reshapes, and (real) adjoints/transposes share the parent's first element.
+# The offset (in elements, from 0) of the wrapper's first element in its parent: a view's first
+# index, and 0 for the other wrappers, which start at the parent's first element
 function parent_offset(src::SubArray, p)
     try
         # Base.map (not AK's array `map`, which shadows it inside this module).
@@ -141,6 +134,7 @@ function parent_offset(src::SubArray, p)
 end
 parent_offset(src, p) = 0
 
+# (`pointer` and its conversion to an address are not defined for every backend's arrays)
 function isaligned16(buffer)
     applicable(pointer, buffer) || return false
     ptr = try
@@ -152,6 +146,9 @@ function isaligned16(buffer)
     return UInt(ptr) % 16 == 0
 end
 
+# The width of the vector loads of the by-block kernel for slices of consecutive elements of a
+# dense buffer: 16 bytes of 4- or 8-byte elements, where the slices and the buffer are aligned to
+# that; else 0
 function vector_width(
     buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
 )
@@ -164,14 +161,13 @@ function vector_width(
     Base.all(s -> s % W == 0, outer_strides) || return 0
     isaligned16(buffer) || return 0
 
-    # The vector kernel uses UInt32 indices. Leave room for the final grid-stride
-    # increment so it cannot wrap after the last vector load.
+    # (the kernel's 32-bit indices must not wrap with the last grid-stride step)
     UInt128(reduce_size) + UInt128(block_size * W) <= typemax(UInt32) || return 0
     return W
 end
 
-# The reduced-extent index space: full axes along reduced dimensions, a single
-# index (`OneTo(1)`) along kept dimensions. Combined with `max(Iother, Ireduce)`
-# this reproduces Base's `mapreducedim!` iteration without touching strides.
+# The indices of a slice relative to its output: the axes of the reduced dimensions, and a single
+# index along the kept ones, so that `max(Iother, Ireduce)` indexes the source as Base's
+# `mapreducedim!` does
 slice_indices(src, dst) =
     CartesianIndices(ifelse.(axes(src) .== axes(dst), Ref(Base.OneTo(1)), axes(src)))
