@@ -83,7 +83,6 @@ if in_test_env("CUDACore")
         global MAX_BLOCK_SIZE = Int(CUDACore.attribute(CUDACore.device(), CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK))
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = true
         $_testset_setup_code
     end)
 end
@@ -99,7 +98,6 @@ if in_test_env("AMDGPU")
         global MAX_BLOCK_SIZE = 1024
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = true
         $_testset_setup_code
     end)
 end
@@ -114,7 +112,6 @@ if in_test_env("Metal")
         global MAX_BLOCK_SIZE = Int(Metal.device().maxThreadsPerThreadgroup.width)
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
         $_testset_setup_code
     end)
 end
@@ -129,7 +126,6 @@ if in_test_env("oneAPI")
         global MAX_BLOCK_SIZE = Int(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize)
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
         $_testset_setup_code
     end)
 end
@@ -145,7 +141,6 @@ if in_test_env("OpenCL")
         global MAX_BLOCK_SIZE = Int(OpenCL.cl.device().max_work_group_size)
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
         $_testset_setup_code
     end)
 end
@@ -160,7 +155,6 @@ if args.custom["cpu-ka"] !== nothing
         global MAX_BLOCK_SIZE = 1024
         global TEST_KERNELS = true      # AK's kernels run in this configuration
         global HOST_KERNELS = true      # ... on the host backend
-        global TEST_DL = false
         $_testset_setup_code
     end)
 end
@@ -172,7 +166,6 @@ if args.custom["cpu"] !== nothing || isempty(backends)
         global MAX_BLOCK_SIZE = 1024
         global TEST_KERNELS = false
         global HOST_KERNELS = false
-        global TEST_DL = false
         $_testset_setup_code
     end)
 end

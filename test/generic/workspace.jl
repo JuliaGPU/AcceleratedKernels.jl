@@ -65,11 +65,6 @@
               (AK.reduce_tuning(BACKEND, Float32).target_blocks,)
         # ... which a reduction of one element does not need
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
-        # DecoupledLookback's flags only where it runs
-        if TEST_DL
-            @test haskey(AK.workspace_size(AK.accumulate!, +, copy(v); alg=AK.DecoupledLookback()), :flags)
-        end
-        @test !haskey(AK.workspace_size(AK.accumulate!, +, copy(v); alg=AK.ScanPrefixes()), :flags)
         # `acctype` sets the partial results' type
         m = reshape(v, 10, 1000)
         R = array_from_host(zeros(Float32, 1, 1000))

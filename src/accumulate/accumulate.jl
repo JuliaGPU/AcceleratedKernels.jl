@@ -61,9 +61,8 @@ The contract, which is AcceleratedKernels' own (see [Differences from Base](@ref
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and on GPUs [`ScanPrefixes`](@ref) for
-whole arrays and [`SliceScan`](@ref) along `dims`, with the device's settings.
-[`DecoupledLookback`](@ref) is available on backends that support it. `backend` is derived from
-`dst` and `src`.
+whole arrays and [`SliceScan`](@ref) along `dims`, with the device's settings. `backend` is
+derived from `dst` and `src`.
 
 On the host, accumulation is typically a memory-bound operation, so multithreaded accumulation
 only becomes faster for more compute-heavy operations that hide memory latency, e.g. accumulating
@@ -158,9 +157,6 @@ function _accumulate_setup(
     work = D === A ? (;) : (; work=_buffer(A, sz))
     prefixes = if a isa ScanPrefixes
         (; prefixes=_buffer(typeof(seed), _scan_prefixes_length(n, a)))
-    elseif a isa DecoupledLookback
-        num_blocks = cld(n, a.block_size * a.items_per_thread)
-        (; prefixes=_buffer(typeof(seed), num_blocks), flags=_buffer(UInt8, num_blocks))
     elseif a isa SliceScan
         # The chunk totals of slices split into chunks
         m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
@@ -221,8 +217,7 @@ function _accumulate_scan!(op::OP, w, src, entry, backend, a, bufs; init, neutra
             accumulate_1d_cpu!(op, w, backend, a; init, neutral, inclusive)
         else
             accumulate_1d_gpu!(op, w, backend, a; src, entry, init, neutral, inclusive,
-                               prefixes=get(bufs, :prefixes, nothing),
-                               flags=get(bufs, :flags, nothing))
+                               prefixes=get(bufs, :prefixes, nothing))
         end
     elseif dims > ndims(w)
         # Every slice has one element: inclusive scans applied `init` above, exclusive ones start
@@ -274,7 +269,7 @@ function _scan_combines(sz, dims, init, inclusive)
     return len >= 2 || (inclusive && !(init isa _NoInit))
 end
 
-_scan_launch(a::Union{ScanPrefixes, DecoupledLookback, SliceScan}) = (; block_size=a.block_size)
+_scan_launch(a::Union{ScanPrefixes, SliceScan}) = (; block_size=a.block_size)
 _scan_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
 
 # `w[i] = op(init, w[i])` for the first element `i` of the array (`dims === nothing`) or of each

@@ -1,14 +1,8 @@
-# The whole-array scan algorithms under test: each kernel algorithm the backend supports, or the
-# threaded host algorithm. `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for
+# The whole-array scan algorithm under test: the kernel algorithm, or the threaded host
+# algorithm. `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for
 # the configuration from both kinds of settings; without settings they give `Auto()`, except in
 # the `--cpu-ka` configuration, whose point is to run AK's kernels on the host backend.
-SCAN_ALGS = if !TEST_KERNELS
-    [AK.CPUThreads.Partitioned]
-elseif TEST_DL
-    [AK.ScanPrefixes, AK.DecoupledLookback]
-else
-    [AK.ScanPrefixes]
-end
+SCAN_ALGS = TEST_KERNELS ? [AK.ScanPrefixes] : [AK.CPUThreads.Partitioned]
 scan_name(A) = A === AK.CPUThreads.Partitioned ? "threads" : string(nameof(A))
 
 function scan_alg(A=nothing; block_size=nothing, items_per_thread=nothing,
@@ -145,10 +139,7 @@ end
                        init=0, inclusive=false, alg=scan_alg(A; block_size=128))
     @test Array(y) == 0:999
 
-    # Cross-block coherence: small tiles (block_size 16-64, 1 item/thread) maximise the number of
-    # inter-block publish/consume handoffs. For DecoupledLookback each handoff relies on the
-    # device-scope fence, so many-block non-uniform scans in both directions guard against a fence
-    # that is not device scoped (the incoherent lookback would drop whole-block carries).
+    # Small tiles (block_size 16-64, 1 item/thread) maximise the number of carries between blocks
     for _ in 1:100
         num_elems = rand(5_000:200_000)
         block_size = rand((16, 32, 64))
@@ -211,7 +202,7 @@ end
     Random.seed!(0)
 
     # Single and multiple blocks, and more blocks than one block can scan (block_size=16), so that
-    # the block scan, the lookback / block-prefix carry and the chunked prefix carry are all
+    # the block scan, the block-prefix carry and the chunked prefix carry are all
     # exercised. On the CPU, `max_tasks=4` exercises the carry between tasks.
     # With a neutral element, and without one (partial results then start from their first
     # element)

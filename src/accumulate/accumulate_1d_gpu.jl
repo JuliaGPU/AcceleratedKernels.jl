@@ -1,13 +1,3 @@
-
-const ACC_FLAG_A::UInt8 = 0             # Aggregate of all previous prefixes finished
-const ACC_FLAG_P::UInt8 = 1             # Only current block's prefix available
-
-
-# Device-scope memory fence for the DecoupledLookback scan. Each GPU backend overrides it with a
-# native device fence in its package extension; a plain UnsafeAtomics.fence is not device scoped.
-function _decoupled_fence end
-
-
 # The sub-group width of the scans of values of type `T` in blocks of `block_size` threads on
 # `backend`, as a `Val` for the kernels: the backend's, where the tuning asks for sub-groups and
 # they are consecutive threads (from KernelAbstractions 0.10), shuffle `T`, and fit a block
@@ -107,7 +97,7 @@ end
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_block!(
     op, v, src, entry, seed, neutral,
     inclusive,
-    flags, prefixes, block_seeds,
+    prefixes, block_seeds,
     ::Val{ITEMS}, subgroups::Val,
 ) where ITEMS
     # `block_size` is a power of two.
@@ -149,26 +139,18 @@ end
         @context, op, thread_totals, block_seed, block_size, ithread, subgroups,
     )
 
-    # DecoupledLookback keeps later blocks inclusive until the carry pass.
-    block_inclusive = inclusive || (iblock != 0x0 && !isnothing(flags))
     prev = neutral
     k = 0
     while k < ITEMS
         r = tile[run + k + 0x1]
-        tile[run + k + 0x1] =
-            block_inclusive ? op(thread_prefix, r) : op(thread_prefix, prev)
+        tile[run + k + 0x1] = inclusive ? op(thread_prefix, r) : op(thread_prefix, prev)
         prev = r
         k += 1
     end
     @synchronize()
 
-    if ithread == 0x0
-        if !isnothing(prefixes)
-            prefixes[iblock + 0x1] = block_total
-        end
-        if !isnothing(flags)
-            flags[iblock + 0x1] = ACC_FLAG_P
-        end
+    if ithread == 0x0 && !isnothing(prefixes)
+        prefixes[iblock + 0x1] = block_total
     end
 
     # Store the tile in striped order.
@@ -219,61 +201,6 @@ end
     end
 end
 
-# Add each block's running prefix, stopping at a completed predecessor.
-@kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_previous!(
-    op, v, flags, @Const(prefixes), neutral, ::Val{ITEMS},
-) where ITEMS
-    _, op = _lanefuncs(_Partials(), op, neutral)
-    len = length(v)
-    @uniform block_size = @groupsize()[1]
-
-    iblock = @index(Group, Linear)
-    ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * ITEMS
-
-    # The lookback walks towards earlier blocks, so each earlier aggregate is combined on the left.
-    running_prefix = prefixes[iblock]
-    inspected_block = signed(typeof(iblock))(iblock) - 0x2
-    while inspected_block >= 0x0
-        flag = UnsafeAtomics.load(
-            pointer(flags, inspected_block + 0x1),
-            UnsafeAtomics.monotonic,
-        )
-        if flag == ACC_FLAG_A
-            _decoupled_fence()          # acquire: order the `v` read after the flag load
-            running_prefix = op(_lift(neutral, v[(inspected_block + 0x1) * block_size * ITEMS]),
-                                running_prefix)
-            break
-        else
-            running_prefix = op(prefixes[inspected_block + 0x1], running_prefix)
-        end
-
-        inspected_block -= 0x1
-    end
-
-    # Add the aggregate prefix of all previous blocks to each element.
-    j = 0
-    while j < ITEMS
-        gi = block_offset + j * block_size + ithread
-        if gi < len
-            v[gi + 0x1] = _lower(eltype(v), op(running_prefix, _lift(neutral, v[gi + 0x1])))
-        end
-        j += 1
-    end
-
-    # Publish writes to `v` before marking the block complete.
-    @synchronize()
-    _decoupled_fence()                  # release: order the flag store after the `v` writes
-    if ithread == 0x0
-        UnsafeAtomics.store!(
-            pointer(flags, iblock + 0x1),
-            convert(eltype(flags), ACC_FLAG_A),
-            UnsafeAtomics.monotonic,
-        )
-    end
-end
-
-
 # Add to each tile after the first the reduction of the tiles before it, from the inclusive scan
 # of the tiles' totals.
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_add_prefixes!(
@@ -304,100 +231,9 @@ end
     end
 end
 
-# Save the value preceding each tile before shifting the array in place.
-@kernel cpu=false inbounds=true function exclusive_prefixes_kernel!(
-    prefixes, @Const(v), seed, neutral, elems_per_block,
-)
-    iblock = @index(Global, Linear) - 0x1
-    prefixes[iblock + 0x1] = iblock == 0x0 ? seed : _lift(neutral, v[iblock * elems_per_block])
-end
-
-
-@kernel cpu=false inbounds=true unsafe_indices=true function exclusive_shift_kernel!(
-    v, @Const(prefixes), ::Val{ITEMS},
-) where ITEMS
-    @uniform block_size = @groupsize()[1]
-    tile = @localmem eltype(v) (block_size * ITEMS,)
-
-    len = length(v)
-    iblock = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
-    block_offset = iblock * block_size * ITEMS
-
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        gi = block_offset + p
-        if gi < len
-            tile[p + 0x1] = v[gi + 0x1]
-        end
-        j += 1
-    end
-    @synchronize()
-
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        gi = block_offset + p
-        if gi < len
-            v[gi + 0x1] = p == 0x0 ? _lower(eltype(v), prefixes[iblock + 0x1]) : tile[p]
-        end
-        j += 1
-    end
-end
-
-
 # The first block's seed: `init` in the element type, else the neutral seed
 _scan_first_seed(v, init, neutral) = _lift(neutral, convert(eltype(v), init))
 _scan_first_seed(v, ::_NoInit, neutral) = neutral
-
-
-# DecoupledLookback algorithm
-function accumulate_1d_gpu!(
-    op, v::AbstractArray, backend::Backend, alg::DecoupledLookback;
-    src=v,
-    entry=identity,
-    init,
-    neutral,
-    inclusive::Bool,
-    prefixes::Union{Nothing, AbstractArray},
-    flags::Union{Nothing, AbstractArray},
-)
-    block_size, items_per_thread = alg.block_size, alg.items_per_thread
-
-    # Nothing to accumulate
-    if length(v) == 0
-        return v
-    end
-
-    elems_per_block = block_size * items_per_thread
-    num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
-    items = Val(items_per_thread)
-    seed = _scan_first_seed(v, init, neutral)
-
-    shift_to_exclusive = !inclusive && num_blocks > 1
-    block_inclusive = inclusive || shift_to_exclusive
-
-    subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
-    kernel1! = _accumulate_block!(backend, block_size)
-    kernel1!(op, v, src, entry, seed, neutral, block_inclusive, flags, prefixes, nothing, items,
-             subgroups, ndrange=num_blocks * block_size)
-
-    if num_blocks > 1
-        kernel2! = _accumulate_previous!(backend, block_size)
-        kernel2!(op, v, flags, prefixes, neutral, items,
-                 ndrange=(num_blocks - 1) * block_size)
-    end
-
-    if shift_to_exclusive
-        exclusive_prefixes_kernel!(backend, block_size)(prefixes, v, seed, neutral,
-                                                        elems_per_block, ndrange=num_blocks)
-        exclusive_shift_kernel!(backend, block_size)(v, prefixes, items,
-                                                     ndrange=num_blocks * block_size)
-    end
-
-    return v
-end
 
 
 # The length of the scratch of `ScanPrefixes` for `n` elements: the totals of the tiles, of the
@@ -422,7 +258,6 @@ function accumulate_1d_gpu!(
     neutral,
     inclusive::Bool,
     prefixes::Union{Nothing, AbstractArray},
-    flags::Union{Nothing, AbstractArray},
 )
     block_size, items_per_thread = alg.block_size, alg.items_per_thread
 
@@ -439,7 +274,7 @@ function accumulate_1d_gpu!(
     subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
     kernel! = _accumulate_block!(backend, block_size)
     if num_blocks == 1
-        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, nothing, items,
+        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, items,
                 subgroups, ndrange=block_size)
         return v
     end
@@ -449,7 +284,7 @@ function accumulate_1d_gpu!(
     totals = view(prefixes, 1:num_blocks)
     scan_totals!() =
         accumulate_1d_gpu!(op, totals, backend, alg; init=_NoInit(), neutral, inclusive=true,
-                           prefixes=view(prefixes, num_blocks+1:length(prefixes)), flags=nothing)
+                           prefixes=view(prefixes, num_blocks+1:length(prefixes)))
     if scan_tuning(backend, eltype(v)).reduce_then_scan
         # Reduce the tiles, then scan them from their prefix: this reads the source twice and
         # writes the result once
@@ -457,11 +292,11 @@ function accumulate_1d_gpu!(
                                                       items, subgroups,
                                                       ndrange=num_blocks * block_size)
         scan_totals!()
-        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, totals, items,
+        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, totals, items,
                 subgroups, ndrange=num_blocks * block_size)
     else
         # Scan the tiles, then add their prefix: this reads and writes the result twice
-        kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, totals, nothing, items,
+        kernel!(op, v, src, entry, seed, neutral, inclusive, totals, nothing, items,
                 subgroups, ndrange=num_blocks * block_size)
         scan_totals!()
         _accumulate_add_prefixes!(backend, block_size)(op, v, totals, neutral, inclusive, items,

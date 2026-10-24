@@ -66,6 +66,5 @@ alike; tunings cannot change them.
 ```@docs
 AcceleratedKernels._runs_threads
 AcceleratedKernels._runs_kernels
-AcceleratedKernels._supports_lookback
 AcceleratedKernels._resolve_backend
 ```

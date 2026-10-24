@@ -1,11 +1,9 @@
 # Resolution of scan algorithms, without launching kernels.
 
-# A GPU backend with a tuning and a lookback capability the tests can change
+# A GPU backend with a tuning the tests can change
 struct ScanResolveTestBackend <: KernelAbstractions.Backend end
 const SCAN_RESOLVE_TUNING = Ref(AK.ScanTuning())
-const SCAN_RESOLVE_LOOKBACK = Ref(false)
 AK.scan_tuning(::ScanResolveTestBackend, ::Type) = SCAN_RESOLVE_TUNING[]
-AK._supports_lookback(::ScanResolveTestBackend) = SCAN_RESOLVE_LOOKBACK[]
 
 # A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
 struct ScanNoKernelsTestBackend <: KernelAbstractions.Backend end
@@ -15,14 +13,13 @@ const SRB = ScanResolveTestBackend()
 
 resolve_scan(alg; T=Float32, dims=nothing, backend=SRB) = AK._resolve_scan(alg, backend, T, dims)
 
-function with_scan_tuning(f; lookback=false, kwargs...)
-    old = SCAN_RESOLVE_TUNING[], SCAN_RESOLVE_LOOKBACK[]
+function with_scan_tuning(f; kwargs...)
+    old = SCAN_RESOLVE_TUNING[]
     SCAN_RESOLVE_TUNING[] = AK.ScanTuning(; kwargs...)
-    SCAN_RESOLVE_LOOKBACK[] = lookback
     try
         f()
     finally
-        SCAN_RESOLVE_TUNING[], SCAN_RESOLVE_LOOKBACK[] = old
+        SCAN_RESOLVE_TUNING[] = old
     end
 end
 
@@ -34,18 +31,6 @@ end
     @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
     @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
     @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
-
-    # DecoupledLookback only where the tuning prefers it and the backend supports it
-    with_scan_tuning(; prefer_lookback=true) do
-        @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
-    end
-    with_scan_tuning(; lookback=true) do
-        @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
-    end
-    with_scan_tuning(; prefer_lookback=true, lookback=true) do
-        @test resolve_scan(AK.Auto()) === AK.DecoupledLookback(256, 8)
-        @test resolve_scan(AK.Auto(); dims=1) === AK.SliceScan(256, 8)
-    end
 
     # On the host backend: the threaded algorithm, filled
     host = AK.HOST_BACKEND
@@ -94,12 +79,6 @@ end
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); dims=1)
     @test_throws ArgumentError resolve_scan(AK.SliceScan())
 
-    # DecoupledLookback needs the capability, whatever the tuning says
-    @test_throws ArgumentError resolve_scan(AK.DecoupledLookback())
-    with_scan_tuning(; lookback=true) do
-        @test resolve_scan(AK.DecoupledLookback()) === AK.DecoupledLookback(256, 8)
-    end
-
     # Tiles of partial results: lanes (a Bool and a value) are wider than elements, so fewer fit.
     # NTuple{3, Int32} is 4-byte aligned everywhere, so its lanes take 16 bytes on every platform
     # (Int64 lanes take 12 on 32-bit x86)
@@ -127,8 +106,7 @@ end
     for (B, dims) in ((ScanResolveTestBackend, Nothing), (ScanResolveTestBackend, Int),
                       (host, Nothing), (host, Int))
         rt = only(Base.return_types(AK._resolve_scan, (AK.Auto, B, Type{Float32}, dims)))
-        @test rt <: Union{AK.ScanPrefixes, AK.DecoupledLookback, AK.SliceScan,
-                          AK.CPUThreads.Partitioned}
+        @test rt <: Union{AK.ScanPrefixes, AK.SliceScan, AK.CPUThreads.Partitioned}
     end
 end
 

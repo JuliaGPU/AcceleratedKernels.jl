@@ -19,7 +19,6 @@ using KernelAbstractions: @context
 @static if isdefined(KernelAbstractions, :KernelInterface)
     const KI = KernelAbstractions.KernelInterface
 end
-import UnsafeAtomics
 
 
 # Exposed functions from upstream packages
