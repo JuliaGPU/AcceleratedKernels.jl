@@ -1,4 +1,4 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_block!(
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_tile_kernel!(
     vec, comp, layout, blocks_per_slice,
 )
 
@@ -47,7 +47,7 @@
             n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
             lo = gid * size_group + half_size_group
             hi = lo + n
-            pos1 = ithread % half_size_group + _lower_bound_s0(s_buf, v1, lo, hi, comp) - lo
+            pos1 = ithread % half_size_group + lower_bound0(s_buf, v1, lo, hi, comp) - lo
         end
 
         tid = gid * size_group + half_size_group + ithread % half_size_group
@@ -56,7 +56,7 @@
             v2 = s_buf[tid + 0x1]
             lo = gid * size_group
             hi = lo + half_size_group
-            pos2 = ithread % half_size_group + _upper_bound_s0(s_buf, v2, lo, hi, comp) - lo
+            pos2 = ithread % half_size_group + upper_bound0(s_buf, v2, lo, hi, comp) - lo
         end
 
         @synchronize()
@@ -78,7 +78,7 @@
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_global!(
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_pass_kernel!(
     @Const(vec_in), vec_out, comp, half_size_group, layout, blocks_per_slice,
 )
     N = @groupsize()[1]
@@ -112,7 +112,7 @@ end
         hi = (gid + 0x1) * size_group
         hi > len && (hi = len)
 
-        pos_out = pos_in + _lower_bound_s0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
+        pos_out = pos_in + lower_bound0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
         slice_out[pos_out + 0x1] = slice_in[pos_in + 0x1]
 
         # Right half
@@ -121,7 +121,7 @@ end
         if pos_in < len
             lo = gid * size_group
             hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + _upper_bound_s0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
+            pos_out = pos_in - half_size_group + upper_bound0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
             slice_out[pos_out + 0x1] = slice_in[pos_in + 0x1]
         end
     end
@@ -129,8 +129,8 @@ end
 
 
 # GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
-# `_sort_sizes(::MergeSort, ...)`.
-function _merge_sort!(
+# `sort_sizes(::MergeSort, ...)`.
+function merge_sort!(
     v::AbstractArray, backend::Backend, bufs::NamedTuple;
 
     lt=isless,
@@ -150,7 +150,7 @@ function _merge_sort!(
     if by !== identity
         keys = bufs.keys
         map!(by, keys, v; backend, block_size)
-        _merge_sort_by_key!(keys, v, backend, bufs; lt, rev, order, block_size, dims)
+        merge_sort_by_key!(keys, v, backend, bufs; lt, rev, order, block_size, dims)
         return v
     end
 
@@ -160,7 +160,7 @@ function _merge_sort!(
     # Block level: each block sorts a tile of one slice in local memory
     len = layout.len
     blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(
+    merge_tile_kernel!(backend, block_size)(
         v, comp, layout, blocks,
         ndrange=(block_size * blocks * slice_count(layout),),
     )
@@ -172,7 +172,7 @@ function _merge_sort!(
         p1 = v
         p2 = bufs.temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = merge_pass_kernel!(backend, block_size)
 
         niter = 0
         while len > half_size_group

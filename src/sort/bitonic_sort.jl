@@ -29,7 +29,7 @@ end
 
 # Run the local strides of levels `first_level:last_level`. A tile holds part of one long slice
 # (`SPAN == CAP`) or `CAP ÷ SPAN` short slices. Unused entries are never read.
-@kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile!(
+@kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile_kernel!(
     vec, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
 ) where {CAP, SPAN}
     @uniform BS = Int(@groupsize()[1])
@@ -88,7 +88,7 @@ end
 
 
 # One global step at stride `2^jlog >= CAP`, one thread per comparator
-@kernel cpu=false inbounds=true function bitonic_global!(
+@kernel cpu=false inbounds=true function bitonic_pass_kernel!(
     vec, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
 )
     islice, p = slice_block(layout, Int(@index(Global, Linear)) - 1, pairs_per_slice)
@@ -99,7 +99,7 @@ end
 
 
 # GPU bitonic sort of `v` (or of each slice along `dims`), in place.
-function _bitonic_sort!(
+function bitonic_sort!(
     v::AbstractArray, backend::Backend=get_backend(v);
 
     lt=isless,
@@ -125,12 +125,12 @@ function _bitonic_sort!(
     tiles_per_slice = cld(len, span)
     nblocks = cld(nslices, cap ÷ span) * tiles_per_slice
     tile_threads = min(block_size, cap)
-    tile! = bitonic_tile!(backend, tile_threads)
+    tile! = bitonic_tile_kernel!(backend, tile_threads)
     tile!(v, ord, layout, tiles_per_slice, 1, trailing_zeros(span), Val(cap), Val(span);
           ndrange=nblocks * tile_threads)
 
     if npow > span
-        global! = bitonic_global!(backend, block_size)
+        global! = bitonic_pass_kernel!(backend, block_size)
         pairs = npow ÷ 2
         for kklog in (trailing_zeros(span) + 1):trailing_zeros(npow)
             for jlog in (kklog - 1):-1:trailing_zeros(span)

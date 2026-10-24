@@ -1,6 +1,6 @@
 # Taken from julia.Base to ensure consistent results with the Base CPU version
 # License is MIT: https://julialang.org/license
-function _searchsortedfirst(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
+function searchsorted_first(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     hi = hi + T(1)
     len = hi - lo
     @inbounds while len != 0x0
@@ -18,7 +18,7 @@ function _searchsortedfirst(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where 
 end
 
 
-function _searchsortedlast(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
+function searchsorted_last(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     u = T(1)
     lo = lo - u
     hi = hi + u
@@ -40,7 +40,7 @@ end
 # accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
 #
 # If you use these functions, you'll have to offset the returned indices too.
-Base.@propagate_inbounds function _lower_bound_s0(arr, value, left=0, right=length(arr), comp=(<))
+Base.@propagate_inbounds function lower_bound0(arr, value, left=0, right=length(arr), comp=(<))
     right <= left && return left
     comp(arr[right], value) && return right
     while right > left + 0x1
@@ -55,7 +55,7 @@ Base.@propagate_inbounds function _lower_bound_s0(arr, value, left=0, right=leng
 end
 
 
-Base.@propagate_inbounds function _upper_bound_s0(arr, value, left=0, right=length(arr), comp=(<))
+Base.@propagate_inbounds function upper_bound0(arr, value, left=0, right=length(arr), comp=(<))
     right <= left && return left
     comp(value, arr[left + 0x1]) && return left
     while right > left + 0x1
@@ -119,7 +119,7 @@ function searchsortedfirst!(
     # (`ix` and `xs` are paired by position)
     ix1, xs1 = one_based(ix), one_based(xs)
     foreachindex_on(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = _searchsortedfirst(v, xs1[i], firstindex(v), lastindex(v), ord)
+        @inbounds ix1[i] = searchsorted_first(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end
@@ -158,7 +158,7 @@ function searchsortedlast!(
     # (`ix` and `xs` are paired by position)
     ix1, xs1 = one_based(ix), one_based(xs)
     foreachindex_on(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = _searchsortedlast(v, xs1[i], firstindex(v), lastindex(v), ord)
+        @inbounds ix1[i] = searchsorted_last(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end

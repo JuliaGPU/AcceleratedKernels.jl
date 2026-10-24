@@ -1,5 +1,5 @@
 # GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
-function _merge_sortperm!(
+function merge_sortperm!(
     ix::AbstractArray,
     v::AbstractArray,
     backend::Backend,
@@ -27,14 +27,14 @@ function _merge_sortperm!(
     # (a range, for instance, has no backend: collected on the host first)
     keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
 
-    _merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
+    merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
 
     ix
 end
 
 
 # GPU merge sort permutation comparing the keys in global memory, without copying them.
-function _merge_sortperm_lowmem!(
+function merge_sortperm_lowmem!(
     ix::AbstractArray,
     v::AbstractArray,
     backend::Backend,
@@ -66,7 +66,7 @@ function _merge_sortperm_lowmem!(
     # Block level
     len = layout.len
     blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(
+    merge_tile_kernel!(backend, block_size)(
         ix, comp, layout, blocks,
         ndrange=(block_size * blocks * slice_count(layout),),
     )
@@ -78,7 +78,7 @@ function _merge_sortperm_lowmem!(
         p1 = ix
         p2 = bufs.temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = merge_pass_kernel!(backend, block_size)
 
         niter = 0
         while len > half_size_group

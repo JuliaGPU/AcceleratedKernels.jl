@@ -254,7 +254,7 @@ end
         end
         if AK.runs_kernels(BACKEND)
             for alg in (AK.MergeSort(), AK.BitonicSort(), AK.RadixSort())
-                alg isa AK.RadixSort && !AK._rs_supported(T) && continue
+                alg isa AK.RadixSort && !AK.radix_supports_eltype(T) && continue
                 @test resolve(alg, zeros(T, 16); backend=BACKEND) isa typeof(alg)
             end
         end

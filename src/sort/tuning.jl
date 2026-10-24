@@ -106,7 +106,7 @@ sort_tuning(::Backend, ::Type) = SortTuning()
 
 
 # The operation an algorithm is resolved for, for error messages
-_sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!"
+sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!"
 
 
 """
@@ -131,9 +131,9 @@ function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                      perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
-    if (!a.stable || _ties_invisible(T, ord)) && layout.len <= t.bitonic_max_len
+    if (!a.stable || ties_identical(T, ord)) && layout.len <= t.bitonic_max_len
         return BitonicSort()
-    elseif layout isa FlatLayout && _rs_supported(T) && _rs_ordering(ord) &&
+    elseif layout isa FlatLayout && radix_supports_eltype(T) && radix_supports_ordering(ord) &&
            layout.len >= t.radix_min_len
         return RadixSort()                  # whole arrays only; a single slice is not flat
     end
@@ -145,12 +145,12 @@ end
 # `Base.Order.ord(isless, identity, rev, Forward)` is one of the two orderings accepted here;
 # custom `lt`/`by` give other ordering types. `isconcretetype` excludes union element types,
 # whose equal values can differ in type.
-_ties_invisible(::Type{T}, ord) where {T} =
+ties_identical(::Type{T}, ord) where {T} =
     isconcretetype(T) && T <: Union{Base.BitInteger, Bool, Char} &&
     ord isa Union{Base.Order.ForwardOrdering, Base.Order.ReverseOrdering{Base.Order.ForwardOrdering}}
 
 # The orderings radix sort supports: the default one and its reverse.
-_rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
+radix_supports_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 
 # Domain checks of the fields
@@ -205,7 +205,7 @@ function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs)
     check_fields(a)
     require_kernels(a, backend)
     !a.lowmem || (perm && !pairs) || throw(ArgumentError(
-        "MergeSort(lowmem=true) is only supported by sortperm!, not by $(_sort_opname(perm, pairs))"))
+        "MergeSort(lowmem=true) is only supported by sortperm!, not by $(sort_opname(perm, pairs))"))
     nothing
 end
 
@@ -213,15 +213,15 @@ function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) 
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
-        "RadixSort does not support $(_sort_opname(perm, pairs))"))
-    _rs_supported(T) || throw(ArgumentError(
+        "RadixSort does not support $(sort_opname(perm, pairs))"))
+    radix_supports_eltype(T) || throw(ArgumentError(
         "RadixSort does not support element type $T; it supports 32- and 64-bit integers " *
         "and floats"))
-    _rs_ordering(ord) || throw(ArgumentError(
+    radix_supports_ordering(ord) || throw(ArgumentError(
         "RadixSort only supports the default ordering and its reverse (no custom `lt` or `by`)"))
-    layout.len <= _RS_MAX_LEN || throw(ArgumentError(
+    layout.len <= RADIX_MAX_LEN || throw(ArgumentError(
         "RadixSort sorts at most 2^32 elements per array or slice, got $(layout.len)"))
-    _rs_portable_local_memory(T, a.block_size) <= LOCAL_MEMORY_BUDGET || throw(ArgumentError(
+    radix_portable_localmem(T, a.block_size) <= LOCAL_MEMORY_BUDGET || throw(ArgumentError(
         "RadixSort: block_size=$(a.block_size) needs more than $(LOCAL_MEMORY_BUDGET) bytes " *
         "of local memory for element type $T"))
     nothing
@@ -231,7 +231,7 @@ function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
-        "BitonicSort is unstable and does not support $(_sort_opname(perm, pairs))"))
+        "BitonicSort is unstable and does not support $(sort_opname(perm, pairs))"))
     nothing
 end
 

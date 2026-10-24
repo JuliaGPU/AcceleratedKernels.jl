@@ -1,4 +1,4 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_block!(
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_tile_by_key_kernel!(
     keys, values, comp, layout, blocks_per_slice,
 )
 
@@ -57,7 +57,7 @@
             n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
             lo = gid * size_group + half_size_group
             hi = lo + n
-            pos1 = ithread % half_size_group + _lower_bound_s0(s_keys, k1, lo, hi, comp) - lo
+            pos1 = ithread % half_size_group + lower_bound0(s_keys, k1, lo, hi, comp) - lo
         end
 
         tid = gid * size_group + half_size_group + ithread % half_size_group
@@ -67,7 +67,7 @@
             v2 = s_values[tid + 0x1]
             lo = gid * size_group
             hi = lo + half_size_group
-            pos2 = ithread % half_size_group + _upper_bound_s0(s_keys, k2, lo, hi, comp) - lo
+            pos2 = ithread % half_size_group + upper_bound0(s_keys, k2, lo, hi, comp) - lo
         end
 
         @synchronize()
@@ -101,7 +101,7 @@
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_by_key_global!(
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_pass_by_key_kernel!(
     @Const(keys_in), keys_out,
     @Const(values_in), values_out,
     comp, half_size_group, layout, blocks_per_slice,
@@ -143,7 +143,7 @@ end
         hi = (gid + 0x1) * size_group
         hi > len && (hi = len)
 
-        pos_out = pos_in + _lower_bound_s0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
+        pos_out = pos_in + lower_bound0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
         keys_out[pos_out + 0x1] = keys_in[pos_in + 0x1]
         values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
 
@@ -153,7 +153,7 @@ end
         if pos_in < len
             lo = gid * size_group
             hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + _upper_bound_s0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
+            pos_out = pos_in - half_size_group + upper_bound0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
             keys_out[pos_out + 0x1] = keys_in[pos_in + 0x1]
             values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
         end
@@ -163,8 +163,8 @@ end
 
 # GPU merge sort of `keys` (or of each slice along `dims`), permuting `values` alike.
 # GPU merge sort of `keys` (or of each slice along `dims`) carrying `values` along, in place, with
-# the scratch buffers of `_merge_by_key_sizes`.
-function _merge_sort_by_key!(
+# the scratch buffers of `merge_by_key_scratch`.
+function merge_sort_by_key!(
     keys::AbstractArray,
     values::AbstractArray,
     backend::Backend,
@@ -193,7 +193,7 @@ function _merge_sort_by_key!(
     # Block level: each block sorts a tile of one slice in local memory
     len = layout.len
     blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_by_key_block!(backend, block_size)(
+    merge_tile_by_key_kernel!(backend, block_size)(
         keys, values, comp, layout, blocks,
         ndrange=(block_size * blocks * slice_count(layout),),
     )
@@ -208,7 +208,7 @@ function _merge_sort_by_key!(
         pv1 = values
         pv2 = bufs.temp_values
 
-        kernel! = _merge_sort_by_key_global!(backend, block_size)
+        kernel! = merge_pass_by_key_kernel!(backend, block_size)
 
         niter = 0
         while len > half_size_group
@@ -235,8 +235,8 @@ function _merge_sort_by_key!(
 end
 
 
-# The scratch of `_merge_sort_by_key!` over slices `layout` of keys of size `ksize` and type `K`,
+# The scratch of `merge_sort_by_key!` over slices `layout` of keys of size `ksize` and type `K`,
 # with values of size `vsize` and type `V`: swap buffers, if the tiles need merging
-_merge_by_key_sizes(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
+merge_by_key_scratch(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
     layout.len > 2 * a.block_size ?
         (; temp_keys=scratch(K, ksize), temp_values=scratch(V, vsize)) : (;)
