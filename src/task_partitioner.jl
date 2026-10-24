@@ -69,16 +69,15 @@ struct TaskPartitioner
 end
 
 
-# The number of tasks of a `TaskPartitioner(num_elems, max_tasks, min_elems)`
+# The number of tasks of a `TaskPartitioner(num_elems, max_tasks, min_elems)`: at most
+# `max_tasks`, each with at least `min_elems` elements, and one if there are fewer
 task_count(num_elems, max_tasks, min_elems) = max(1, min(max_tasks, num_elems ÷ min_elems))
 
 function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
-    # Simple correctness checks
     @argcheck num_elems >= 0
     @argcheck max_tasks > 0
     @argcheck min_elems > 0
 
-    # Number of tasks needed to have at least `min_elems` per task
     num_tasks = task_count(num_elems, max_tasks, min_elems)
     if num_tasks == 1
         return TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, Int[], Task[])
@@ -88,7 +87,6 @@ function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     # among the first (num_elems % num_tasks) tasks, i.e. they get one extra element
     per_task, remaining = divrem(num_elems, num_tasks)
 
-    # Store starting index of each task
     task_istarts = Vector{Int}(undef, num_tasks)
     istart = 1
     @inbounds for i in 1:num_tasks
@@ -96,7 +94,7 @@ function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
         istart += i <= remaining ? per_task + 1 : per_task
     end
 
-    # Pre-allocate tasks array; this can be reused
+    # (reused by every call with this partitioner)
     tasks = Vector{Task}(undef, num_tasks)
 
     TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, task_istarts, tasks)
@@ -133,7 +131,7 @@ Base.length(tp::TaskPartitioner) = tp.num_tasks
     task_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     task_partition(f, tp::TaskPartitioner)
 
-Partition `num_elems` jobs across at most `num_tasks` parallel tasks with at least `min_elems` per
+Partition `num_elems` jobs across at most `max_tasks` parallel tasks with at least `min_elems` per
 task, calling `f(start_index:end_index)`, where the indices are between 1 and `num_elems`.
 
 # Examples
@@ -178,7 +176,7 @@ task_partition(f, args...) = itask_partition((_, irange) -> f(irange), args...)
     itask_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     itask_partition(f, tp::TaskPartitioner)
 
-Partition `num_elems` jobs across at most `num_tasks` parallel tasks with at least `min_elems` per
+Partition `num_elems` jobs across at most `max_tasks` parallel tasks with at least `min_elems` per
 task, calling `f(itask, start_index:end_index)`, where the indices are between 1 and `num_elems`.
 
 # Examples
@@ -198,7 +196,7 @@ end
 
 This function is probably most useful with a do-block, e.g.:
 ```julia
-task_partition(4) do itask, irange
+itask_partition(4) do itask, irange
     some_long_computation_needing_itask(param1, param2, irange)
 end
 ```
