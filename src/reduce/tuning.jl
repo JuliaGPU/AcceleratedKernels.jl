@@ -73,10 +73,12 @@ The reduction tuning for accumulator type `T` on `backend`'s current device; see
 [`sort_tuning`](@ref) for the conventions.
 """
 reduce_tuning(::Backend, ::Type) = ReduceTuning()
-# Kernels on the host backend run on the CPU, as with OpenCL's CPU devices (see AK's OpenCL
-# extension)
-reduce_tuning(::HostBackend, ::Type) =
-    ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
+# Kernels on CPU devices (the host backend's, and OpenCL's CPU devices) reduce short runs faster
+# with a thread per output, and long ones faster with groups of threads: with PoCL on a Ryzen
+# 9950X, summing an 8×10^6 matrix along `dims=1` takes half the time, and a 4096×4096 one along
+# `dims=1` also half the time.
+cpu_reduce_tuning() = ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
+reduce_tuning(::HostBackend, ::Type) = cpu_reduce_tuning()
 
 # Elements each thread loads per tile of a whole-array reduction: enough for 64 bytes of
 # accumulators, from 4 to 16. The first pass launches at most `target_blocks` blocks, so its

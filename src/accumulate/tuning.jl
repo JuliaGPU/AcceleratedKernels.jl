@@ -94,8 +94,10 @@ The scan tuning for element type `T` (the running-value type the scan computes i
 conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
-# (kernels on the host backend run on the CPU)
-scan_tuning(::HostBackend, ::Type) = ScanTuning(reduce_then_scan=false, subgroups=false)
+# CPU devices (the host backend's, and OpenCL's CPU devices) implement sub-group operations with
+# barriers of the whole block, and keep a scanned tile in their caches for adding its prefix
+cpu_scan_tuning() = ScanTuning(reduce_then_scan=false, subgroups=false)
+scan_tuning(::HostBackend, ::Type) = cpu_scan_tuning()
 
 
 """
