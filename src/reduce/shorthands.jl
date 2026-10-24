@@ -49,7 +49,7 @@ function _reduce_or_empty(empty, op, src; init=_NoInit(), dims=:, acctype=nothin
                           workspace=nothing, kwargs...)
     kwargs = (; dims, acctype, backend, alg, kwargs...)
     init isa _NoInit || return reduce(op, src; init, workspace, kwargs...)
-    A = _acctype(op, Union{}, _mapped_eltype(identity, src), acctype)
+    A = resolve_acctype(op, Union{}, mapped_eltype(identity, src), acctype)
     if A !== Union{} && isempty(src) &&
        (iswhole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))
         # (the algorithm and the workspace are checked as for any other input)
@@ -118,7 +118,7 @@ c = AK.count(CuArray(rand(Bool, 10, 100_000)); init=Int32(0), dims=2)
 """
 count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
 count(f, src::AbstractArray; init=0, kwargs...) =
-    mapreduce(_BoolValued(f), Base.add_sum, src; init, kwargs...)
+    mapreduce(BoolResult(f), Base.add_sum, src; init, kwargs...)
 
 plan(::typeof(sum), src::AbstractArray; kwargs...) = plan(reduce, Base.add_sum, src; kwargs...)
 plan(::typeof(prod), src::AbstractArray; kwargs...) = plan(reduce, Base.mul_prod, src; kwargs...)
@@ -126,4 +126,4 @@ plan(::typeof(maximum), src::AbstractArray; kwargs...) = plan(reduce, max, src; 
 plan(::typeof(minimum), src::AbstractArray; kwargs...) = plan(reduce, min, src; kwargs...)
 plan(::typeof(count), src::AbstractArray; kwargs...) = plan(count, identity, src; kwargs...)
 plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
-    plan(mapreduce, _BoolValued(f), Base.add_sum, src; init, kwargs...)
+    plan(mapreduce, BoolResult(f), Base.add_sum, src; init, kwargs...)

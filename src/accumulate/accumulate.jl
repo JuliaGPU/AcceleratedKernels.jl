@@ -130,7 +130,7 @@ end
 
 # Everything a scan of elements of type `T` into an array of element type `D` and size `sz`
 # resolves before touching data: its plan (backend, algorithm, scratch), running-value type and
-# partial-result seed (see `_reduce_seed`)
+# partial-result seed (see `reduce_seed`)
 function scan_setup(
     op, ::Type{D}, ::Type{T}, sz::Dims, backend::Backend;
     init=_NoInit(),
@@ -145,10 +145,10 @@ function scan_setup(
     n = Base.prod(sz; init=1)
     A = _scan_acctype(op, D, T, init, inclusive, _scan_combines(sz, dims, init, inclusive),
                       acctype)
-    seed = _reduce_seed(op, A, neutral)
+    seed = reduce_seed(op, A, neutral)
     # The kernels' tiles hold partial results: lanes, when `op` has no known neutral element
     a = resolve_scan(alg, backend, A, dims, typeof(seed))
-    if !inclusive && init isa _NoInit && seed isa _Lane && !_valid(seed)
+    if !inclusive && init isa _NoInit && seed isa Optional && !isset(seed)
         throw(ArgumentError(
             "an exclusive scan without `init` starts from the neutral element of `op`, " *
             "which is not known for $op; pass `init` or `neutral`"))
@@ -222,7 +222,7 @@ function _accumulate_scan!(op::OP, w, src, entry, backend, a, bufs; init, neutra
     elseif dims > ndims(w)
         # Every slice has one element: inclusive scans applied `init` above, exclusive ones start
         # over
-        inclusive || _fill!(w, _unlane(_scan_first_seed(w, init, neutral)), backend)
+        inclusive || _fill!(w, unwrap(_scan_first_seed(w, init, neutral)), backend)
     else
         accumulate_nd!(op, w, backend, a; src, entry, init, neutral, dims=Int(dims), inclusive,
                        totals=get(bufs, :totals, nothing))
@@ -244,16 +244,16 @@ _ScanEntry{A}(op::OP) where {A, OP} = _ScanEntry{A, OP}(op)
 # is called at all.
 function _scan_acctype(op, ::Type{D}, ::Type{T}, init, inclusive::Bool, combines::Bool,
                        acctype=nothing) where {D, T}
-    acctype === nothing || return _acctype(op, Union{}, T, acctype)
+    acctype === nothing || return resolve_acctype(op, Union{}, T, acctype)
     S = init isa _NoInit ? D : promote_type(D, typeof(init))
-    A = _reduce_acctype(op, S, T)
+    A = accumulator_type(op, S, T)
     if !inclusive && !(init isa _NoInit) && A !== Union{}
         A = promote_type(A, typeof(init))
     end
     if A === Union{}
         # `op` always throws for these types, which only a scan that never calls it gets past
-        combines && _check_acctype(op, identity, A)
-        F = _first_type(op, T)
+        combines && check_combinable(op, identity, A)
+        F = first_type(op, T)
         return F === Union{} ? T : F
     end
     return A

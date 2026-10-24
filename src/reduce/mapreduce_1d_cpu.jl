@@ -7,10 +7,10 @@ function mapreduce_1d_cpu(
     max_tasks::Int,
     min_elems::Int,
 ) where {F, OP}
-    f, op_lanes = _lanefuncs(f, op, neutral)
+    f, op_lanes = seeded_ops(f, op, neutral)
     tp = TaskPartitioner(length(src), max_tasks, min_elems)
     if src isa Base.Broadcast.Broadcasted || tp.num_tasks == 1
-        return _finish(op, init, nothing, 0, Base.mapreduce(f, op_lanes, src; init=neutral))
+        return finish(op, init, nothing, 0, Base.mapreduce(f, op_lanes, src; init=neutral))
     end
 
     # Each task reduces an independent chunk of the array
@@ -21,5 +21,5 @@ function mapreduce_1d_cpu(
             shared[itask] = Base.mapreduce(f, op_lanes, @view(src[irange]); init=neutral)
         end
     end
-    return _finish(op, init, nothing, 0, Base.reduce(op_lanes, shared; init=neutral))
+    return finish(op, init, nothing, 0, Base.reduce(op_lanes, shared; init=neutral))
 end

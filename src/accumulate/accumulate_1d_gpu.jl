@@ -1,5 +1,5 @@
 # Register-raking block scan with striped loads and stores, of the elements `entry(src[i])` into
-# `v` (`src` may be `v`). `neutral` seeds partial results (an empty `_Lane` when `op` has no known
+# `v` (`src` may be `v`). `neutral` seeds partial results (an empty `Optional` when `op` has no known
 # neutral element), and `seed` is the first block's. With `block_seeds`, the inclusive scan of
 # the blocks' totals, block `b` is seeded with `block_seeds[b]`, the reduction of the blocks
 # before it; else with `neutral`, to receive its carry from another kernel.
@@ -13,7 +13,7 @@
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(neutral) (block_size * ITEMS,)
     thread_totals = @localmem typeof(neutral) (block_size,)
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
 
     # Internal indices are zero-based; add one only when indexing arrays.
     len = length(v)
@@ -26,7 +26,7 @@
     while j < ITEMS
         p = j * block_size + ithread
         gi = block_offset + p
-        tile[p + 0x1] = gi < len ? _lift(neutral, entry(src[gi + 0x1])) : neutral
+        tile[p + 0x1] = gi < len ? lift(neutral, entry(src[gi + 0x1])) : neutral
         j += 1
     end
     @synchronize()
@@ -68,7 +68,7 @@
         p = j * block_size + ithread
         gi = block_offset + p
         if gi < len
-            _store!(v, gi + 0x1, tile[p + 0x1])
+            store_partial!(v, gi + 0x1, tile[p + 0x1])
         end
         j += 1
     end
@@ -83,7 +83,7 @@ end
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
     thread_totals = @localmem typeof(neutral) (block_size,)
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
 
     len = length(src)
     iblock  = @index(Group, Linear) - 0x1
@@ -95,7 +95,7 @@ end
     while k < ITEMS
         gi = run + k
         if gi < len
-            acc = op(acc, _lift(neutral, entry(src[gi + 0x1])))
+            acc = op(acc, lift(neutral, entry(src[gi + 0x1])))
         end
         k += 1
     end
@@ -115,7 +115,7 @@ end
 @kernel cpu=false inbounds=true unsafe_indices=true function _accumulate_add_prefixes!(
     op, v, totals, neutral, inclusive, ::Val{ITEMS},
 ) where ITEMS
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
     len = length(v)
     @uniform block_size = @groupsize()[1]
 
@@ -131,9 +131,9 @@ end
         gi = block_offset + j * block_size + ithread
         if gi < len
             v[gi + 0x1] = if !inclusive && gi == block_offset
-                _lower(eltype(v), prefix)
+                lower(eltype(v), prefix)
             else
-                _lower(eltype(v), op(prefix, _lift(neutral, v[gi + 0x1])))
+                lower(eltype(v), op(prefix, lift(neutral, v[gi + 0x1])))
             end
         end
         j += 1
@@ -141,7 +141,7 @@ end
 end
 
 # The first block's seed: `init` in the element type, else the neutral seed
-_scan_first_seed(v, init, neutral) = _lift(neutral, convert(eltype(v), init))
+_scan_first_seed(v, init, neutral) = lift(neutral, convert(eltype(v), init))
 _scan_first_seed(v, ::_NoInit, neutral) = neutral
 
 

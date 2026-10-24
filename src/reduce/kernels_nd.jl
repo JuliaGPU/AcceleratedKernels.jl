@@ -49,7 +49,7 @@ end
     f, op, neutral, init,
     Rother, Rreduce, output_size,
 )
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -62,7 +62,7 @@ end
             J = max(Iother, Ireduce)
             res = op_lanes(res, f_lanes(src[J]))
         end
-        dst[Iother] = _finish(op, init, dst, Iother, res)
+        dst[Iother] = finish(op, init, dst, Iother, res)
     end
 end
 
@@ -76,7 +76,7 @@ end
     @uniform N = @groupsize()[1]
     @uniform reduce_threads = N ÷ rows
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -114,7 +114,7 @@ end
     end
 
     if lane == 0x0 && iout < output_size
-        dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[row + 0x1])
+        dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[row + 0x1])
     end
 end
 
@@ -130,7 +130,7 @@ end
 ) where {lanes}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -163,7 +163,7 @@ end
     end
 
     if lane == 0x0 && iout < output_size
-        dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[ithread + 0x1])
+        dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[ithread + 0x1])
     end
 end
 
@@ -173,7 +173,7 @@ end
 # with `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
 # reduction of each output is split across `groups` blocks. With one group the block stores the
 # outputs; with more, `dst` holds `output_size × groups` partial results for a second pass (and
-# `init` is `_NoFinish()`). The lanes and groups take their elements in turn, or `ordered`, each a
+# `init` is `Unfinished()`). The lanes and groups take their elements in turn, or `ordered`, each a
 # contiguous range of them, combined in order; either way a warp's loads of one step are
 # consecutive elements.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_nd_columns!(
@@ -186,7 +186,7 @@ end
     @uniform N = @groupsize()[1]
     @uniform lanes = N ÷ cols
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -269,7 +269,7 @@ end
 
     if lane == 0x0 && valid
         i = iout + group * output_size + 0x1
-        dst[i] = _finish(op, init, dst, i, sdata[col + 0x1])
+        dst[i] = finish(op, init, dst, i, sdata[col + 0x1])
     end
 end
 
@@ -285,7 +285,7 @@ end
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
 )
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
     # NOTE: index calculations use zero-indexing (fewer ops, matches the CUDA / ROCm / oneAPI /
     # Metal code this is transpiled to), converting to one-indexing only at memory accesses.
     # `base_offset` (the source's element offset within its dense buffer; 0 for a dense
@@ -304,7 +304,7 @@ end
             res = op_lanes(res, f_lanes(src[input_base + off + 0x1]))
         end
 
-        dst[tid + 0x1] = _finish(op, init, dst, tid + 0x1, res)
+        dst[tid + 0x1] = finish(op, init, dst, tid + 0x1, res)
     end
 end
 
@@ -328,7 +328,7 @@ end
 )
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -350,7 +350,7 @@ end
         @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
+            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -375,7 +375,7 @@ end
     @uniform T = eltype(src)
     @uniform W = _unval(valW)
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -403,7 +403,7 @@ end
         @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iout + 0x1] = _finish(op, init, dst, iout + 0x1, sdata[0x1])
+            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[0x1])
         end
 
         next_iout = iout + num_blocks
@@ -428,7 +428,7 @@ end
 ) where {output_size}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -458,7 +458,7 @@ end
 end
 
 # GPU kernel: multi-group second pass — one block per output reduces over the `reduce_groups`
-# partials and applies `init` (see `_finish`). Launched with a block size sized to `reduce_groups`
+# partials and applies `init` (see `finish`). Launched with a block size sized to `reduce_groups`
 # (see _pass2_block_size), avoiding an oversubscribed tree-reduce when reduce_groups
 # is much smaller than 256.
 
@@ -469,7 +469,7 @@ end
 )
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(neutral) (N,)
-    _, op_lanes = _lanefuncs(_Partials(), op, neutral)
+    _, op_lanes = seeded_ops(PartialInputs(), op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -488,7 +488,7 @@ end
         @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
         if ithread == 0x0
-            dst[iblock + 0x1] = _finish(op, init, dst, iblock + 0x1, sdata[0x1])
+            dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
         end
     end
 end

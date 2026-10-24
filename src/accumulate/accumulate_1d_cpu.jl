@@ -15,7 +15,7 @@ function accumulate_1d_cpu!(
     max_tasks, min_elems = alg.max_tasks, alg.min_elems
 
     seed = _scan_first_seed(v, init, neutral)
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
 
     # First accumulate chunks independently
     tp = TaskPartitioner(length(v), max_tasks, min_elems)
@@ -49,9 +49,9 @@ function accumulate_1d_cpu!(
                 carry = shared[itask - 1]
                 for i in irange
                     v[i] = if !inclusive && i == first(irange)
-                        _lower(eltype(v), carry)
+                        lower(eltype(v), carry)
                     else
-                        _lower(eltype(v), op(carry, _lift(neutral, v[i])))
+                        lower(eltype(v), op(carry, lift(neutral, v[i])))
                     end
                 end
             end
@@ -68,12 +68,12 @@ function _accumulate_1d_cpu_section!(op, v; seed, neutral, inclusive)
     @inbounds begin
         running = seed
         for i in eachindex(v)
-            x = _lift(neutral, v[i])
+            x = lift(neutral, v[i])
             if inclusive
                 running = op(running, x)
-                _store!(v, i, running)
+                store_partial!(v, i, running)
             else
-                _store!(v, i, running)
+                store_partial!(v, i, running)
                 running = op(running, x)
             end
         end

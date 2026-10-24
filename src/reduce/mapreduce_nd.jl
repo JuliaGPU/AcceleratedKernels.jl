@@ -37,7 +37,7 @@ end
 
 # Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
 # dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
-# `_Fold()` (see `_finish`). Without `commutative`, the GPU kernels combine elements in order.
+# `FoldInto()` (see `finish`). Without `commutative`, the GPU kernels combine elements in order.
 function mapreduce_nd!(
     f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
     alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
@@ -66,14 +66,14 @@ function mapreduce_nd!(
 
     # Empty reductions, e.g. reduce(+, rand(3, 0, 5), dims=2): `init`, else nothing is written
     if len == 0
-        init isa Union{_NoInit, _Fold} || _fill!(dst, init, backend)
+        init isa Union{_NoInit, FoldInto} || _fill!(dst, init, backend)
         return dst
     end
 
     # Nothing to write, e.g. reduce(+, rand(3, 0, 5), dims=3), a 3×0×1 array
     isempty(dst) && return dst
     # (overwriting with single elements combines nothing, even when `op` always throws)
-    len == 1 && init isa _NoInit || _check_acctype(op, f, A)
+    len == 1 && init isa _NoInit || check_combinable(op, f, A)
 
     # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
     # dimensions, or only ones of size 1
@@ -149,7 +149,7 @@ function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
                                launch...) where {F, OP, A}
     _foreachindex(eachindex(dst), backend; launch...) do i
         x = Base.mapreduce_first(f, op, src[i])
-        dst[i] = _finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
+        dst[i] = finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
     end
 end
 
@@ -192,13 +192,13 @@ function _mapreduce_nd_launch!(
         else
             # (the partial results of each output's groups, combined by a second pass)
             partial = bufs.partials
-            kernel!(buffer, partial, f, op, neutral, _NoFinish(), base_offset,
+            kernel!(buffer, partial, f, op, neutral, Unfinished(), base_offset,
                     reduce_strides[1], dst_size, run, dst_size ÷ run, runs..., reduce_size, groups,
                     Val(cols), Val(ordered);
                     ndrange=(threads * blocks,))
             pass2_block_size = _pass2_block_size(groups)
             if ordered
-                _mapreduce_ordered_pass!(backend, pass2_block_size, 1, partial, dst, _Partials(),
+                _mapreduce_ordered_pass!(backend, pass2_block_size, 1, partial, dst, PartialInputs(),
                                          op, neutral, init, 0, (1,), (dst_size,), (dst_size,),
                                          (groups,), dst_size, groups, 1)
             else
@@ -331,7 +331,7 @@ function _mapreduce_nd_cpu_sections!(
 ) where {F, OP}
     Rother  = CartesianIndices(dst)
     Rreduce = _mapreduce_reduce_indices(src, dst)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     _foreachindex(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
         @inbounds begin
@@ -341,7 +341,7 @@ function _mapreduce_nd_cpu_sections!(
                 J = max(Iother, Ireduce)
                 res = op_lanes(res, f_lanes(src[J]))
             end
-            dst[idst] = _finish(op, init, dst, idst, res)
+            dst[idst] = finish(op, init, dst, idst, res)
         end
     end
     dst

@@ -84,7 +84,7 @@ end
     # (Int64 lanes take 12 on 32-bit x86)
     @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
     @test AK.resolve_scan(AK.Auto(), SRB, NTuple{3, Int32}, nothing,
-                           AK._Lane{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
+                           AK.Optional{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
 
     # Kernels need a bits-type element
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); T=String)

@@ -10,7 +10,7 @@
 # sub-groups where `subgroups` says so) and appends the tile's total to the group's. Indices and
 # `f`, `neutral` and `init` are those of the other reduction kernels (see `_mapreduce_nd_by_block!`
 # and `_mapreduce_block!`); with several groups, `dst` holds `output_size × groups` partial
-# results, for a second pass of this kernel with `f === _Partials()`. With a vector width `W`, the
+# results, for a second pass of this kernel with `f === PartialInputs()`. With a vector width `W`, the
 # runs of full tiles are read with `K ÷ W` aligned vector loads (see `_ordered_vector_width`).
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_ordered!(
     src, dst,
@@ -23,7 +23,7 @@
 ) where {K, W}
     @uniform N = @groupsize()[1]
     totals = @localmem typeof(neutral) (N,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
@@ -70,7 +70,7 @@
 
     if ithread == 0x0
         i = iout + g * output_size + 0x1
-        dst[i] = _finish(op, init, dst, i, total)
+        dst[i] = finish(op, init, dst, i, total)
     end
 end
 
@@ -119,10 +119,10 @@ function _launch_mapreduce_ordered!(
         return nothing
     end
     _mapreduce_ordered_pass!(backend, block_size, items_per_thread, src, partials, f, op,
-                             neutral, _NoFinish(), base_offset, outer_strides, outer_sizes,
+                             neutral, Unfinished(), base_offset, outer_strides, outer_sizes,
                              reduce_strides, reduce_sizes, output_size, reduce_size, groups;
                              dense_buffer)
-    _mapreduce_ordered_pass!(backend, _pass2_block_size(groups), 1, partials, dst, _Partials(),
+    _mapreduce_ordered_pass!(backend, _pass2_block_size(groups), 1, partials, dst, PartialInputs(),
                              op, neutral, init, 0, (1,), (output_size,), (output_size,),
                              (groups,), output_size, groups, 1)
     return nothing

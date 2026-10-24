@@ -2,19 +2,19 @@
 # pass of at most `max_blocks` blocks (the tuning's `target_blocks`), each reducing tiles of
 # `block_size * items_per_thread` elements in turn (a grid-stride loop) to one partial result,
 # and a second pass of one block that reduces those partials. Each pass stores its values with
-# `_finish`, so the last one can write the result into a device array.
+# `finish`, so the last one can write the result into a device array.
 
 # NI and K are compile-time values so the local-memory size is static and the load loop unrolls.
-# `neutral` seeds each thread's partial result (an empty `_Lane` when `op` has no known neutral
-# element); `f === _Partials()` when `src` holds partial results of an earlier pass. Block
+# `neutral` seeds each thread's partial result (an empty `Optional` when `op` has no known neutral
+# element); `f === PartialInputs()` when `src` holds partial results of an earlier pass. Block
 # `iblock` reduces the tiles `iblock`, `iblock + nblocks`, ... of `src`, and stores
-# `_finish(op, init, dst, iblock + 1, partial)` in `dst[iblock + 1]`.
+# `finish(op, init, dst, iblock + 1, partial)` in `dst[iblock + 1]`.
 @kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(
     @Const(src), dst, f, op, neutral, init, nblocks, ::Val{NI}, ::Val{K},
 ) where {NI, K}
 
     sdata = @localmem typeof(neutral) (NI,)
-    f_lanes, op_lanes = _lanefuncs(f, op, neutral)
+    f_lanes, op_lanes = seeded_ops(f, op, neutral)
     len = length(src)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
@@ -51,7 +51,7 @@
     @inline reduce_group!(@context, op_lanes, sdata, ithread)
 
     if ithread == 0x0
-        dst[iblock + 0x1] = _finish(op, init, dst, iblock + 0x1, sdata[0x1])
+        dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
     end
 end
 
@@ -59,8 +59,8 @@ end
 _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) =
     min(cld(len, block_size * items_per_thread), max_blocks)
 
-# Reduce the non-empty `src`; `neutral` is the partial-result seed of `_reduce_seed`, `init` is a
-# value, `_NoInit()` or (with `dst`) `_Fold()`, and `partials` holds `_mapreduce_1d_partials`
+# Reduce the non-empty `src`; `neutral` is the partial-result seed of `reduce_seed`, `init` is a
+# value, `_NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `_mapreduce_1d_partials`
 # partial results (`nothing` if none are needed). Without `dst`, returns the result as a host
 # value; with `dst`, stores it in `dst[1]` on the device.
 function mapreduce_1d_gpu(
@@ -81,17 +81,17 @@ function mapreduce_1d_gpu(
     @argcheck max_blocks >= 1
     @argcheck switch_below >= 0
 
-    f_host, op_host = _lanefuncs(f, op, neutral)
+    f_host, op_host = seeded_ops(f, op, neutral)
     len = length(src)
 
     # Degenerate cases, finished on the host
     if dst === nothing
         # `f` may index device arrays too
-        len == 1 && return _finish(op, init, nothing, 0,
+        len == 1 && return finish(op, init, nothing, 0,
                                    @allowscalar(op_host(neutral, f_host(src[1]))))
         if len < switch_below
             h_src = _host_copy(src)
-            return _finish(op, init, nothing, 0,
+            return finish(op, init, nothing, 0,
                            Base.mapreduce(f_host, op_host, h_src; init=neutral))
         end
     end
@@ -103,7 +103,7 @@ function mapreduce_1d_gpu(
     # The last pass stores the result: in `dst` with `init` applied, or the bare partial in the
     # slot after the first pass's partials, for the host
     last_dst, last_init = dst === nothing ?
-        (@view(partials[blocks + 1:blocks + 1]), _NoFinish()) : (dst, init)
+        (@view(partials[blocks + 1:blocks + 1]), Unfinished()) : (dst, init)
     buffer = commutative ? nothing : _mapreduce_1d_buffer(src)
     if blocks == 1
         _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view,
@@ -111,18 +111,18 @@ function mapreduce_1d_gpu(
     else
         p = @view partials[1:blocks]
         _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view, p,
-                            f, op, neutral, _NoFinish(), blocks; buffer)
+                            f, op, neutral, Unfinished(), blocks; buffer)
         if dst === nothing && blocks < switch_below
-            return _finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=neutral))
+            return finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=neutral))
         end
         # (the second pass reads the partials in unrolled steps of up to 16 loads per thread: in
         # one step for the default settings)
         _mapreduce_1d_pass!(commutative, backend, block_size,
                             clamp(cld(max_blocks, block_size), 1, 16), p, last_dst,
-                            _Partials(), op, neutral, last_init, 1)
+                            PartialInputs(), op, neutral, last_init, 1)
     end
     dst === nothing || return dst
-    return _finish(op, init, nothing, 0, @allowscalar(last_dst[1]))
+    return finish(op, init, nothing, 0, @allowscalar(last_dst[1]))
 end
 
 # A pass of `blocks` blocks over the linearly indexed `src`, each storing a partial result in

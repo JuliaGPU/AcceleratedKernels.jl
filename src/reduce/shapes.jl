@@ -199,7 +199,7 @@ _columns_cols(dst_size) = min(nextpow(2, dst_size), COLUMNS_COLS)
 
 # The scratch of a reduction along `dims` into `dst_size` outputs: the partial results of a
 # `:multigroup` reduction, of a `:columns` one in two passes or of the whole-array kernels, with
-# the partial-result type of the seed `neutral` (see `_reduce_seed`)
+# the partial-result type of the seed `neutral` (see `reduce_seed`)
 function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, dst_size) where {A}
     alg isa BlockReduce && A !== Union{} || return (;)
     src_sizes = size(src)

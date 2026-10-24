@@ -165,20 +165,20 @@ end
 # workspace checks, which see the original arrays); the plan treats it as a dense array.
 _mapreduce_source(src, backend) = src
 _mapreduce_source(src::Base.Broadcast.Broadcasted, backend) =
-    VERSION < v"1.12-" ? _materialize_source(src, backend) : src
+    VERSION < v"1.12-" ? materialize_source(src, backend) : src
 
-# The seed of the partial results (`_reduce_seed`), where an accumulator type exists
+# The seed of the partial results (`reduce_seed`), where an accumulator type exists
 _mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
-    A === Union{} ? nothing : _reduce_seed(op, A, neutral)
+    A === Union{} ? nothing : reduce_seed(op, A, neutral)
 
 # Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
 # plan), accumulator type and partial-result seed, and for reductions along `dims` the result
 function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
                           alg) where {F, OP}
     backend = resolve_backend(backend, src)
-    M = _mapped_eltype(f, src)
+    M = mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
-    A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
+    A = resolve_acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
 
     if iswhole(dims)
         a = resolve_reduce(alg, backend, A, dims)
@@ -347,11 +347,11 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
 end
 function mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, neutral,
                              overwrite, acctype, alg) where {F, OP}
-    A = _acctype(op, eltype(dst), _mapped_eltype(f, src), acctype)
+    A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
     a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
-    init = init isa _NoInit && !overwrite ? _Fold() : init
+    init = init isa _NoInit && !overwrite ? FoldInto() : init
     return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
 end
 
@@ -377,7 +377,7 @@ function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neut
     if A === Union{} && length(src) == 1 && init isa _NoInit
         return @allowscalar Base.mapreduce_first(f, op, src[first(eachindex(src))])
     end
-    _check_acctype(op, f, A)
+    check_combinable(op, f, A)
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type (asserted, as the
     # threaded reduction is not inferred)

@@ -95,10 +95,10 @@ end
 
 
 # `f`, required to return a `Bool` (Base's `_bool`), for `count` and the predicates
-struct _BoolValued{F} <: Function
+struct BoolResult{F} <: Function
     f::F
 end
-@inline (c::_BoolValued)(x) = c.f(x)::Bool
+@inline (c::BoolResult)(x) = c.f(x)::Bool
 
 
 @kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v), first_index)
@@ -194,7 +194,7 @@ function predicate_setup(pred, op, v, backend, alg)
     sizes = if a isa ConcurrentWrite
         (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
-        (; reduce=mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
+        (; reduce=mapreduce_setup(BoolResult(pred), op, v, backend, op === (|) ? false : true,
                                    nothing, nothing, :, a.reduce).plan.sizes)
     else
         (;)
@@ -212,7 +212,7 @@ function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
 end
 
 _any(pred, v, backend, alg::ViaReduce, bufs) =
-    mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
+    mapreduce_nested(BoolResult(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
 function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
     found = Threads.Atomic{Bool}(false)
@@ -266,5 +266,5 @@ plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto
 
 _all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
 _all(pred, v, backend, alg::ViaReduce, bufs) =
-    mapreduce_nested(_BoolValued(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
+    mapreduce_nested(BoolResult(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
 _all(pred, v, backend, alg::CPUThreads.Partitioned, bufs) = !_any(!pred, v, backend, alg, bufs)

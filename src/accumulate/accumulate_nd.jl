@@ -46,7 +46,7 @@ function _accumulate_nd_cpu_sections!(
     seed, neutral, dims, inclusive,
     max_tasks, min_elems,
 )
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
     vsizes = size(v)
     vstrides = Base.size_to_strides(1, vsizes...)
 
@@ -74,12 +74,12 @@ function _accumulate_nd_cpu_sections!(
             running = seed
             for i in 0:length_dims - 1
                 v_idx = input_base_idx + i * vstrides[dims]
-                x = _lift(neutral, v[v_idx + 1])
+                x = lift(neutral, v[v_idx + 1])
                 if inclusive
                     running = op(running, x)
-                    v[v_idx + 1] = _unlane(running)
+                    v[v_idx + 1] = unwrap(running)
                 else
-                    v[v_idx + 1] = _unlane(running)
+                    v[v_idx + 1] = unwrap(running)
                     running = op(running, x)
                 end
             end
@@ -243,7 +243,7 @@ end
 ) where {MAX}
     @uniform block_size = @groupsize()[1]
     rows = @localmem typeof(neutral) (MAX,)
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
 
     iblock = @index(Group, Linear) - 1
     ithread = @index(Local, Linear) - 1
@@ -252,7 +252,7 @@ end
 
     p = ithread
     while p < n
-        rows[p + 1] = _lift(neutral, entry(src[offset + p + 1]))
+        rows[p + 1] = lift(neutral, entry(src[offset + p + 1]))
         p += block_size
     end
     @synchronize()
@@ -274,7 +274,7 @@ end
 
     p = ithread
     while p < n
-        _store!(v, offset + p + 1, rows[p + 1])
+        store_partial!(v, offset + p + 1, rows[p + 1])
         p += block_size
     end
 end
@@ -285,7 +285,7 @@ end
     v, src, entry, op, seed, neutral, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
 )
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
     block_size = @groupsize()[1]
     tid = (@index(Group, Linear) - 1) * block_size + (@index(Local, Linear) - 1)
     if tid < nthreads
@@ -301,18 +301,18 @@ end
         if isnothing(totals)
             for k in k0:k1 - 1
                 idx = base + k * n_inner + 1
-                x = _lift(neutral, entry(src[idx]))
+                x = lift(neutral, entry(src[idx]))
                 if inclusive
                     running = op(running, x)
-                    _store!(v, idx, running)
+                    store_partial!(v, idx, running)
                 else
-                    _store!(v, idx, running)
+                    store_partial!(v, idx, running)
                     running = op(running, x)
                 end
             end
         else
             for k in k0:k1 - 1
-                running = op(running, _lift(neutral, entry(src[base + k * n_inner + 1])))
+                running = op(running, lift(neutral, entry(src[base + k * n_inner + 1])))
             end
             totals[tid + 1] = running
         end
@@ -329,7 +329,7 @@ end
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(neutral) (block_size * ITEMS,)
     thread_totals = @localmem typeof(neutral) (block_size,)
-    _, op = _lanefuncs(_Partials(), op, neutral)
+    _, op = seeded_ops(PartialInputs(), op, neutral)
 
     iblock = @index(Group, Linear) - 1
     ithread = @index(Local, Linear) - 1
@@ -349,7 +349,7 @@ end
         while j < ITEMS
             p = j * block_size + ithread
             k = k_tile + p
-            tile[p + 1] = k < k_end ? _lift(neutral, entry(src[base + k * n_inner + 1])) :
+            tile[p + 1] = k < k_end ? lift(neutral, entry(src[base + k * n_inner + 1])) :
                                       neutral
             j += 1
         end
@@ -389,7 +389,7 @@ end
                 p = j * block_size + ithread
                 k = k_tile + p
                 if k < k_end
-                    _store!(v, base + k * n_inner + 1, tile[p + 1])
+                    store_partial!(v, base + k * n_inner + 1, tile[p + 1])
                 end
                 j += 1
             end
