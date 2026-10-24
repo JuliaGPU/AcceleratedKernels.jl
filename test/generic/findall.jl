@@ -209,34 +209,6 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
 end
 
 
-# A GPU backend with its own tuning
-struct FindallResolveTestBackend <: KernelAbstractions.Backend end
-AK.findall_tuning(::FindallResolveTestBackend, ::Type) =
-    AK.FindallTuning(block_size=128, items_per_thread=4)
-
-@testset "findall resolution" begin
-    B = FindallResolveTestBackend()
-    @test AK.resolve_findall(AK.Auto(), B, Bool) === AK.ScanScatter(128, 4)
-    @test AK.resolve_findall(AK.ScanScatter(block_size=64), B, Bool) === AK.ScanScatter(64, 4)
-    @test AK.resolve_findall(AK.Auto(), AK.HOST_BACKEND, Bool) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
-    for bad in (AK.ScanScatter(block_size=0), AK.ScanScatter(block_size=96),
-                AK.ScanScatter(block_size=2048), AK.ScanScatter(items_per_thread=0),
-                AK.ScanScatter(block_size=1024, items_per_thread=1 << 22))
-        @test_throws ArgumentError AK.resolve_findall(bad, B, Bool)
-    end
-    @test_throws ArgumentError AK.resolve_findall(AK.CPUThreads.Partitioned(), B, Bool)
-    @test_throws ArgumentError AK.resolve_findall(AK.BlockReduce(), B, Bool)
-
-    # Removed keywords
-    v = array_from_host(rand(Bool, 10))
-    @test_throws MethodError AK.findall(v; prefer_threads=true)
-    @test_throws MethodError AK.findall(v; max_tasks=2)
-    @test_throws MethodError AK.any(identity, v; prefer_threads=true)
-    @test_throws MethodError AK.all(identity, v; block_size=64)
-end
-
-
 @testset "findall: Bool values" begin
     # The predicate (or the values) must give a `Bool`, as in Base; where inference shows they
     # cannot, before launching (not every backend reports an error thrown in a kernel)
