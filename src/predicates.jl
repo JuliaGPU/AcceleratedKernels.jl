@@ -164,12 +164,12 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = predicate_setup(pred, |, v, backend, alg)
+    p = predicate_setup(pred, |, v, backend, alg).plan
     _any(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    predicate_setup(pred, |, v, backend, alg)
+    predicate_setup(pred, |, v, backend, alg).plan
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
@@ -196,7 +196,7 @@ function predicate_setup(pred, op, v, backend, alg)
     else
         (;)
     end
-    return Plan(backend, a, sizes)
+    return (; plan=Plan(backend, a, sizes))
 end
 
 function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
@@ -254,12 +254,12 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 """
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = predicate_setup(pred, &, v, backend, alg)
+    p = predicate_setup(pred, &, v, backend, alg).plan
     _all(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    predicate_setup(pred, &, v, backend, alg)
+    predicate_setup(pred, &, v, backend, alg).plan
 
 _all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
 _all(pred, v, backend, alg::ViaReduce, bufs) =
