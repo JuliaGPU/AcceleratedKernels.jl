@@ -237,51 +237,6 @@ backendless(_) = false
 backendless(::Union{AbstractRange, CartesianIndices, LinearIndices}) = true
 backendless(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = backendless(parent(x))
 
-# An array for an operation's result: `similar(v, ...)`, unless `v` has no backend (a range, for
-# instance), which gives a new array on `backend`
-similar_on(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T} =
-    backendless(v) ? KernelAbstractions.allocate(backend, T, dims) : similar(v, T, dims)
-# A copy of `v`, likewise
-copy_on(backend, v) = backendless(v) ? copyto!(similar_on(backend, v), collect(v)) : copy(v)
-
-# `A` with axes starting at 1, as the kernels and threaded loops index it, for an `A` whose axes
-# start elsewhere (an `OffsetArray`, for instance), and likewise the arrays of a `Broadcasted`
-# object. The operations pass these on, and keep `A` for their checks.
-one_based(A::AbstractArray) = Base.has_offset_axes(A) ? one_based_view(A) : A
-function one_based(bc::Base.Broadcast.Broadcasted)
-    Base.has_offset_axes(bc) || return bc
-    args = Base.map(one_based, bc.args)
-    # (keeping the shape of explicit axes, which may be larger than the arguments')
-    return Base.Broadcast.Broadcasted(bc.f, args, Base.map(ax -> Base.OneTo(length(ax)), axes(bc)))
-end
-one_based(x) = x
-# (a reshape keeps the linear indexing of an array of several dimensions, which starts at 1, and
-# `OffsetArrays` makes it the parent array; Base does not reshape vectors with offset axes)
-one_based_view(A::AbstractVector) = @view A[begin:end]
-one_based_view(A::AbstractArray) = reshape(A, size(A))
-
-# Whether `A` is a view `one_based` made. Base's `copyto!` and `fill!` index those element by
-# element on the host, which GPU arrays disallow, so `copyto_on!` and `fill_on!` use a kernel.
-has_offset_parent(A) =
-    A isa Union{SubArray, Base.ReshapedArray} && Base.has_offset_axes(parent(A))
-
-# `copyto!(dst, src)` of arrays of the same size
-function copyto_on!(dst, src, backend)
-    has_offset_parent(dst) || has_offset_parent(src) || return copyto!(dst, src)
-    foreachindex_on(Base.OneTo(length(dst)), backend) do i
-        @inbounds dst[i] = src[i]
-    end
-    return dst
-end
-
-function fill_on!(A, x, backend)
-    has_offset_parent(A) || return fill!(A, x)
-    foreachindex_on(Base.OneTo(length(A)), backend) do i
-        @inbounds A[i] = x
-    end
-    return A
-end
-
 """
     resolve_backend(backend, args...)
 
