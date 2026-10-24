@@ -473,7 +473,6 @@ function radix_sort!(
         radix_sort_block_kernel!(backend, block_size)(
             v, rev, Val(n_passes), Val(chunk_size), layout;
             ndrange=Base.checked_mul(block_size, slice_count(layout)))
-        KernelAbstractions.synchronize(backend)
         return v
     end
 
@@ -516,8 +515,6 @@ function radix_sort!(
     if isodd(passes_run)
         copyto_on!(v, p1, backend)
     end
-
-    KernelAbstractions.synchronize(backend)
 
     v
 end
