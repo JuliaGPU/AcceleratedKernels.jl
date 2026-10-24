@@ -180,7 +180,7 @@ function scan_run!(op, v, src, s, bufs)
     # reductions (`Base.reduce_first`), and an inclusive scan applies `init` to the first element
     # of each slice, as `op(init, x)`.
     w = haskey(bufs, :work) ? bufs.work : v
-    launch = _scan_launch(a)
+    launch = launch_kwargs(a)
     # (`init` of the accumulator type seeds the kernels directly instead, except where every
     # slice has one element and no kernel runs)
     apply_init = inclusive && !(init isa NoInit) && !isempty(w) &&
@@ -268,9 +268,6 @@ function _scan_combines(sz, dims, init, inclusive)
     len = dims === nothing ? n : dims <= length(sz) ? sz[dims] : 1
     return len >= 2 || (inclusive && !(init isa NoInit))
 end
-
-_scan_launch(a::Union{ScanPrefixes, SliceScan}) = (; block_size=a.block_size)
-_scan_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
 
 # `w[i] = op(init, w[i])` for the first element `i` of the array (`dims === nothing`) or of each
 # slice along `dims` (every element, for a `dims` beyond the array's)

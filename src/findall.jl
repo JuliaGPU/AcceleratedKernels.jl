@@ -226,14 +226,10 @@ function findall_impl(
 end
 
 
-# The launch settings of the mask pass for a resolved findall algorithm
-_findall_launch(a::ScanScatter) = (; block_size=a.block_size)
-_findall_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
-
 function findall_bools!(bools, pred, v::AbstractArray, backend::Backend, alg)
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
-    foreachindex_on(Base.OneTo(length(v)), backend; _findall_launch(alg)...) do position
+    foreachindex_on(Base.OneTo(length(v)), backend; launch_kwargs(alg)...) do position
         input_index = findall_index(input_indices, position)
         bool_index = findall_index(bool_indices, position)
         @inbounds bools[bool_index] = pred(v[input_index]) ? true : false

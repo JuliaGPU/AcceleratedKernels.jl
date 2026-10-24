@@ -195,6 +195,10 @@ function require_threads(a, backend)
     nothing
 end
 
+# The settings of `foreachindex_on` for the loops of an operation that resolved to `a`
+launch_kwargs(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
+launch_kwargs(a::Algorithm) = (; block_size=a.block_size)
+
 
 # Backend resolution
 
