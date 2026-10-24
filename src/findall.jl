@@ -73,16 +73,16 @@ end
 
 
 # The element of `indices` at the ordinal `position` (1-based, whatever the axes)
-@inline findall_index(indices::AbstractUnitRange, position) =
+@inline ordinal_index(indices::AbstractUnitRange, position) =
     first(indices) + position - 1
-@inline findall_index(indices::LinearIndices{1}, position) =
+@inline ordinal_index(indices::LinearIndices{1}, position) =
     first(indices) + position - 1
-@inline findall_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
+@inline ordinal_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
 
 
 # With `out === nothing`, compute block counts. Otherwise, `block_counts` contains their
 # inclusive prefix scan and the kernel scatters the selected items.
-@kernel cpu=false inbounds=true unsafe_indices=true function findall_block!(
+@kernel cpu=false inbounds=true unsafe_indices=true function compact_kernel!(
     out, @Const(bools), block_counts, input_indices, output_indices, ::Val{ITEMS},
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
@@ -99,7 +99,7 @@ end
         p = j * block_size + ithread
         position = block_offset + p
         tile[p + 0x1] = position < len ?
-                         UInt8(bools[findall_index(input_indices, position + 0x1)]) : 0x0
+                         UInt8(bools[ordinal_index(input_indices, position + 0x1)]) : 0x0
         j += 1
     end
     @synchronize()
@@ -128,7 +128,7 @@ end
             if tile[run + k + 0x1] != 0x0
                 pos += 1
                 position = block_offset + run + k + 0x1
-                out[pos] = findall_index(output_indices, position)
+                out[pos] = ordinal_index(output_indices, position)
             end
             k += 1
         end
@@ -151,7 +151,7 @@ function findall_gpu(
     input_indices = eachindex(bools)
     items = Val(items_per_thread)
 
-    kernel! = findall_block!(backend, block_size)
+    kernel! = compact_kernel!(backend, block_size)
     kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
             ndrange=num_blocks * block_size)
     accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
@@ -176,7 +176,7 @@ function findall_cpu(
     task_counts = bufs.counts
     itask_partition(tp) do itask, positions
         task_counts[itask] = Base.count(
-            position -> @inbounds(bools[findall_index(input_indices, position)]), positions,
+            position -> @inbounds(bools[ordinal_index(input_indices, position)]), positions,
         )
     end
     cumsum!(task_counts, task_counts)
@@ -184,17 +184,17 @@ function findall_cpu(
     out = similar(bools, I, task_counts[end])
     itask_partition(tp) do itask, positions
         offset = itask == 1 ? 0 : task_counts[itask - 1]
-        findall_section!(out, bools, input_indices, output_indices, positions, offset)
+        compact_serial!(out, bools, input_indices, output_indices, positions, offset)
     end
     out
 end
 
 
-function findall_section!(out, bools, input_indices, output_indices, positions, pos)
+function compact_serial!(out, bools, input_indices, output_indices, positions, pos)
     @inbounds for position in positions
-        if bools[findall_index(input_indices, position)]
+        if bools[ordinal_index(input_indices, position)]
             pos += 1
-            out[pos] = findall_index(output_indices, position)
+            out[pos] = ordinal_index(output_indices, position)
         end
     end
     out
@@ -215,12 +215,12 @@ function findall_impl(
 end
 
 
-function findall_bools!(bools, pred, v::AbstractArray, backend::Backend, alg)
+function findall_mask!(bools, pred, v::AbstractArray, backend::Backend, alg)
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
     foreachindex_on(Base.OneTo(length(v)), backend; launch_kwargs(alg)...) do position
-        input_index = findall_index(input_indices, position)
-        bool_index = findall_index(bool_indices, position)
+        input_index = ordinal_index(input_indices, position)
+        bool_index = ordinal_index(bool_indices, position)
         @inbounds bools[bool_index] = pred(v[input_index]) ? true : false
     end
     bools
@@ -271,7 +271,7 @@ AK.findall(m; items=LinearIndices(m))   # [1, 4]
 function findall(values::AbstractArray; items::AbstractArray=keys(values),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
-    values isa AbstractArray{Bool} || _check_bool_result(identity, values)
+    values isa AbstractArray{Bool} || check_bool_result(identity, values)
     s = findall_setup(values, items, false, backend, alg)
     findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
 end
@@ -279,7 +279,7 @@ end
 function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
-    _check_bool_result(pred, v)
+    check_bool_result(pred, v)
     s = findall_setup(v, items, true, backend, alg)
     findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
 end
@@ -313,7 +313,7 @@ end
 function findall_run(pred, v, items, s, bufs)
     backend, a = s.plan.backend, s.plan.alg
     bools = if haskey(bufs, :mask)
-        findall_bools!(bufs.mask, pred, v, backend, a)
+        findall_mask!(bufs.mask, pred, v, backend, a)
     else
         v
     end

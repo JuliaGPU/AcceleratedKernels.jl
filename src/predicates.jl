@@ -98,7 +98,7 @@ end
 @inline (c::BoolResult)(x) = c.f(x)::Bool
 
 
-@kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v), first_index)
+@kernel cpu=false inbounds=true function any_kernel!(out, pred, @Const(v), first_index)
     temp = @localmem Int8 (1,)
     i = @index(Global, Linear)
 
@@ -165,7 +165,7 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
     p = predicate_setup(pred, |, false, v, backend, alg).plan
-    _any(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
@@ -174,7 +174,7 @@ plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
 # (which GPU backends report without Base's `TypeError`).
-function _check_bool_result(pred, v)
+function check_bool_result(pred, v)
     isempty(v) && return nothing        # (Base never calls the predicate then)
     R = Base.promote_op(pred, eltype(v))
     R === Union{} || Bool <: R || throw(ArgumentError(
@@ -185,7 +185,7 @@ end
 # The plan of `any`/`all` (whose `ViaReduce` reduces with `op` from `init`): the flag of
 # `ConcurrentWrite`, or the scratch of the reduction
 function predicate_setup(pred, op, init, v, backend, alg)
-    _check_bool_result(pred, v)
+    check_bool_result(pred, v)
     backend = resolve_backend(backend, v)
     a = resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
@@ -199,19 +199,19 @@ function predicate_setup(pred, op, init, v, backend, alg)
     return (; plan=Plan(backend, a, sizes))
 end
 
-function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
+function any_run(pred, v, backend, alg::ConcurrentWrite, bufs)
     # `ndrange` must not be zero
     isempty(v) && return false
     out = bufs.flag
     fill!(out, Int8(0))
-    _any_global!(backend, alg.block_size)(out, pred, v, firstindex(v), ndrange=length(v))
+    any_kernel!(backend, alg.block_size)(out, pred, v, firstindex(v), ndrange=length(v))
     return @allowscalar(out[1]) != 0
 end
 
-_any(pred, v, backend, alg::ViaReduce, bufs) =
+any_run(pred, v, backend, alg::ViaReduce, bufs) =
     mapreduce_nested(BoolResult(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
-function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
+function any_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
     found = Threads.Atomic{Bool}(false)
     first_index = firstindex(v)
     task_partition(length(v), alg.max_tasks, alg.min_elems) do irange
@@ -255,13 +255,14 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
     p = predicate_setup(pred, &, true, v, backend, alg).plan
-    _all(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
     predicate_setup(pred, &, true, v, backend, alg).plan
 
-_all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
-_all(pred, v, backend, alg::ViaReduce, bufs) =
+all_run(pred, v, backend, alg::ConcurrentWrite, bufs) = !any_run(!pred, v, backend, alg, bufs)
+all_run(pred, v, backend, alg::ViaReduce, bufs) =
     mapreduce_nested(BoolResult(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
-_all(pred, v, backend, alg::CPUThreads.Partitioned, bufs) = !_any(!pred, v, backend, alg, bufs)
+all_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs) =
+    !any_run(!pred, v, backend, alg, bufs)
