@@ -16,55 +16,29 @@ function accumulate_nd!(
 end
 
 
-# The kernels index `v` linearly, so they step through it with the strides of a column-major array
-# of its size (`Base.size_to_strides`), not with `strides(v)`: a wrapper's storage layout, such as a
-# `PermutedDimsArray`'s, differs from its linear indices.
-
+# Scan each slice along `dims` in one task, as `slice_extents` lays them out
 function accumulate_nd_threads!(
     op, v::AbstractArray;
     start, seed, dims, inclusive,
     max_tasks, min_elems,
 )
     _, op = seeded_ops(PartialInputs(), op, seed)
-    vsizes = size(v)
-    vstrides = Base.size_to_strides(1, vsizes...)
-
-    ndims = length(vsizes)
-
-    length_dims = vsizes[dims]
-    length_outer = length(v) ÷ length_dims
-
-    # Each thread handles a section of the output array - i.e. reducing along the dims, for
-    # multiple output strides
-    foreachindex_on(1:length_outer, HOST_BACKEND; max_tasks, min_elems) do idst
-
-        @inbounds begin
-            # Compute the base index in v for this outer axis
-            input_base_idx = 0
-            tmp = idst
-            KernelAbstractions.Extras.@unroll for i in 1:ndims
-                if i != dims
-                    input_base_idx += (tmp % vsizes[i]) * vstrides[i]
-                    tmp = tmp ÷ vsizes[i]
-                end
-            end
-
-            # Go over each element in the accumulated dimension
-            running = start
-            for i in 0:length_dims - 1
-                v_idx = input_base_idx + i * vstrides[dims]
-                x = lift(seed, v[v_idx + 1])
-                if inclusive
-                    running = op(running, x)
-                    v[v_idx + 1] = unwrap(running)
-                else
-                    v[v_idx + 1] = unwrap(running)
-                    running = op(running, x)
-                end
+    n_inner, len, n_outer = slice_extents(size(v), dims)
+    foreachindex_on(1:n_inner * n_outer, HOST_BACKEND; max_tasks, min_elems) do islice
+        base = (islice - 1) % n_inner + n_inner * len * ((islice - 1) ÷ n_inner) + 1
+        running = start
+        @inbounds for k in 0:len - 1
+            idx = base + k * n_inner
+            x = lift(seed, v[idx])
+            if inclusive
+                running = op(running, x)
+                store_partial!(v, idx, running)
+            else
+                store_partial!(v, idx, running)
+                running = op(running, x)
             end
         end
     end
-
     v
 end
 
@@ -98,6 +72,8 @@ end
 # not be commutative.
 
 # The extents `(n_inner, len, n_outer)` of an array of size `sz` scanned along `dims`
+# (the scans index arrays linearly, so these are the extents of a column-major array of that size,
+# whatever the storage layout of a wrapper such as a `PermutedDimsArray`)
 slice_extents(sz::Dims{N}, dims::Int) where {N} =
     (Base.prod(ntuple(d -> d < dims ? sz[d] : 1, Val(N))), sz[dims],
      Base.prod(ntuple(d -> d > dims ? sz[d] : 1, Val(N))))
