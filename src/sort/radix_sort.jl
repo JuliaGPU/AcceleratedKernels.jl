@@ -501,7 +501,8 @@ function radix_sort!(
     for pass in 0:n_passes - 1
         shift = UInt64(pass) * UInt64(RADIX_BITS)
 
-        (min_key >> shift) == (max_key >> shift) && continue
+        # The keys agree on this digit and all higher ones, so the remaining passes are no-ops
+        (min_key >> shift) == (max_key >> shift) && break
 
         shift32 = UInt32(shift)
         histogram!(hist, p1, shift32, rev, Val(items), layout, blocks_per_slice; ndrange)
