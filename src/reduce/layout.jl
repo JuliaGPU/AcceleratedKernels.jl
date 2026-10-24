@@ -133,8 +133,10 @@ function parent_offset(src::SubArray, p)
         # Base.map (not AK's array `map`, which shadows it inside this module).
         first_index = Base.map(first, parentindices(src))
         return LinearIndices(p)[first_index...] - 1
-    catch
-        return nothing   # exotic index types → fall back to the generic kernel
+    catch err
+        # (index types without `first`, or without a linear index in the parent)
+        err isa Union{MethodError, ArgumentError, BoundsError} || rethrow()
+        return nothing
     end
 end
 parent_offset(src, p) = 0
