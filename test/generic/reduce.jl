@@ -888,11 +888,11 @@ end
             v = array_from_host(vh)
 
             # Indexing into array as if linear
-            @test AK.sum(v; alg=REDUCE_ALG) == sum(vh)
+            @test AK.prod(v; alg=REDUCE_ALG) == prod(vh)
 
             # Along dimensions
-            r = Array(AK.sum(v; alg=REDUCE_ALG, dims))
-            rh = sum(vh; dims)
+            r = Array(AK.prod(v; alg=REDUCE_ALG, dims))
+            rh = prod(vh; dims)
 
             @test r == rh
         end
