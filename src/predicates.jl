@@ -47,49 +47,49 @@ The `any`/`all` tuning for element type `T` (the input's) on `backend`'s current
 predicate_tuning(::Backend, ::Type) = PredicateTuning()
 
 """
-    _resolve_predicate(alg, backend, T) -> Algorithm
+    resolve_predicate(alg, backend, T) -> Algorithm
 
 Resolve `alg` for `any`/`all` over elements of type `T` on `backend`: `ConcurrentWrite`,
 `ViaReduce` (with its reduction resolved) or `CPUThreads.Partitioned`, with every field set, or an
 `ArgumentError`.
 """
-function _resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    _checkdomain(alg)
+function resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
+    check_fields(alg)
     t = predicate_tuning(backend, T)
-    a = alg isa Auto ? _select_predicate(backend, t) : alg
-    a = _fill(a, t, backend)
-    _check_predicate(a, backend)
+    a = alg isa Auto ? select_predicate(backend, t) : alg
+    a = fill_defaults(a, t, backend)
+    check_predicate(a, backend)
     return a
 end
 
-function _select_predicate(backend, t::PredicateTuning)
+function select_predicate(backend, t::PredicateTuning)
     runs_threads(backend) && return CPUThreads.Partitioned()
     return t.prefer_concurrent_write ? ConcurrentWrite() : ViaReduce()
 end
 
-function _checkdomain(a::ConcurrentWrite)
+function check_fields(a::ConcurrentWrite)
     check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "ConcurrentWrite: `block_size` must be at most 1024, got $(a.block_size)"))
     nothing
 end
 
-_fill(a::ConcurrentWrite, t::PredicateTuning, backend) =
+fill_defaults(a::ConcurrentWrite, t::PredicateTuning, backend) =
     ConcurrentWrite(something(a.block_size, t.block_size))
 # The nested reduction reduces `Bool`s along the whole array
-_fill(a::ViaReduce, t::PredicateTuning, backend) =
-    ViaReduce(_resolve_reduce(a.reduce, backend, Bool, :))
-_fill(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = fill_threads(a, t)
-_fill(a::Algorithm, t::PredicateTuning, backend) =
+fill_defaults(a::ViaReduce, t::PredicateTuning, backend) =
+    ViaReduce(resolve_reduce(a.reduce, backend, Bool, :))
+fill_defaults(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::PredicateTuning, backend) =
     throw(ArgumentError("$(algname(a)) is not an algorithm for `any` and `all`"))
 
-function _check_predicate(a::ConcurrentWrite, backend)
-    _checkdomain(a)
+function check_predicate(a::ConcurrentWrite, backend)
+    check_fields(a)
     require_kernels(a, backend)
 end
-_check_predicate(a::ViaReduce, backend) = nothing       # its reduction was resolved by `_fill`
-function _check_predicate(a::CPUThreads.Partitioned, backend)
-    _checkdomain(a)
+check_predicate(a::ViaReduce, backend) = nothing       # its reduction was resolved by `fill_defaults`
+function check_predicate(a::CPUThreads.Partitioned, backend)
+    check_fields(a)
     require_threads(a, backend)
 end
 
@@ -190,7 +190,7 @@ end
 function _predicate_plan(pred, op, v, backend, alg)
     _check_bool_result(pred, v)
     backend = resolve_backend(backend, v)
-    a = _resolve_predicate(alg, backend, eltype(v))
+    a = resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
         (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce

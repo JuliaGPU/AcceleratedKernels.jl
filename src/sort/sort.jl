@@ -81,7 +81,7 @@ function _sort_setup(
     backend = resolve_backend(backend, v)
     v = _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
-    a = _resolve_sort(alg, backend, v, dims, ord)
+    a = resolve_sort(alg, backend, v, dims, ord)
     sizes, nested = _sort_plan(a, v, backend, dims, by)
     return Plan(backend, a, nested, sizes), ord
 end
@@ -229,7 +229,7 @@ function _sortperm_setup(
     backend = resolve_backend(backend, ix, v)
     ix, v = _one_based(ix), _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
-    a = _resolve_sort(alg, backend, v, dims, ord; perm=true)
+    a = resolve_sort(alg, backend, v, dims, ord; perm=true)
     return Plan(backend, a, _sortperm_sizes(a, ix, v, dims)), ord
 end
 
@@ -362,7 +362,7 @@ function _sort_by_key_setup(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
     keys, values = _one_based(keys), _one_based(values)
-    a = _resolve_sort(alg, backend, keys, dims, ord; pairs=true)
+    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true)
     return Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
 end
 

@@ -87,23 +87,23 @@ struct PredicateCWTestBackend <: KernelAbstractions.Backend end
 @testset "predicate resolution" begin
     B = PredicateResolveTestBackend()
     host = AK.HOST_BACKEND
-    @test AK._resolve_predicate(AK.Auto(), host, Float32) ===
+    @test AK.resolve_predicate(AK.Auto(), host, Float32) ===
           AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
-    @test AK._resolve_predicate(AK.Auto(), PredicateCWTestBackend(), Float32) ===
+    @test AK.resolve_predicate(AK.Auto(), PredicateCWTestBackend(), Float32) ===
           AK.ConcurrentWrite(256)
-    @test AK._resolve_predicate(AK.Auto(), B, Float32) === AK.ViaReduce(AK.BlockReduce(256, 16, 0))
+    @test AK.resolve_predicate(AK.Auto(), B, Float32) === AK.ViaReduce(AK.BlockReduce(256, 16, 0))
     # The nested reduction is resolved like any reduction
-    @test AK._resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=64)), B, Float32) ===
+    @test AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=64)), B, Float32) ===
           AK.ViaReduce(AK.BlockReduce(64, 16, 0))
-    @test_throws ArgumentError AK._resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)), B, Float32)
+    @test_throws ArgumentError AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)), B, Float32)
     # A tuning only guides `Auto`
-    @test AK._resolve_predicate(AK.ConcurrentWrite(), B, Float32) === AK.ConcurrentWrite(256)
+    @test AK.resolve_predicate(AK.ConcurrentWrite(), B, Float32) === AK.ConcurrentWrite(256)
     for bad in (AK.ConcurrentWrite(block_size=0), AK.ConcurrentWrite(block_size=96),
                 AK.ConcurrentWrite(block_size=2048))
-        @test_throws ArgumentError AK._resolve_predicate(bad, PredicateCWTestBackend(), Float32)
+        @test_throws ArgumentError AK.resolve_predicate(bad, PredicateCWTestBackend(), Float32)
     end
     # Capabilities and other families
-    @test_throws ArgumentError AK._resolve_predicate(AK.CPUThreads.Partitioned(), B, Float32)
-    @test_throws ArgumentError AK._resolve_predicate(AK.BlockReduce(), B, Float32)
-    @test_throws ArgumentError AK._resolve_predicate(AK.ScanScatter(), B, Float32)
+    @test_throws ArgumentError AK.resolve_predicate(AK.CPUThreads.Partitioned(), B, Float32)
+    @test_throws ArgumentError AK.resolve_predicate(AK.BlockReduce(), B, Float32)
+    @test_throws ArgumentError AK.resolve_predicate(AK.ScanScatter(), B, Float32)
 end

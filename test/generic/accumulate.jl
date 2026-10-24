@@ -257,7 +257,7 @@ end
     for neutral in (SCAN_I2, nothing), inclusive in (true, false), block_size in (64, 256)
         S = neutral === nothing ? AK._Lane{ScanMat2} : ScanMat2
         tile = !TEST_KERNELS ? 2 * block_size :
-               block_size * AK._resolve_scan(AK.SliceScan(; block_size), BACKEND, ScanMat2, 1,
+               block_size * AK.resolve_scan(AK.SliceScan(; block_size), BACKEND, ScanMat2, 1,
                                              S).items_per_thread
         for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
                            ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3),

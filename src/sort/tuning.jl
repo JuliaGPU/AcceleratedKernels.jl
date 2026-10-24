@@ -1,11 +1,11 @@
 # Selection and tuning of sorting algorithms.
 #
 # Every sorting entry point resolves its `alg` once, before touching any data:
-#   1. `_checkdomain` checks the fields the caller set explicitly;
-#   2. `_select_sort` picks an algorithm for `Auto`, from the device's `SortTuning`, the
+#   1. `check_fields` checks the fields the caller set explicitly;
+#   2. `select_sort` picks an algorithm for `Auto`, from the device's `SortTuning`, the
 #      capabilities of the backend and the call's static facts (element type, layout, ordering);
-#   3. `_fill` fills the fields left at `nothing` from the tuning;
-#   4. `_check` checks the complete algorithm against the backend's capabilities, the operation
+#   3. `fill_defaults` fills the fields left at `nothing` from the tuning;
+#   4. `check_sort` checks the complete algorithm against the backend's capabilities, the operation
 #      and the arguments, throwing an `ArgumentError` for anything it cannot run.
 # Selection returns algorithms with unset fields, so `Auto` and explicit algorithms are filled and
 # checked by the same code.
@@ -111,25 +111,25 @@ _sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!
 
 
 """
-    _resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false) -> SortAlgorithm
+    resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false) -> SortAlgorithm
 
 Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `backend`, for
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
 concrete algorithm with every field set, or throws an `ArgumentError`.
 """
-function _resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
+function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
                        ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
     T = eltype(v)
     layout = slice_layout(v, dims)
-    _checkdomain(alg)
+    check_fields(alg)
     t = sort_tuning(backend, T)
-    a = alg isa Auto ? _select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
-    a = _fill(a, t, T)
-    _check(a, backend, T, layout, ord; perm, pairs)
+    a = alg isa Auto ? select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
+    a = fill_defaults(a, t, T)
+    check_sort(a, backend, T, layout, ord; perm, pairs)
     return a
 end
 
-function _select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
+function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                       perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
@@ -157,9 +157,9 @@ _rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 # Domain checks of explicitly set fields, before any arithmetic uses them
 
-_checkdomain(a::MergeSort) = check_positive(a, :block_size)
+check_fields(a::MergeSort) = check_positive(a, :block_size)
 
-function _checkdomain(a::RadixSort)
+function check_fields(a::RadixSort)
     # Bounded, so that the local-memory footprints computed from them cannot overflow
     check_pow2(a, :block_size)
     check_positive(a, :items_per_thread)
@@ -173,7 +173,7 @@ function _checkdomain(a::RadixSort)
     nothing
 end
 
-function _checkdomain(a::BitonicSort)
+function check_fields(a::BitonicSort)
     check_pow2(a, :block_size)
     check_pow2(a, :items_per_thread)
     if a.block_size !== nothing && a.items_per_thread !== nothing
@@ -184,37 +184,37 @@ function _checkdomain(a::BitonicSort)
     nothing
 end
 
-_checkdomain(a::CPUThreads.SampleSort) = check_threads(a)
+check_fields(a::CPUThreads.SampleSort) = check_threads(a)
 
 
 # Fill unset fields from the tuning
 
-_fill(a::MergeSort, t::SortTuning, T) =
+fill_defaults(a::MergeSort, t::SortTuning, T) =
     MergeSort(something(a.block_size, t.merge_block_size), a.lowmem)
-_fill(a::RadixSort, t::SortTuning, T) =
+fill_defaults(a::RadixSort, t::SortTuning, T) =
     RadixSort(something(a.block_size, t.radix_block_size),
               something(a.items_per_thread, t.radix_items_per_thread),
               something(a.chunk_size, t.radix_chunk_size))
-_fill(a::BitonicSort, t::SortTuning, T) =
+fill_defaults(a::BitonicSort, t::SortTuning, T) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
-_fill(a::CPUThreads.SampleSort, t::SortTuning, T) = fill_threads(a, t)
-_fill(a::Algorithm, t::SortTuning, T) =
+fill_defaults(a::CPUThreads.SampleSort, t::SortTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::SortTuning, T) =
     throw(ArgumentError("$(algname(a)) is not a sorting algorithm"))
 
 
 # Check a complete algorithm against the backend, the operation and the arguments
 
-function _check(a::MergeSort, backend, T, layout, ord; perm, pairs)
-    _checkdomain(a)
+function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs)
+    check_fields(a)
     require_kernels(a, backend)
     !a.lowmem || (perm && !pairs) || throw(ArgumentError(
         "MergeSort(lowmem=true) is only supported by sortperm!, not by $(_sort_opname(perm, pairs))"))
     nothing
 end
 
-function _check(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) where {T}
-    _checkdomain(a)
+function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) where {T}
+    check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "RadixSort does not support $(_sort_opname(perm, pairs))"))
@@ -231,15 +231,15 @@ function _check(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) wher
     nothing
 end
 
-function _check(a::BitonicSort, backend, T, layout, ord; perm, pairs)
-    _checkdomain(a)
+function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
+    check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "BitonicSort is unstable and does not support $(_sort_opname(perm, pairs))"))
     nothing
 end
 
-function _check(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
-    _checkdomain(a)
+function check_sort(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
+    check_fields(a)
     require_threads(a, backend)
 end

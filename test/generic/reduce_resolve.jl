@@ -12,7 +12,7 @@ AK.runs_kernels(::ReduceNoKernelsTestBackend) = false
 
 const RRB = ReduceResolveTestBackend()
 
-resolve_reduce(alg; T=Float32, dims=:, backend=RRB) = AK._resolve_reduce(alg, backend, T, dims)
+resolve_reduce(alg; T=Float32, dims=:, backend=RRB) = AK.resolve_reduce(alg, backend, T, dims)
 
 function with_reduce_tuning(f; kwargs...)
     old = REDUCE_RESOLVE_TUNING[]
@@ -112,7 +112,7 @@ end
     # Algorithms of other families
     @test_throws ArgumentError resolve_reduce(AK.MergeSort())
     @test_throws ArgumentError resolve_reduce(AK.CPUThreads.SampleSort(); backend=host)
-    @test_throws ArgumentError AK._resolve_sort(AK.BlockReduce(), RRB, zeros(Float32, 10), :,
+    @test_throws ArgumentError AK.resolve_sort(AK.BlockReduce(), RRB, zeros(Float32, 10), :,
                                                 Base.Order.Forward; perm=false)
 end
 
@@ -133,7 +133,7 @@ end
     host = typeof(AK.HOST_BACKEND)
     for (B, dims) in ((ReduceResolveTestBackend, Colon), (ReduceResolveTestBackend, Int),
                       (host, Nothing), (host, Tuple{Int, Int}))
-        rt = only(Base.return_types(AK._resolve_reduce, (AK.Auto, B, Type{Float32}, dims)))
+        rt = only(Base.return_types(AK.resolve_reduce, (AK.Auto, B, Type{Float32}, dims)))
         @test rt <: Union{AK.BlockReduce, AK.CPUThreads.Partitioned}
     end
 end

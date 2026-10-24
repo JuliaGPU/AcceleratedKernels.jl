@@ -6,29 +6,29 @@ public API: the hooks and tuning structs can change in any release, including pa
 ## Resolution
 
 Every operation resolves its `alg` keyword once, on the host, before touching any data. For
-sorting, `_resolve_sort` runs four steps:
+sorting, `resolve_sort` runs four steps:
 
-1. `_checkdomain` checks the fields the caller set (e.g. a `block_size` that is not a power of
+1. `check_fields` checks the fields the caller set (e.g. a `block_size` that is not a power of
    two), before any arithmetic uses them;
-2. for `Auto`, `_select_sort` picks an algorithm from the device's tuning, the backend's
+2. for `Auto`, `select_sort` picks an algorithm from the device's tuning, the backend's
    capabilities and the call's static facts, returning it with unset fields;
-3. `_fill` fills the unset fields from the tuning;
-4. `_check` checks the complete algorithm against the capabilities, the operation and the
+3. `fill_defaults` fills the unset fields from the tuning;
+4. `check_sort` checks the complete algorithm against the capabilities, the operation and the
    arguments, and throws an `ArgumentError` for anything it cannot run.
 
 ```@docs
-AcceleratedKernels._resolve_sort
+AcceleratedKernels.resolve_sort
 ```
 
 The other families follow the same steps, with a one-line selection: reductions resolve with
-`_resolve_reduce`, scans with `_resolve_scan`, `findall` with `_resolve_findall` and
-`any`/`all` with `_resolve_predicate`.
+`resolve_reduce`, scans with `resolve_scan`, `findall` with `resolve_findall` and
+`any`/`all` with `resolve_predicate`.
 
 ```@docs
-AcceleratedKernels._resolve_reduce
-AcceleratedKernels._resolve_scan
-AcceleratedKernels._resolve_findall
-AcceleratedKernels._resolve_predicate
+AcceleratedKernels.resolve_reduce
+AcceleratedKernels.resolve_scan
+AcceleratedKernels.resolve_findall
+AcceleratedKernels.resolve_predicate
 ```
 
 `Auto` and explicit algorithms share steps 3 and 4, so a tuning cannot make an invalid algorithm

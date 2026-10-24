@@ -11,7 +11,7 @@ AK.runs_kernels(::ScanNoKernelsTestBackend) = false
 
 const SRB = ScanResolveTestBackend()
 
-resolve_scan(alg; T=Float32, dims=nothing, backend=SRB) = AK._resolve_scan(alg, backend, T, dims)
+resolve_scan(alg; T=Float32, dims=nothing, backend=SRB) = AK.resolve_scan(alg, backend, T, dims)
 
 function with_scan_tuning(f; kwargs...)
     old = SCAN_RESOLVE_TUNING[]
@@ -83,7 +83,7 @@ end
     # NTuple{3, Int32} is 4-byte aligned everywhere, so its lanes take 16 bytes on every platform
     # (Int64 lanes take 12 on 32-bit x86)
     @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
-    @test AK._resolve_scan(AK.Auto(), SRB, NTuple{3, Int32}, nothing,
+    @test AK.resolve_scan(AK.Auto(), SRB, NTuple{3, Int32}, nothing,
                            AK._Lane{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
 
     # Kernels need a bits-type element
@@ -97,7 +97,7 @@ end
     # Algorithms of other families
     @test_throws ArgumentError resolve_scan(AK.BlockReduce())
     @test_throws ArgumentError resolve_scan(AK.CPUThreads.SampleSort(); backend=host)
-    @test_throws ArgumentError AK._resolve_reduce(AK.ScanPrefixes(), SRB, Float32, :)
+    @test_throws ArgumentError AK.resolve_reduce(AK.ScanPrefixes(), SRB, Float32, :)
 end
 
 
@@ -105,7 +105,7 @@ end
     host = typeof(AK.HOST_BACKEND)
     for (B, dims) in ((ScanResolveTestBackend, Nothing), (ScanResolveTestBackend, Int),
                       (host, Nothing), (host, Int))
-        rt = only(Base.return_types(AK._resolve_scan, (AK.Auto, B, Type{Float32}, dims)))
+        rt = only(Base.return_types(AK.resolve_scan, (AK.Auto, B, Type{Float32}, dims)))
         @test rt <: Union{AK.ScanPrefixes, AK.SliceScan, AK.CPUThreads.Partitioned}
     end
 end

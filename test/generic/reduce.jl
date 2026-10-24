@@ -1186,7 +1186,7 @@ end
     shape_of(x, dims, A) = AK._mapreduce_nd_shape(
         length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
         AK._mapreduce_segments(size(x), AK._mapreduce_layout(x)[3], dims),
-        AK._resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
+        AK.resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
     # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
     # launch enough blocks, and one thread per output where a row of outputs fills the device
     for (m, n, A, shape) in ((4096, 1024, Int32, :tiled_strided), (8192, 300, Int32, :columns),
@@ -1688,7 +1688,7 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
                                           AK._reduced_dims(dims, length(sz)))
             dst_size = prod(d in dims ? 1 : sz[d] for d in eachindex(sz))
             len = prod(sz) ÷ dst_size
-            block_size = AK._resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, dims).block_size
+            block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, dims).block_size
             shape, groups = AK._mapreduce_nd_shape(dst_size, len, segs, block_size,
                                                    AK.reduce_tuning(BACKEND, RedMat2), RedMat2)
             push!(shapes,
@@ -1717,7 +1717,7 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
         @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
         # (with the default settings, every shape is taken; tunings can rule some out)
         t = AK.reduce_tuning(BACKEND, RedMat2)
-        if AK._resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, 1).block_size == 256 &&
+        if AK.resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, 1).block_size == 256 &&
            t.columns_min_elements <= 1 << 18
             required = Set((:by_thread => :by_thread,
                             :columns => :columns_ordered, :tiled_strided => :columns_ordered,

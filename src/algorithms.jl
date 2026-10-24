@@ -154,7 +154,7 @@ algname(::CPUThreads.SampleSort) = "CPUThreads.SampleSort"
 algname(::CPUThreads.Partitioned) = "CPUThreads.Partitioned"
 
 # Domain checks of the fields an algorithm was given explicitly, before any arithmetic uses them
-_checkdomain(::Algorithm) = nothing
+check_fields(::Algorithm) = nothing
 
 function check_positive(a, field)
     x = getfield(a, field)
@@ -175,7 +175,7 @@ function check_threads(a)
     check_positive(a, :min_elems)
 end
 
-_checkdomain(a::CPUThreads.Partitioned) = check_threads(a)
+check_fields(a::CPUThreads.Partitioned) = check_threads(a)
 
 # Unset fields of a threaded algorithm: all threads, and the tuning's minimum per task
 fill_threads(a::A, t) where {A} =

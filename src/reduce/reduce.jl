@@ -180,8 +180,8 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
     # The accumulator type, from `init`'s type
     A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
 
-    if _whole(dims)
-        a = _resolve_reduce(alg, backend, A, dims)
+    if iswhole(dims)
+        a = resolve_reduce(alg, backend, A, dims)
         seed = _mapreduce_seed(op, A, neutral)
         # (the buffer's name does not depend on the length, so that results infer)
         sizes = if a isa BlockReduce && seed !== nothing
@@ -199,7 +199,7 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
     # empty reduction can succeed
     R_type = A !== Union{} ? A : !(init isa _NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in dims_valid ? 1 : _srcsize(src, d), ndims(src))
-    a = _resolve_reduce(alg, backend, A, dims_valid)
+    a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, Base.prod(dst_sizes))
     return (; plan=Plan(backend, a, sizes), A=Val(A), seed, dims_valid, R_type=Val(R_type),
@@ -348,7 +348,7 @@ end
 function _mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, neutral,
                              overwrite, acctype, alg) where {F, OP}
     A = _acctype(op, eltype(dst), _mapped_eltype(f, src), acctype)
-    a = _resolve_reduce(alg, backend, A, dims_valid)
+    a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
     init = init isa _NoInit && !overwrite ? _Fold() : init

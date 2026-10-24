@@ -38,7 +38,7 @@ const RB = ResolveTestBackend()
 const FWD = Base.Order.Forward
 const REV = Base.Order.Reverse
 
-resolve(alg, v; dims=:, ord=FWD, backend=RB, kw...) = AK._resolve_sort(alg, backend, v, dims, ord; kw...)
+resolve(alg, v; dims=:, ord=FWD, backend=RB, kw...) = AK.resolve_sort(alg, backend, v, dims, ord; kw...)
 
 function with_tuning(f; kwargs...)
     old = RESOLVE_TUNING[]
@@ -229,15 +229,15 @@ end
 @testset "sort resolution: inference" begin
     for T in (Int32, Float32), (A, D) in ((Vector{T}, Colon), (Matrix{T}, Int))
         # Auto resolves to a small union of concrete algorithms, not `Any`
-        rt = only(Base.return_types(AK._resolve_sort,
+        rt = only(Base.return_types(AK.resolve_sort,
                                     (AK.Auto, ResolveTestBackend, A, D, Base.Order.ForwardOrdering)))
         @test rt <: Union{AK.MergeSort, AK.RadixSort, AK.BitonicSort}
         @test rt isa Union || isconcretetype(rt)
-        rt = only(Base.return_types(AK._resolve_sort,
+        rt = only(Base.return_types(AK.resolve_sort,
                                     (AK.Auto, typeof(AK.HOST_BACKEND), A, D, Base.Order.ForwardOrdering)))
         @test rt === AK.CPUThreads.SampleSort
         # An explicit algorithm resolves to itself
-        rt = only(Base.return_types(AK._resolve_sort,
+        rt = only(Base.return_types(AK.resolve_sort,
                                     (AK.RadixSort, ResolveTestBackend, A, D, Base.Order.ForwardOrdering)))
         @test rt === AK.RadixSort
     end

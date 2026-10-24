@@ -147,7 +147,7 @@ function _accumulate_setup(
                       acctype)
     seed = _reduce_seed(op, A, neutral)
     # The kernels' tiles hold partial results: lanes, when `op` has no known neutral element
-    a = _resolve_scan(alg, backend, A, dims, typeof(seed))
+    a = resolve_scan(alg, backend, A, dims, typeof(seed))
     if !inclusive && init isa _NoInit && seed isa _Lane && !_valid(seed)
         throw(ArgumentError(
             "an exclusive scan without `init` starts from the neutral element of `op`, " *

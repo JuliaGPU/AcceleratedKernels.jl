@@ -99,29 +99,29 @@ scan_tuning(::HostBackend, ::Type) = ScanTuning(reduce_then_scan=false, subgroup
 
 
 """
-    _resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
+    resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
 
 Resolve `alg` for a scan of element type `T` along `dims` (`nothing` for the whole array in
 linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (a
 lane type when the operator has no known neutral element). Returns `ScanPrefixes`, `SliceScan`
 or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
-function _resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
+function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
                        ::Type{S}=T) where {T, S}
-    _checkdomain(alg)
+    check_fields(alg)
     t = scan_tuning(backend, T)
-    a = alg isa Auto ? _select_scan(backend, dims) : alg
-    a = _fill(a, t, S)
-    _check_scan(a, backend, S, dims)
+    a = alg isa Auto ? select_scan(backend, dims) : alg
+    a = fill_defaults(a, t, S)
+    check_scan(a, backend, S, dims)
     return a
 end
 
-function _select_scan(backend, dims)
+function select_scan(backend, dims)
     runs_threads(backend) && return CPUThreads.Partitioned()
     return dims === nothing ? ScanPrefixes() : SliceScan()
 end
 
-function _checkdomain(a::Union{ScanPrefixes, SliceScan})
+function check_fields(a::Union{ScanPrefixes, SliceScan})
     check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "$(algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
@@ -130,26 +130,26 @@ function _checkdomain(a::Union{ScanPrefixes, SliceScan})
 end
 
 # The largest number of items per thread whose tile fits the tuning's local-memory budget. Types
-# without a definite size and block sizes that `_check_scan` rejects get a placeholder.
+# without a definite size and block sizes that `check_scan` rejects get a placeholder.
 function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
     clamp(t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1,
           1, max(t.max_items, 1))
 end
 
-function _fill(a::A, t::ScanTuning,
+function fill_defaults(a::A, t::ScanTuning,
                ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
     items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
                                                        a.items_per_thread
     return A(block_size, items_per_thread)
 end
-_fill(a::CPUThreads.Partitioned, t::ScanTuning, T) = fill_threads(a, t)
-_fill(a::Algorithm, t::ScanTuning, T) =
+fill_defaults(a::CPUThreads.Partitioned, t::ScanTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::ScanTuning, T) =
     throw(ArgumentError("$(algname(a)) is not a scan algorithm"))
 
-function _check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
-    _checkdomain(a)
+function check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
+    check_fields(a)
     require_kernels(a, backend)
     _check_scan_eltype(a, T)
     dims === nothing || throw(ArgumentError(
@@ -163,8 +163,8 @@ function _check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
     nothing
 end
 
-function _check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
-    _checkdomain(a)
+function check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
+    check_fields(a)
     require_kernels(a, backend)
     _check_scan_eltype(a, T)
     dims === nothing && throw(ArgumentError(
@@ -174,8 +174,8 @@ function _check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
     nothing
 end
 
-function _check_scan(a::CPUThreads.Partitioned, backend, T, dims)
-    _checkdomain(a)
+function check_scan(a::CPUThreads.Partitioned, backend, T, dims)
+    check_fields(a)
     require_threads(a, backend)
     # Each task's part must hold two elements for the exclusive scan's carries
     a.min_elems >= 2 || throw(ArgumentError(

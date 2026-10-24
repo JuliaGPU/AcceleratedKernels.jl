@@ -34,21 +34,21 @@ The `findall` tuning for element type `T` (the input's) on `backend`'s current d
 findall_tuning(::Backend, ::Type) = FindallTuning()
 
 """
-    _resolve_findall(alg, backend, T) -> Algorithm
+    resolve_findall(alg, backend, T) -> Algorithm
 
 Resolve `alg` for `findall` over elements of type `T` on `backend`: `ScanScatter` or
 `CPUThreads.Partitioned` with every field set, or an `ArgumentError`.
 """
-function _resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    _checkdomain(alg)
+function resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
+    check_fields(alg)
     t = findall_tuning(backend, T)
     a = alg isa Auto ? (runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
-    a = _fill(a, t, T)
-    _check_findall(a, backend)
+    a = fill_defaults(a, t, T)
+    check_findall(a, backend)
     return a
 end
 
-function _checkdomain(a::ScanScatter)
+function check_fields(a::ScanScatter)
     check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "ScanScatter: `block_size` must be at most 1024, got $(a.block_size)"))
@@ -56,23 +56,23 @@ function _checkdomain(a::ScanScatter)
     nothing
 end
 
-_fill(a::ScanScatter, t::FindallTuning, T) =
+fill_defaults(a::ScanScatter, t::FindallTuning, T) =
     ScanScatter(something(a.block_size, t.block_size),
                 something(a.items_per_thread, t.items_per_thread))
-_fill(a::CPUThreads.Partitioned, t::FindallTuning, T) = fill_threads(a, t)
-_fill(a::Algorithm, t::FindallTuning, T) =
+fill_defaults(a::CPUThreads.Partitioned, t::FindallTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::FindallTuning, T) =
     throw(ArgumentError("$(algname(a)) is not a findall algorithm"))
 
-function _check_findall(a::ScanScatter, backend)
-    _checkdomain(a)
+function check_findall(a::ScanScatter, backend)
+    check_fields(a)
     require_kernels(a, backend)
     widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
         "ScanScatter: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
     nothing
 end
 
-function _check_findall(a::CPUThreads.Partitioned, backend)
-    _checkdomain(a)
+function check_findall(a::CPUThreads.Partitioned, backend)
+    check_fields(a)
     require_threads(a, backend)
 end
 
@@ -312,7 +312,7 @@ function _findall_setup(v, items, predicate::Bool, backend, alg)
     length(items) == length(v) || throw(DimensionMismatch(
         "`items` must have the length of the array, $(length(v)), got $(length(items))"))
     backend = resolve_backend(backend, v, items)
-    a = _resolve_findall(alg, backend, eltype(v))
+    a = resolve_findall(alg, backend, eltype(v))
     n = length(v)
     mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)
     counts, nested = if a isa ScanScatter

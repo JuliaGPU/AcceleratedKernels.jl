@@ -232,17 +232,17 @@ AK.findall_tuning(::FindallResolveTestBackend, ::Type) =
 
 @testset "findall resolution" begin
     B = FindallResolveTestBackend()
-    @test AK._resolve_findall(AK.Auto(), B, Bool) === AK.ScanScatter(128, 4)
-    @test AK._resolve_findall(AK.ScanScatter(block_size=64), B, Bool) === AK.ScanScatter(64, 4)
-    @test AK._resolve_findall(AK.Auto(), AK.HOST_BACKEND, Bool) ===
+    @test AK.resolve_findall(AK.Auto(), B, Bool) === AK.ScanScatter(128, 4)
+    @test AK.resolve_findall(AK.ScanScatter(block_size=64), B, Bool) === AK.ScanScatter(64, 4)
+    @test AK.resolve_findall(AK.Auto(), AK.HOST_BACKEND, Bool) ===
           AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
     for bad in (AK.ScanScatter(block_size=0), AK.ScanScatter(block_size=96),
                 AK.ScanScatter(block_size=2048), AK.ScanScatter(items_per_thread=0),
                 AK.ScanScatter(block_size=1024, items_per_thread=1 << 22))
-        @test_throws ArgumentError AK._resolve_findall(bad, B, Bool)
+        @test_throws ArgumentError AK.resolve_findall(bad, B, Bool)
     end
-    @test_throws ArgumentError AK._resolve_findall(AK.CPUThreads.Partitioned(), B, Bool)
-    @test_throws ArgumentError AK._resolve_findall(AK.BlockReduce(), B, Bool)
+    @test_throws ArgumentError AK.resolve_findall(AK.CPUThreads.Partitioned(), B, Bool)
+    @test_throws ArgumentError AK.resolve_findall(AK.BlockReduce(), B, Bool)
 
     # Removed keywords
     v = array_from_host(rand(Bool, 10))
