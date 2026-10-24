@@ -14,7 +14,7 @@ end
 # Only for backend-agnostic initialisation with KernelAbstractions.zero
 Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
-@testset "reduce_1d" begin
+@testset "reduce: whole arrays" begin
     Random.seed!(0)
 
     function redmin(s)
@@ -157,7 +157,7 @@ Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 end
 
 
-@testset "reduce_nd" begin
+@testset "reduce: dims" begin
     Random.seed!(0)
 
     # Test all possible corner cases against Base.reduce
@@ -381,7 +381,7 @@ end
 end
 
 
-@testset "mapreduce_1d" begin
+@testset "mapreduce: whole arrays" begin
     Random.seed!(0)
 
     function minbox(s; alg=REDUCE_ALG)
@@ -593,7 +593,7 @@ end
 end
 
 
-@testset "mapreduce_nd" begin
+@testset "mapreduce: dims" begin
     Random.seed!(0)
 
     # Test all possible corner cases against Base.reduce
@@ -1043,7 +1043,7 @@ end
 end
 
 
-@testset "reduce block sizes" begin
+@testset "reduce: block sizes" begin
     # The block-level tree reduction must cover every power-of-two group size the device allows;
     # each shape below reaches a different kernel: the 1D block reduction, the grid-strided
     # one-block-per-output reduction (contiguous and strided sources), the multi-block
@@ -1168,7 +1168,7 @@ end
 end
 
 
-@testset "reductions into a single output" begin
+@testset "reduce: dims, into a single output" begin
     # Along `dims`, a reduction into one output of a contiguous or fused source takes the
     # whole-array kernels, finishing on the device; the sizes span one tile, one pass and two
     Random.seed!(0)
@@ -1216,7 +1216,7 @@ end
 end
 
 
-@testset "lazy sources" begin
+@testset "reduce: lazy sources" begin
     # Sources without a dense buffer, a lazy array and a fused one, reduced into one output and
     # with every launch shape along `dims`: few outputs of many elements each (in one block per
     # output, several, or one block for a few), contiguous outputs of strided elements (in
@@ -1258,7 +1258,7 @@ end
 end
 
 
-@testset "offset axes" begin
+@testset "reduce: offset axes" begin
     # Arrays whose axes do not start at 1, as sources and destinations
     Random.seed!(0)
     algs = TEST_KERNELS ? [REDUCE_ALG] :
@@ -1312,7 +1312,7 @@ end
 end
 
 
-@testset "reduction contract" begin
+@testset "reduce: contract" begin
     Random.seed!(0)
     alg = REDUCE_ALG
 
@@ -1584,7 +1584,7 @@ const ORDERED_CASES = (
     ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1), ((300_000, 2), 1),
     ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1), ((1, 5000, 2), 2), ((40, 3000, 30), 2))
 
-@testset "non-commutative reductions" begin
+@testset "reduce: non-commutative" begin
     Random.seed!(0)
 
     # Whole arrays: one tile, one block, several tiles per block, and several blocks (also with
@@ -1716,7 +1716,7 @@ if TEST_KERNELS
         @test launch_shape(x, 2, Int32)[1] === :columns
     end
 
-    # "non-commutative reductions": every shape in order, and every shape of the commutative
+    # "reduce: non-commutative": every shape in order, and every shape of the commutative
     # reductions with the default settings (tunings can rule some out)
     shapes = Set(launch_shape(Array{Mat2}(undef, sz), dims, Mat2)[1] =>
                  launch_shape(Array{Mat2}(undef, sz), dims, Mat2; commutative=false)[1]
@@ -1735,7 +1735,7 @@ if TEST_KERNELS
         @test shapes ⊇ required
     end
 
-    # "reduce_nd": columns of aligned 4- and 8-byte elements take vector loads, those at other
+    # "reduce: dims": columns of aligned 4- and 8-byte elements take vector loads, those at other
     # offsets scalar ones
     for T in valid_backend_eltypes(BACKEND, (Float32, Int32, UInt32, Float64, Int64, UInt64))
         @test vector_width(array_from_host(zeros(T, 1024, 1024)), 1) == 16 ÷ sizeof(T)

@@ -9,7 +9,7 @@ else
 end
 HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
 
-@testset "truth $alg" for alg in PRED_ALGS
+@testset "any and all: $alg" for alg in PRED_ALGS
 
     Random.seed!(0)
 

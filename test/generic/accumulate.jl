@@ -195,7 +195,7 @@ end
 end
 
 
-@testset "accumulate_1d levels" begin
+@testset "accumulate: tile levels" begin
     # With small tiles, the totals of the tiles take several levels of tiles themselves
     if TEST_KERNELS
         Random.seed!(0)
@@ -220,7 +220,7 @@ end
     end
 end
 
-@testset "accumulate_nd non-commutative" begin
+@testset "accumulate: dims, non-commutative" begin
     Random.seed!(0)
 
     # Every GPU launch shape: a thread per slice (short contiguous slices staged in local memory,
@@ -250,7 +250,7 @@ end
 end
 
 
-@testset "accumulate_nd degenerate settings" begin
+@testset "accumulate: dims, tiles of one element" begin
     # Tiles of a single element: splitting a slice still shortens it
     if TEST_KERNELS
         for dims in 1:2
@@ -263,7 +263,7 @@ end
 end
 
 
-@testset "accumulate_nd converting elements" begin
+@testset "accumulate: dims, converting elements" begin
     Random.seed!(0)
 
     # Elements enter as one-element reductions of the accumulator type as the kernels read
@@ -284,7 +284,7 @@ end
 end
 
 
-@testset "accumulate_nd" begin
+@testset "accumulate: dims" begin
     Random.seed!(0)
 
     # Test all possible corner cases against Base.accumulate
@@ -496,7 +496,7 @@ end
 end
 
 
-@testset "scan contract" begin
+@testset "accumulate: contract" begin
     Random.seed!(0)
     xh = rand(Int32(-9):Int32(9), 20_000)
     x = array_from_host(xh)
