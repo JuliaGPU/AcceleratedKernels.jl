@@ -59,11 +59,10 @@ linear_source(src::Base.Broadcast.Broadcasted, rdims) = src
 function linear_source(src::AbstractArray, rdims)
     layout = strided_layout(src)
     isnothing(layout) && return src
-    buffer, base_offset, src_strides = layout
-    (rstrides, _, nr), _ = merge_dims(size(src), src_strides, rdims)
+    (rstrides, _, nr), _ = merge_dims(size(src), layout.strides, rdims)
     nr == 1 && rstrides[1] == 1 || return nothing
-    return base_offset == 0 && buffer === src ? src :
-           view(buffer, base_offset + 1:base_offset + length(src))
+    (; buffer, offset) = layout
+    return offset == 0 && buffer === src ? src : view(buffer, offset + 1:offset + length(src))
 end
 
 # (the strides of a dense column-major array: 1 and the running products of the sizes)
@@ -72,7 +71,7 @@ dense_strides(sizes::Tuple) = Base.front(tuple_cumprod((1, sizes...)))
 tuple_cumprod(t::Tuple{Any}) = t
 tuple_cumprod(t::Tuple) = (t[1], tuple_cumprod((t[1] * t[2], Base.tail(Base.tail(t))...))...)
 
-# The layout the reduction kernels index `src` with, as `(buffer, base_offset, strides)`: the
+# The layout the reduction kernels index `src` with, as `(; buffer, offset, strides)`: the
 # strided layout of a source backed by a dense buffer, else (for a lazy array or a `Broadcasted`
 # object) the source indexed linearly, as a dense array of its size. Indexing a lazy source
 # linearly costs a decode of the index per element, but it gets the launch shapes of a dense
@@ -81,8 +80,7 @@ function source_layout(src)
     layout = strided_layout(src)
     return isnothing(layout) ? linear_layout(src) : layout
 end
-linear_layout(src) =
-    (linear_view(src), 0, dense_strides(size(src)))
+linear_layout(src) = (; buffer=linear_view(src), offset=0, strides=dense_strides(size(src)))
 # (a reshaped array decodes a linear index with multiplicative inverses rather than divisions)
 linear_view(src::AbstractArray) = vec(src)
 linear_view(src::Base.Broadcast.Broadcasted) = src
@@ -91,7 +89,7 @@ linear_view(src::Base.Broadcast.Broadcasted) = src
 # flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`, so they work for any
 # source backed by a single dense column-major buffer — a dense array, but also a
 # strided view, adjoint, permuted-dims, or reshape over one. Returns
-# `(buffer, base_offset, strides)` for such sources, or `nothing` (→ linear indexing, see
+# `(; buffer, offset, strides)` for such sources, or `nothing` (→ linear indexing, see
 # `source_layout`) for `Broadcasted` and anything not backed by a dense buffer
 # (lazy/computed arrays, complex adjoints without `strides`, nested wrappers).
 function strided_layout(src::AbstractArray)
@@ -104,22 +102,18 @@ function strided_layout(src::AbstractArray)
     end
 
     # Dense or contiguous (column-major) — index the source directly, no offset.
-    s == dense_strides(size(src)) && return (src, 0, s)
+    s == dense_strides(size(src)) && return (; buffer=src, offset=0, strides=s)
 
     # Non-dense but strided: index the dense parent buffer at the source's offset.
     # Only one level of wrapping over a dense buffer is supported; deeper nesting
     # falls back to the generic kernel.
     p = parent(src)
     (p === src || !isdense(p)) && return nothing
-    base = parent_offset(src, p)
-    base === nothing && return nothing
-    return (p, base, s)
+    offset = parent_offset(src, p)
+    offset === nothing && return nothing
+    return (; buffer=p, offset, strides=s)
 end
-
-# (before Julia 1.12 a `Broadcasted` source reaches the kernels materialized, as a dense array:
-# see `kernel_source`)
-strided_layout(src::Base.Broadcast.Broadcasted) =
-    VERSION < v"1.12-" ? (nothing, 0, dense_strides(size(src))) : nothing
+strided_layout(src::Base.Broadcast.Broadcasted) = nothing
 
 function isdense(p::AbstractArray)
     try

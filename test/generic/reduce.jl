@@ -1185,7 +1185,7 @@ end
     # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
     shape_of(x, dims, A) = AK.reduce_shape(
         length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
-        AK.merge_dims(size(x), AK.source_layout(x)[3], dims),
+        AK.merge_dims(size(x), AK.source_layout(x).strides, dims),
         AK.resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
     # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
     # launch enough blocks, and one thread per output where a row of outputs fills the device

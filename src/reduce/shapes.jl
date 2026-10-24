@@ -210,7 +210,7 @@ function mapreduce_nd_sizes(src, backend, alg, ::Type{A}, seed, rdims, dst_size)
                                   reduce_tuning(backend, A).target_blocks)
         return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
     end
-    segs = merge_dims(src_sizes, source_layout(src)[3], rdims)
+    segs = merge_dims(src_sizes, source_layout(src).strides, rdims)
     shape, reduce_groups = reduce_shape(dst_size, len, segs, alg.block_size,
                                         reduce_tuning(backend, A), A)
     shape === :multigroup || shape === :columns && reduce_groups > 1 || return (;)

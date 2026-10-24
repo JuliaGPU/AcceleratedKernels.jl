@@ -93,10 +93,10 @@ function mapreduce_nd!(
 
     # The kernels below index a flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`
     # (see `source_layout`)
-    layout = strided_layout(src)
-    buffer, base_offset, src_strides =
-        isnothing(layout) ? linear_layout(src) : layout
-    segs = merge_dims(src_sizes, src_strides, rdims)
+    strided = strided_layout(src)
+    layout = isnothing(strided) ? linear_layout(src) : strided
+    buffer, base_offset = layout.buffer, layout.offset
+    segs = merge_dims(src_sizes, layout.strides, rdims)
     reduce_size = len
     shape, reduce_groups = reduce_shape(dst_size, reduce_size, segs, block_size, tuning, A)
     commutative || ((shape, reduce_groups) = ordered_shape(shape, reduce_groups, dst_size,
@@ -104,7 +104,7 @@ function mapreduce_nd!(
 
     # One output per thread of a source without a dense buffer: iterating over the Cartesian
     # indices of each output's elements saves decoding every linear index
-    if isnothing(layout) && shape === :by_thread
+    if isnothing(strided) && shape === :by_thread
         blocks = cld(dst_size, block_size)
         kernel! = by_thread_cartesian_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
@@ -119,7 +119,7 @@ function mapreduce_nd!(
         Base.inferencebarrier(launch_shape!)(
             Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
             init, seed, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
-            outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(layout),
+            outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(strided),
             items_per_thread=alg.items_per_thread,
         )
     end

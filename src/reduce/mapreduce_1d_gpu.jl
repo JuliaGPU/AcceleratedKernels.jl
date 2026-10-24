@@ -143,8 +143,8 @@ end
 function mapreduce_1d_buffer(src)
     src isa AbstractArray || return nothing
     layout = strided_layout(src)
-    layout !== nothing && layout[3] == dense_strides(size(src)) || return nothing
-    return layout[1], layout[2]
+    layout !== nothing && layout.strides == dense_strides(size(src)) || return nothing
+    return layout.buffer, layout.offset
 end
 
 host_copy(src::AbstractArray) = Array(src)
