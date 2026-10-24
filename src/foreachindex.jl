@@ -16,33 +16,6 @@ end
 @inline nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
 
 
-function _forindices_gpu(
-    f,
-    indices,
-    backend::Backend;
-
-    block_size::Int=256,
-)
-    # GPU implementation
-    @argcheck block_size > 0
-    blocks = (length(indices) + block_size - 1) ÷ block_size
-    foreachindex_kernel!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
-    nothing
-end
-
-
-function _forindices_threads(f, indices; max_tasks, min_elems)
-    task_partition(length(indices), max_tasks, min_elems) do irange
-        # Task partition returns static ranges indexed from 1:length(indices); use those to index
-        # into indices, which supports arbitrary indices (and gets compiled away when using 1-based
-        # collections); each thread processes this range
-        for i in irange
-            @inline f(nth(indices, i))
-        end
-    end
-end
-
-
 # Launch settings of the wrappers, checked on every backend (only one of them applies to each)
 function check_launch(; block_size, max_tasks, min_elems)
     block_size >= 1 || throw(ArgumentError("`block_size` must be positive, got $block_size"))
@@ -53,12 +26,17 @@ end
 
 # Run `f` over `indices`: on Julia threads on the host backend, as a kernel elsewhere
 function foreachindex_on(f, indices, backend::Backend;
-                       block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
+                         block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
     check_launch(; block_size, max_tasks, min_elems)
     if runs_threads(backend)
-        _forindices_threads(f, indices; max_tasks, min_elems)
+        task_partition(length(indices), max_tasks, min_elems) do irange
+            for i in irange
+                @inline f(nth(indices, i))
+            end
+        end
     else
-        _forindices_gpu(f, indices, backend; block_size)
+        blocks = cld(length(indices), block_size)
+        foreachindex_kernel!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
     end
     nothing
 end

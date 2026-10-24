@@ -52,20 +52,16 @@ function map!(
     if Base.all(s -> axes(s) == axes(dst), srcs)
         # Index all arrays alike, linearly if they all support it
         foreachindex_on(eachindex(dst, srcs...), backend; launch...) do i
-            @inbounds dst[i] = f(_getindices(srcs, i)...)
+            @inbounds dst[i] = f(Base.map(s -> @inbounds(s[i]), srcs)...)
         end
     else
         # Match the elements by their position in column-major order
         foreachindex_on(Base.OneTo(length(dst)), backend; launch...) do k
-            @inbounds dst[firstindex(dst) - 1 + k] = f(_getnth(srcs, k)...)
+            @inbounds dst[firstindex(dst) - 1 + k] = f(Base.map(s -> nth(s, k), srcs)...)
         end
     end
     dst
 end
-
-# The elements of `arrays` at index `i`, and at position `k` in column-major order
-@inline _getindices(arrays::Tuple, i) = Base.map(a -> @inbounds(a[i]), arrays)
-@inline _getnth(arrays::Tuple, k) = Base.map(a -> nth(a, k), arrays)
 
 
 """
