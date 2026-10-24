@@ -7,7 +7,6 @@ settings; any other value is an algorithm you choose, with the settings you give
 ```@docs
 AcceleratedKernels.Algorithm
 AcceleratedKernels.Auto
-AcceleratedKernels.SortAlgorithm
 AcceleratedKernels.CPUThreads
 ```
 

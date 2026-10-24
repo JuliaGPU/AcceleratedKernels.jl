@@ -1,9 +1,6 @@
 ### Reductions
 
-Apply a custom binary operator reduction on all elements in an iterable; can be used to compute minima, sums, counts, etc.
-- **Other names**: `Kokkos:parallel_reduce`, `fold`, `aggregate`.
-
----
+Apply a custom binary operator reduction on all elements in an iterable; can be used to compute minima, sums, counts, etc. Also known as `Kokkos::parallel_reduce`, `cub::DeviceReduce`, `fold` or `aggregate`.
 
 ```@docs
 AcceleratedKernels.reduce

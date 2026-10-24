@@ -20,7 +20,6 @@ makedocs(;
     pages=[
         "Overview" => "index.md",
         "Benchmarks" => "benchmarks.md",
-        "Performance Tips" => "performance.md",
         "Manual" =>[
             "Using Different Backends" => "api/using_backends.md",
             "Algorithms and Backends" => "api/algorithms.md",
@@ -30,7 +29,7 @@ makedocs(;
             "Reduce" => "api/reduce.md",
             "MapReduce" => "api/mapreduce.md",
             "Accumulate" => "api/accumulate.md",
-            "Binary Search" => "api/binarysearch.md",
+            "Binary Search" => "api/searchsorted.md",
             "Find All" => "api/findall.md",
             "Reverse" => "api/reverse.md",
             "Predicates" => "api/predicates.md",

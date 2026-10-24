@@ -1,7 +1,6 @@
 ### Predicates
 
-Apply a predicate to check if all / any elements in a collection return true. Could be implemented as a reduction, but is better optimised with stopping the search once a false / true is found.
-- **Other names**: not often implemented standalone on GPUs, typically included as part of a reduction.
+Apply a predicate to check if all / any elements in a collection return true. Could be implemented as a reduction, but is better optimised with stopping the search once a false / true is found. GPU libraries rarely provide these on their own; they are usually written as reductions.
 
 
 ```@docs

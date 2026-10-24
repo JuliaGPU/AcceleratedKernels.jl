@@ -28,8 +28,8 @@ up to the current one; often used in GPU programming as a first step in finding 
 subsets of data. The first form scans `v` in place; the second writes the scan of `src` to `dst`,
 which must be `src` itself or not overlap it.
 
-**Other names**: prefix sum, `thrust::scan`, cumulative sum; inclusive (or exclusive) if the first
-element is included in the accumulation (or not).
+Also known as a prefix sum, `thrust::scan` or `cub::DeviceScan`; it is inclusive (or exclusive) if
+the first element is included in the accumulation (or not).
 
 With `dims=nothing` the array is scanned in linear order, whatever its number of dimensions; with
 an integer `dims`, each slice along that dimension is scanned independently. A `dims` beyond the

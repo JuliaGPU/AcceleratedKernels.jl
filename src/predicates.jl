@@ -130,9 +130,6 @@ Check if any element of `v` satisfies the predicate `pred` (i.e. some `pred(v[i]
 must return a `Bool`. Optimised differently to `mapreduce` due to shortcircuiting behaviour of
 booleans.
 
-**Other names**: not often implemented standalone on GPUs, typically included as part of a
-reduction.
-
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and [`ConcurrentWrite`](@ref) on GPUs
 ([`ViaReduce`](@ref) on oneAPI and Metal). `backend` is derived from `v`; pass it for inputs

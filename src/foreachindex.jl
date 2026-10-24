@@ -107,8 +107,8 @@ x = CuArray(1:100)
 y = 2 .* x .+ 1
 ```
 
-**Important note**: to use this function on a GPU, the objects referenced inside the loop body must
-have known types - i.e. be inside a function. For example:
+To use this function on a GPU, the objects referenced inside the loop body must have known types -
+i.e. be inside a function. For example:
 ```julia
 using oneAPI
 import AcceleratedKernels as AK

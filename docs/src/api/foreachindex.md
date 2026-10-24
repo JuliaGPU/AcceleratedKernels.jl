@@ -25,8 +25,7 @@ end
 
 Yes, simply change `for i in eachindex(itr)` into `AK.foreachindex(itr) do i` to run it on GPUs / multithreaded - magic! (or just amazing language design)
 
-This is a parallelised for-loop over the indices of an iterable; converts normal Julia code to GPU kernels running one thread per index. On CPUs it executes static index ranges on `max_tasks` threads, with user-defined `min_elems` to be processed by each thread; if only a single thread ends up being needed, the loop is inlined and executed without spawning threads.
-- **Other names**: `Kokkos::parallel_for`, `RAJA::forall`, `thrust::transform`.
+This is a parallelised for-loop over the indices of an iterable; converts normal Julia code to GPU kernels running one thread per index. On CPUs it executes static index ranges on `max_tasks` threads, with user-defined `min_elems` to be processed by each thread; if only a single thread ends up being needed, the loop is inlined and executed without spawning threads. Kokkos and RAJA call this `Kokkos::parallel_for` and `RAJA::forall`; Thrust's closest is `thrust::transform`.
 
 
 Example:
@@ -64,7 +63,7 @@ end
 ```
 Host arrays and ranges run on Julia threads.
 
-All GPU functions allow you to specify a block size - this is often a power of two (mostly 64, 128, 256, 512); the optimum depends on the algorithm, input data and hardware - you can try the different values and `@time` or `@benchmark` them:
+`foreachindex`, `foraxes`, `map!`, `reverse!` and the binary searches take a GPU block size - this is often a power of two (mostly 64, 128, 256, 512); the optimum depends on the algorithm, input data and hardware - you can try the different values and `@time` or `@benchmark` them:
 ```julia
 @time AK.foreachindex(f, itr_gpu; block_size=512)
 ```
@@ -73,6 +72,9 @@ Similarly, for performance on the CPU the overhead of spawning threads should be
 ```julia
 @time AK.foreachindex(f, itr_cpu; max_tasks=16, min_elems=1000)
 ```
+
+The other operations (sorting, reductions, scans, `findall`, `any`/`all`) take these settings
+through their `alg` keyword instead; see [Algorithms and backends](@ref).
 
 
 ```@docs

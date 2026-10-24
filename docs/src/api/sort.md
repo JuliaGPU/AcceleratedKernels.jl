@@ -43,6 +43,7 @@ settings yourself; an algorithm that cannot run the call is an `ArgumentError`, 
 AcceleratedKernels' kernels on PoCL. See [Algorithms and backends](@ref) for how `Auto` chooses.
 
 ```@docs
+AcceleratedKernels.SortAlgorithm
 AcceleratedKernels.MergeSort
 AcceleratedKernels.RadixSort
 AcceleratedKernels.BitonicSort
