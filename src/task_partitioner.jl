@@ -185,6 +185,8 @@ end
 
 
 function task_partition(f, tp::TaskPartitioner)
+    # A single task has no `tasks` entry
+    tp.num_tasks == 1 && return (f(1:tp.num_elems); nothing)
     for i in 1:tp.num_tasks
         tp.tasks[i] = Threads.@spawn f(@inbounds(tp[i]))
     end
@@ -256,6 +258,7 @@ end
 
 
 function itask_partition(f, tp::TaskPartitioner)
+    tp.num_tasks == 1 && return (f(1, 1:tp.num_elems); nothing)
     for i in 1:tp.num_tasks
         tp.tasks[i] = Threads.@spawn f(i, @inbounds(tp[i]))
     end
