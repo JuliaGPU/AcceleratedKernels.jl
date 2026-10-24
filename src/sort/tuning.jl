@@ -11,6 +11,61 @@
 # checked by the same code.
 
 
+# Sorting algorithms (`CPUThreads.SampleSort` is defined with the other CPUThreads algorithms)
+
+"""
+    MergeSort(; block_size=nothing, lowmem=false)
+
+GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
+kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
+(any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
+passes merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
+the cost of reading them from global memory in every comparison; other operations reject it.
+"""
+Base.@kwdef struct MergeSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    lowmem::Bool = false
+end
+
+"""
+    RadixSort(; block_size=nothing, items_per_thread=nothing, chunk_size=nothing)
+
+GPU LSD radix sort for 32- and 64-bit integers and floats (`UInt32`, `Int32`, `Float32`,
+`UInt64`, `Int64`, `Float64`) under the default ordering or its reverse, for whole arrays and
+`dims`; it is stable and orders floats like `isless`. It does not support custom `lt`/`by`,
+`sortperm!` or `sort_by_key!`, nor arrays or slices of more than 2^32 elements. `block_size`
+must be a power of two up to 1024, `items_per_thread` between 1 and 64. `items_per_thread` and
+`chunk_size` apply where radix sort's chunked kernels run, which needs atomics, a `block_size`
+that is a multiple of `chunk_size`, and tiles that fit local memory; elsewhere its portable
+kernels sort one item per thread. The chunked kernels rank each element among the earlier
+elements of its chunk: `chunk_size`, a power of two up to 1024, trades those comparisons against
+the chunk histograms in local memory.
+
+Along `dims`, each pass sorts all slices at once. It pays off for long slices: every slice takes
+at least one block of the passes, so short ones leave most threads idle, and slices along other
+dimensions than the first are read with a stride. Where the chunked kernels run and a slice of up
+to `2 * block_size` elements fits in local memory, one block sorts each slice there instead.
+"""
+Base.@kwdef struct RadixSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
+    chunk_size::Union{Nothing, Int} = nothing
+end
+
+"""
+    BitonicSort(; block_size=nothing, items_per_thread=nothing)
+
+GPU bitonic sorting network, for whole arrays and `dims`, every element type and ordering. It is
+unstable and does not support `sortperm!` or `sort_by_key!`. Fastest for small arrays and short
+slices: tiles of `block_size * items_per_thread` elements sort in local memory, larger inputs need
+global passes. Both settings must be positive powers of two.
+"""
+Base.@kwdef struct BitonicSort <: SortAlgorithm
+    block_size::Union{Nothing, Int} = nothing
+    items_per_thread::Union{Nothing, Int} = nothing
+end
+
+
 """
     SortTuning(; kwargs...)
 
