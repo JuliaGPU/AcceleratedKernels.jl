@@ -1,43 +1,27 @@
 # The kernels of a reduction along `dims`, and their index helpers.
 
-# The element offset of output `tid` (`outer_offset`), or of element `j` of a slice
-# (`reduce_offset`), from the strides and sizes of the merged segments. A single segment, the
-# common case, needs no division; several (reductions over non-adjacent dimensions) take one per
-# segment and element.
-
-@inline function outer_offset(tid, outer_strides, outer_sizes)
-    isempty(outer_sizes) && return 0
-    length(outer_sizes) == 1 && return tid * outer_strides[1]
-    base = 0
-    tmp  = tid
-    @inbounds for i in 1:length(outer_sizes)
-        q     = tmp ÷ outer_sizes[i]
-        r     = tmp - q * outer_sizes[i]
-        base += r * outer_strides[i]
-        tmp   = q
-    end
-    base
-end
-
-@inline function reduce_offset(j, reduce_strides, reduce_sizes)
-    isempty(reduce_sizes) && return 0
-    length(reduce_sizes) == 1 && return j * reduce_strides[1]
+# The element offset of index `i` (from 0, of an output or of an element of its slice), from the
+# strides and sizes of the merged segments, for `i` below the product of the sizes. A single
+# segment, the common case, needs no division; several (reductions over non-adjacent dimensions)
+# take one per segment but the last, or a shift for sizes that are powers of two.
+@inline function segment_offset(i, strides, sizes)
+    isempty(sizes) && return 0
+    length(sizes) == 1 && return i * strides[1]
     off = 0
-    tmp = j
-    @inbounds for i in 1:length(reduce_sizes) - 1
-        sz = reduce_sizes[i]
+    tmp = i
+    @inbounds for d in 1:length(sizes) - 1
+        sz = sizes[d]
         if ispow2(sz)
-            shift = trailing_zeros(sz)
             r   = tmp & (sz - 1)
-            tmp = tmp >> shift
+            tmp = tmp >> trailing_zeros(sz)
         else
             q   = tmp ÷ sz
             r   = tmp - q * sz
             tmp = q
         end
-        off += r * reduce_strides[i]
+        off += r * strides[d]
     end
-    off += tmp * reduce_strides[end]
+    off += tmp * strides[end]
     off
 end
 
@@ -119,7 +103,7 @@ end
 
     acc = seed
     if iout < output_size
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
         j = lane
         while j < reduce_size
             acc = accop(acc, mapf(src[input_base + j + 0x1]))
@@ -182,7 +166,7 @@ end
     icol = (tile - irun * run_tiles) * cols + col
     valid = icol < run
     iout = irun * run + icol
-    sbase = base_offset + outer_offset(irun, run_strides, run_sizes) + icol
+    sbase = base_offset + segment_offset(irun, run_strides, run_sizes) + icol
 
     acc = seed
     if ordered && valid
@@ -267,11 +251,11 @@ end
     tid     = ithread + iblock * N
 
     if tid < output_size
-        input_base = base_offset + outer_offset(tid, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(tid, outer_strides, outer_sizes)
 
         res = seed
         for j in 0x0:reduce_size - 0x1
-            off = reduce_offset(j, reduce_strides, reduce_sizes)
+            off = segment_offset(j, reduce_strides, reduce_sizes)
             res = accop(res, mapf(src[input_base + off + 0x1]))
         end
 
@@ -297,12 +281,12 @@ end
     ithread = @index(Local, Linear) - 0x1
     iout = iblock
     while true
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
         acc = seed
         j   = ithread
         while j < reduce_size
-            off = reduce_offset(j, reduce_strides, reduce_sizes)
+            off = segment_offset(j, reduce_strides, reduce_sizes)
             acc = accop(acc, mapf(src[input_base + off + 0x1]))
             j  += N
         end
@@ -342,7 +326,7 @@ end
     ithread = @index(Local, Linear) - 0x1
     iout = iblock
     while true
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
         acc     = seed
         rs      = UInt32(reduce_size)
@@ -396,12 +380,12 @@ end
     iout   = Int(unsigned(iblock) % unsigned(output_size))
     igroup = Int(unsigned(iblock) ÷ unsigned(output_size))
 
-    input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+    input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
     acc = seed
     j   = ithread + igroup * N
     while j < reduce_size
-        off = reduce_offset(j, reduce_strides, reduce_sizes)
+        off = segment_offset(j, reduce_strides, reduce_sizes)
         acc = accop(acc, mapf(src[input_base + off + 0x1]))
         j  += N * groups
     end
