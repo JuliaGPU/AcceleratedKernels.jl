@@ -178,31 +178,29 @@ function scan_run!(op, v, src, s, bufs)
     # As Base, scan in the accumulator type and convert to `v`'s element type only when storing:
     # in `v` when it has that type, else in the scratch array. Elements enter as one-element
     # reductions (`Base.reduce_first`), and an inclusive scan applies `init` to the first element
-    # of each slice, as `op(init, x)`.
+    # of each slice, as `op(init, x)`. The kernels do both as they read `src`, for an `init` of
+    # the accumulator type. The threaded algorithms, an `init` of another type, and slices of one
+    # element (which no kernel scans) copy `src` to `w` first, apply `init` there, and scan `w`
+    # in place.
     w = haskey(bufs, :work) ? bufs.work : v
     launch = launch_kwargs(a)
-    # (`init` of the accumulator type seeds the kernels directly instead, except where every
-    # slice has one element and no kernel runs)
-    apply_init = inclusive && !(init isa NoInit) && !isempty(w) &&
-                 (!(init isa A) || dims !== nothing && dims > ndims(w))
-    # The kernels read the elements from `src` as they scan them; the other cases first copy them
-    # to `w`, and scan that in place
-    fused = !(a isa CPUThreads.Partitioned) && !apply_init &&
-            (dims === nothing || dims <= ndims(w))
-    if w !== src && !fused
+    singletons = dims !== nothing && dims > ndims(w)
+    separate_init = inclusive && !(init isa NoInit) && !isempty(w) &&
+                    (singletons || !(init isa A))
+    in_place = a isa CPUThreads.Partitioned || separate_init || singletons
+    if in_place && w !== src
         foreachindex_on(eachindex(w, src), backend; launch...) do i
             @inbounds w[i] = Base.reduce_first(op, src[i])
         end
     end
-    if apply_init
+    if separate_init
         apply_init!(w, op, init, dims, backend, launch)
         init = NoInit()
     end
-    if w !== src && fused
-        scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims,
-                   inclusive)
-    else
+    if in_place || w === src
         scan_into!(op, w, w, identity, backend, a, bufs; init, seed, dims, inclusive)
+    else
+        scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims, inclusive)
     end
     w === v || copyto_on!(v, w, backend)
     return v
