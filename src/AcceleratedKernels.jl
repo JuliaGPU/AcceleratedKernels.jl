@@ -35,12 +35,12 @@ include("foreachindex.jl")
 include("map.jl")
 include("accumulator.jl")
 include("block.jl")
+include("searchsorted.jl")
 include("sort/sort.jl")
 include("reduce/reduce.jl")
 include("accumulate/accumulate.jl")
 include("findall.jl")
 include("reverse.jl")
-include("searchsorted.jl")
 include("predicates.jl")
 
 

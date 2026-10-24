@@ -1,5 +1,4 @@
 include("tuning.jl")
-include("utils.jl")
 include("slices.jl")
 include("merge_sort.jl")
 include("merge_sort_by_key.jl")
