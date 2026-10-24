@@ -388,13 +388,7 @@ function mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type (asserted, as the
     # threaded reduction is not inferred)
-    return convert(A, mapreduce_whole_run(f, op, src, backend, alg, A; init, seed, partials,
-                                          commutative))::A
-end
-
-function mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
-                             partials, commutative) where {F, OP, A}
-    if alg isa BlockReduce
+    result = if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;
             init, seed,
@@ -412,6 +406,7 @@ function mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, s
             max_tasks=alg.max_tasks, min_elems=alg.min_elems,
         )
     end
+    return convert(A, result)::A
 end
 
 include("shorthands.jl")
