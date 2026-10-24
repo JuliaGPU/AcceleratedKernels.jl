@@ -1,5 +1,5 @@
 function accumulate_nd!(
-    op::OP, v::AbstractArray, backend::Backend, alg::Union{SliceScan, CPUThreads.Partitioned};
+    op::OP, v::AbstractArray, backend::Backend, alg::SliceScan;
     src=v,
     load=identity,
     init,
@@ -8,31 +8,10 @@ function accumulate_nd!(
     inclusive::Bool,
     totals::Union{Nothing, AbstractVector}=nothing,
 ) where {OP}
-    # Degenerate cases begin; order of priority matters
-
-    # Nothing to accumulate
-    vsizes = size(v)
-    if length(v) == 0 || dims > length(vsizes)
-        return v
-    end
-    for s in vsizes
-        s == 0 && return v
-    end
-
-    # Degenerate cases end
-
-    start = scan_start(v, init, seed)
-    if alg isa CPUThreads.Partitioned
-        @argcheck src === v
-        accumulate_nd_threads!(op, v; start, seed, dims, inclusive,
-                               max_tasks=alg.max_tasks, min_elems=alg.min_elems)
-    else
-        n_inner, len, n_outer = slice_extents(vsizes, dims)
-        t = scan_tuning(backend, eltype(v))
-        slice_scan!(op, v, backend, alg, t; src, load, start, seed, inclusive, n_inner, len,
-                    n_outer, totals)
-    end
-
+    n_inner, len, n_outer = slice_extents(size(v), dims)
+    t = scan_tuning(backend, eltype(v))
+    slice_scan!(op, v, backend, alg, t; src, load, start=scan_start(v, init, seed), seed,
+                inclusive, n_inner, len, n_outer, totals)
     return v
 end
 
@@ -197,7 +176,6 @@ function slice_scan!(op::OP, v, backend, a::SliceScan, t::ScanTuning;
     end
 
     n = nslices * nchunks
-    @argcheck length(totals) >= offset + n
     chunk_totals = @view totals[offset + 1:offset + n]
     # Each chunk's total, without the start
     slice_pass!(kind, backend, block_size, nslices, v, src, load, op, seed, seed, nothing,

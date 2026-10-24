@@ -165,14 +165,7 @@ function accumulate_1d_gpu!(
     prefixes::Union{Nothing, AbstractArray},
 )
     block_size, items_per_thread = alg.block_size, alg.items_per_thread
-
-    # Nothing to accumulate
-    if length(v) == 0
-        return v
-    end
-
-    elems_per_block = block_size * items_per_thread
-    num_blocks = (length(v) + elems_per_block - 1) ÷ elems_per_block
+    num_blocks = cld(length(v), block_size * items_per_thread)
     items = Val(items_per_thread)
     start = scan_start(v, init, seed)
 

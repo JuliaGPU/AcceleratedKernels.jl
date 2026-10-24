@@ -197,7 +197,11 @@ function scan_run!(op, v, src, s, bufs)
         apply_init!(w, op, init, dims, backend, launch)
         init = NoInit()
     end
-    if in_place || w === src
+    if singletons
+        # Every slice has one element: an inclusive scan applied `init` above, an exclusive one
+        # starts over
+        inclusive || fill_on!(w, unwrap(scan_start(w, init, seed)), backend)
+    elseif in_place || w === src
         scan_into!(op, w, w, identity, backend, a, bufs; init, seed, dims, inclusive)
     else
         scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims, inclusive)
@@ -206,24 +210,30 @@ function scan_run!(op, v, src, s, bufs)
     return v
 end
 
-# Scan into `w`, from the elements `load(src[i])` (`src` is `w`, with `load === identity`, for
-# a scan in place; the threaded algorithms only scan in place)
+# Scan into `w` along `dims` (at most `ndims(w)`), from the elements `load(src[i])` (`src` is
+# `w`, with `load === identity`, for a scan in place)
 function scan_into!(op::OP, w, src, load, backend, a, bufs; init, seed, dims,
                     inclusive) where {OP}
+    isempty(w) && return w
     if dims === nothing
-        if a isa CPUThreads.Partitioned
-            accumulate_1d_cpu!(op, w, backend, a; init, seed, inclusive)
-        else
-            accumulate_1d_gpu!(op, w, backend, a; src, load, init, seed, inclusive,
-                               prefixes=get(bufs, :prefixes, nothing))
-        end
-    elseif dims > ndims(w)
-        # Every slice has one element: inclusive scans applied `init` above, exclusive ones start
-        # over
-        inclusive || fill_on!(w, unwrap(scan_start(w, init, seed)), backend)
+        accumulate_1d_gpu!(op, w, backend, a; src, load, init, seed, inclusive,
+                           prefixes=get(bufs, :prefixes, nothing))
     else
         accumulate_nd!(op, w, backend, a; src, load, init, seed, dims=Int(dims), inclusive,
                        totals=get(bufs, :totals, nothing))
+    end
+    return w
+end
+
+# The threaded algorithms only scan in place
+function scan_into!(op::OP, w, src, load, backend, a::CPUThreads.Partitioned, bufs; init, seed,
+                    dims, inclusive) where {OP}
+    isempty(w) && return w
+    if dims === nothing
+        accumulate_1d_cpu!(op, w, backend, a; init, seed, inclusive)
+    else
+        accumulate_nd_threads!(op, w; start=scan_start(w, init, seed), seed, dims=Int(dims),
+                               inclusive, max_tasks=a.max_tasks, min_elems=a.min_elems)
     end
     return w
 end

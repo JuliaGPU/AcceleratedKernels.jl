@@ -4,11 +4,6 @@ function accumulate_1d_cpu!(
     seed,
     inclusive::Bool,
 )
-    # Trivial case
-    if length(v) == 0
-        return v
-    end
-
     # For exclusive accumulation, each task section / chunk must have at least 2 elements to be
     # correct (otherwise we have to include more complicated logic in the threaded code); the
     # resolution checks `min_elems`
