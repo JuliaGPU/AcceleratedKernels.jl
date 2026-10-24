@@ -1,6 +1,14 @@
 # The workspace protocol: `workspace_size` and `workspace` plan the same buffers as the operation,
 # which then allocates no scratch of its own; a workspace made for another call is rejected.
 
+# The `(eltype, dims)` pairs of a workspace's buffers, as `workspace_size` gives them
+buffer_sizes(buffers::NamedTuple) = map(buffer_sizes, buffers)
+buffer_sizes(buffer::AbstractArray) = (eltype(buffer), size(buffer))
+
+# `ws` with other buffers or nested algorithms, which the operations must reject
+forge(ws; buffers=ws.buffers, nested=ws.nested) =
+    AK.Workspace(ws.backend, ws.device, ws.alg, nested, ws.sizes, buffers)
+
 @testset "workspace: sizes" begin
     v = array_from_host(rand(Float32, 10_000))
     ks = array_from_host(rand(Int32(1):Int32(9), 10_000))
@@ -38,7 +46,7 @@
         check_sizes(sizes)
         ws = AK.workspace(op, args...; kw...)
         @test ws isa AK.Workspace
-        @test AK.size_pairs(ws.sizes) == sizes
+        @test buffer_sizes(ws.buffers) == sizes
         @test occursin("Workspace(", sprint(show, ws))
         # The operation runs with it, as without it
         @test (op(args...; kw..., workspace=ws); true)
@@ -132,8 +140,7 @@ end
     w = copy(v)
     ws = AK.workspace(AK.sort!, w; alg)
     @test haskey(ws.buffers, :temp)
-    aliased = AK.Workspace(ws.backend, ws.device, ws.alg, ws.nested, ws.sizes,
-                           merge(ws.buffers, (; temp=w)))
+    aliased = forge(ws; buffers=(; ws.buffers..., temp=w))
     @test_throws ArgumentError AK.sort!(w; alg, workspace=aliased)
 
     # Operations without a workspace say so
@@ -149,8 +156,7 @@ end
     alg = TEST_KERNELS ? AK.MergeSort() : AK.CPUThreads.SampleSort(max_tasks=4)
     ws = AK.workspace(AK.sort, v; alg)
     w = copy(v)
-    aliased = AK.Workspace(ws.backend, ws.device, ws.alg, ws.nested, ws.sizes,
-                           merge(ws.buffers, (; temp=w)))
+    aliased = forge(ws; buffers=(; ws.buffers..., temp=w))
     @test_throws ArgumentError AK.sort(w; alg, workspace=aliased)
     @test Array(AK.sort(w; alg, workspace=ws)) == sort(Array(w))
 
@@ -186,8 +192,7 @@ end
         alg = AK.ScanScatter()
         ws = AK.workspace(AK.findall, bools; alg)
         @test haskey(ws.nested, :scan)
-        other = AK.Workspace(ws.backend, ws.device, ws.alg,
-                             merge(ws.nested, (; scan=AK.ScanPrefixes(16, 1))), ws.sizes, ws.buffers)
+        other = forge(ws; nested=(; ws.nested..., scan=AK.ScanPrefixes(16, 1)))
         @test_throws ArgumentError AK.findall(bools; alg, workspace=other)
         @test Array(AK.findall(bools; alg, workspace=ws)) == findall(Array(bools))
         ws = AK.workspace(AK.sort!, v; alg=AK.RadixSort())
