@@ -108,6 +108,8 @@ function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where
     a = alg isa Auto ? select_reduce(backend) : alg
     a = fill_defaults(a, t, T)
     check_reduce(a, backend, T, dims)
+    a isa BlockReduce && t.target_blocks < 1 && throw(ArgumentError(
+        "the reduction tuning's `target_blocks` must be positive, got $(t.target_blocks)"))
     return a
 end
 

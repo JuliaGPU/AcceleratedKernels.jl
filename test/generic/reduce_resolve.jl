@@ -118,13 +118,10 @@ end
 
 
 @testset "reduce resolution: tuning values" begin
-    # A tuning cannot make a reduction along `dims` launch nothing
+    # A tuning cannot make a reduction launch nothing
     with_reduce_tuning(; target_blocks=0) do
-        @test_throws ArgumentError AK.mapreduce_nd!(identity, +, zeros(Int32, 1, 4),
-                                                    zeros(Int32, 4, 4), RRB,
-                                                    AK.BlockReduce(256, 2, 0), Int32;
-                                                    init=AK.NoInit(), seed=nothing,
-                                                    rdims=(1,), bufs=(;))
+        @test_throws ArgumentError resolve_reduce(AK.BlockReduce())
+        @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); dims=1)
     end
 end
 

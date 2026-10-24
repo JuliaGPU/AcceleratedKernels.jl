@@ -41,8 +41,6 @@ function mapreduce_nd!(
     # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
     tuning = reduce_tuning(backend, A)
     target_blocks = tuning.target_blocks
-    target_blocks >= 1 || throw(ArgumentError(
-        "the reduction tuning's `target_blocks` must be positive, got $target_blocks"))
 
     src_sizes = size(src)
 
