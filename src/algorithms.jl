@@ -267,9 +267,18 @@ _one_based_view(A::AbstractVector) = @view A[begin:end]
 _one_based_view(A::AbstractArray) = reshape(A, size(A))
 
 # Whether `A` is a view `_one_based` made. Base's `copyto!` and `fill!` index those element by
-# element on the host, which GPU arrays disallow, so `_fill!` fills them with a kernel.
+# element on the host, which GPU arrays disallow, so `_copyto!` and `_fill!` use a kernel.
 _is_one_based_view(A) =
     A isa Union{SubArray, Base.ReshapedArray} && Base.has_offset_axes(parent(A))
+
+# `copyto!(dst, src)` of arrays of the same size
+function _copyto!(dst, src, backend)
+    _is_one_based_view(dst) || _is_one_based_view(src) || return copyto!(dst, src)
+    _foreachindex(Base.OneTo(length(dst)), backend) do i
+        @inbounds dst[i] = src[i]
+    end
+    return dst
+end
 
 function _fill!(A, x, backend)
     _is_one_based_view(A) || return fill!(A, x)
