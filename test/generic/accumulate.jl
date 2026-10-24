@@ -79,7 +79,7 @@
         @test all(Array(v) .≈ accumulate(+, vh))
     end
 
-    # Ensuring the init value is respected
+    # The init value is respected
     for _ in 1:100
         num_elems = rand(1:100_000)
         x = array_from_host(rand(1:1000, num_elems), Int32)
@@ -332,7 +332,7 @@ end
         end
     end
 
-    # Ensure the init value is respected
+    # The init value is respected
     for _ in 1:100
         for dims in 1:3
             n1 = rand(1:100)

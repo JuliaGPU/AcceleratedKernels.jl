@@ -57,7 +57,7 @@
         end
     end
 
-    # Ensuring that the init value is respected
+    # The init value is respected
     for _ in 1:100
         for dims in 1:4
             n1 = rand(1:100)
@@ -299,7 +299,7 @@ end
         end
     end
 
-    # Ensuring that the init value is respected
+    # The init value is respected
     for _ in 1:100
         for dims in 1:4
             n1 = rand(1:100)

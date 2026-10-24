@@ -84,7 +84,7 @@
         @test s ≈ sum(vh)
     end
 
-    # Ensuring that the init value is respected
+    # The init value is respected
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Int32(1):Int32(100), num_elems))
@@ -199,7 +199,7 @@ end
         @test mgpu[2] ≈ mcpu[2] ≈ mbase[2]
     end
 
-    # Ensuring that the init value is respected
+    # The init value is respected
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Int32(1):Int32(100), num_elems))
