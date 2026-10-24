@@ -204,15 +204,18 @@ launch_kwargs(a::Algorithm) = (; block_size=a.block_size)
 
 backend_name(b::Backend) = nameof(typeof(b))
 
-# Values that never determine the backend: lazy index collections (and Base's wrappers of them),
-# scalars, and any other value that is not an array. Every other array votes with `get_backend`,
-# which throws for array types that do not implement it.
+# Lazy index collections, and Base's views, reshapes and permutations of them, have no backend
+const IndexCollection = Union{AbstractRange, CartesianIndices, LinearIndices}
+const BaseWrapper = Union{SubArray, Base.ReshapedArray, PermutedDimsArray}
+backendless(_) = false
+backendless(::IndexCollection) = true
+backendless(x::BaseWrapper) = backendless(parent(x))
+
+# Values that never determine the backend: backendless arrays, scalars, and any other value that
+# is not an array. Every other array votes with `get_backend`, which throws for array types that
+# do not implement it (and forwards Base's wrappers to the array they wrap).
 backend_vote(_) = nothing
-backend_vote(x::AbstractArray) = get_backend(x)
-backend_vote(::Union{AbstractRange, CartesianIndices, LinearIndices}) = nothing
-# Base's views, reshapes and permutations vote like the array they wrap, so that e.g. a reshaped
-# range does not determine the backend either
-backend_vote(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = backend_vote(parent(x))
+backend_vote(x::AbstractArray) = backendless(x) ? nothing : get_backend(x)
 backend_vote(x::Tuple) = backend_votes(x...)
 backend_vote(bc::Base.Broadcast.Broadcasted) = backend_votes(bc.args...)
 backend_vote(x::Base.Broadcast.Extruded) = backend_vote(x.x)
@@ -229,13 +232,6 @@ function merge_backends(a, b)
         "$(backend_name(b))); pass `backend` explicitly if they are accessible from one of them"))
     a
 end
-
-# Lazy index collections, and Base's views, reshapes and permutations of them, have no backend
-# (unlike `backend_vote`, this never asks an array for its backend, which an explicit `backend`
-# makes unnecessary)
-backendless(_) = false
-backendless(::Union{AbstractRange, CartesianIndices, LinearIndices}) = true
-backendless(x::Union{SubArray, Base.ReshapedArray, PermutedDimsArray}) = backendless(parent(x))
 
 """
     resolve_backend(backend, args...)
