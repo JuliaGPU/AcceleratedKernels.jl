@@ -159,7 +159,7 @@ function findall_gpu(
     kernel! = findall_block!(backend, block_size)
     kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
             ndrange=num_blocks * block_size)
-    _accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
+    accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
     out = similar_on(backend, like, I, (n,))
@@ -287,28 +287,28 @@ function findall(values::AbstractArray; items::AbstractArray=keys(values),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
     values isa AbstractArray{Bool} || _check_bool_result(identity, values)
-    s = _findall_setup(values, items, false, backend, alg)
-    _findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
+    s = findall_setup(values, items, false, backend, alg)
+    findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
 end
 
 function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
     _check_bool_result(pred, v)
-    s = _findall_setup(v, items, true, backend, alg)
-    _findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
+    s = findall_setup(v, items, true, backend, alg)
+    findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
 end
 
 plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
       backend=nothing, alg::Algorithm=Auto()) =
-    _findall_setup(values, items, false, backend, alg).plan
+    findall_setup(values, items, false, backend, alg).plan
 plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
       alg::Algorithm=Auto()) =
-    _findall_setup(v, items, true, backend, alg).plan
+    findall_setup(v, items, true, backend, alg).plan
 
 # The plan of `findall` over `v`: its scratch is a mask of `pred(v[i])` for the predicate form
 # and for non-Bool values, the counts of the blocks or tasks, and the scan of the block counts
-function _findall_setup(v, items, predicate::Bool, backend, alg)
+function findall_setup(v, items, predicate::Bool, backend, alg)
     length(items) == length(v) || throw(DimensionMismatch(
         "`items` must have the length of the array, $(length(v)), got $(length(items))"))
     backend = resolve_backend(backend, v, items)
@@ -317,7 +317,7 @@ function _findall_setup(v, items, predicate::Bool, backend, alg)
     mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)
     counts, nested = if a isa ScanScatter
         num_blocks = cld(n, a.block_size * a.items_per_thread)
-        scan = _accumulate_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
+        scan = scan_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
         (; counts=scratch(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
     else
         num_tasks = TaskPartitioner(n, a.max_tasks, a.min_elems).num_tasks
@@ -326,7 +326,7 @@ function _findall_setup(v, items, predicate::Bool, backend, alg)
     return (; plan=Plan(backend, a, nested, merge(mask, counts)))
 end
 
-function _findall_run(pred, v, items, s, bufs)
+function findall_run(pred, v, items, s, bufs)
     backend, a = s.plan.backend, s.plan.alg
     bools = if haskey(bufs, :mask)
         findall_bools!(bufs.mask, pred, v, backend, a)

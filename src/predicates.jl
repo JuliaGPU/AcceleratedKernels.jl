@@ -167,12 +167,12 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = _predicate_plan(pred, |, v, backend, alg)
+    p = predicate_setup(pred, |, v, backend, alg)
     _any(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    _predicate_plan(pred, |, v, backend, alg)
+    predicate_setup(pred, |, v, backend, alg)
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
@@ -187,14 +187,14 @@ end
 
 # The plan of `any`/`all` (whose `ViaReduce` reduces with `op`): the flag of `ConcurrentWrite`,
 # or the scratch of the reduction
-function _predicate_plan(pred, op, v, backend, alg)
+function predicate_setup(pred, op, v, backend, alg)
     _check_bool_result(pred, v)
     backend = resolve_backend(backend, v)
     a = resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
         (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
-        (; reduce=_mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
+        (; reduce=mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
                                    nothing, nothing, :, a.reduce).plan.sizes)
     else
         (;)
@@ -212,7 +212,7 @@ function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
 end
 
 _any(pred, v, backend, alg::ViaReduce, bufs) =
-    _mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
+    mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
 function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
     found = Threads.Atomic{Bool}(false)
@@ -257,14 +257,14 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 """
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = _predicate_plan(pred, &, v, backend, alg)
+    p = predicate_setup(pred, &, v, backend, alg)
     _all(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
 plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    _predicate_plan(pred, &, v, backend, alg)
+    predicate_setup(pred, &, v, backend, alg)
 
 _all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
 _all(pred, v, backend, alg::ViaReduce, bufs) =
-    _mapreduce_nested(_BoolValued(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
+    mapreduce_nested(_BoolValued(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
 _all(pred, v, backend, alg::CPUThreads.Partitioned, bufs) = !_any(!pred, v, backend, alg, bufs)

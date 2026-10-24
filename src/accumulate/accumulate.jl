@@ -87,10 +87,10 @@ AK.accumulate!(+, v; alg=AK.ScanPrefixes(block_size=512))
 """
 function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                      workspace=nothing, kwargs...)
-    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
+    s = scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
                           kwargs...)
     w = _one_based(v)
-    _accumulate_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
+    scan_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
     return v
 end
 
@@ -101,20 +101,20 @@ function accumulate!(
     kwargs...
 )
     _check_scan_destination(dst, src)
-    s = _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
+    s = scan_setup(op, eltype(dst), eltype(src), size(dst),
                           resolve_backend(backend, dst, src); kwargs...)
-    _accumulate_run!(op, _one_based(dst), _one_based(src), s,
+    scan_run!(op, _one_based(dst), _one_based(src), s,
                      scratch_buffers(s.plan, workspace, dst, src))
     return dst
 end
 
 plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
-    _accumulate_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
+    scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
                       kwargs...).plan
 function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
                backend=nothing, kwargs...)
     _check_scan_destination(dst, src)
-    _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
+    scan_setup(op, eltype(dst), eltype(src), size(dst),
                       resolve_backend(backend, dst, src); kwargs...).plan
 end
 
@@ -131,7 +131,7 @@ end
 # Everything a scan of elements of type `T` into an array of element type `D` and size `sz`
 # resolves before touching data: its plan (backend, algorithm, scratch), running-value type and
 # partial-result seed (see `_reduce_seed`)
-function _accumulate_setup(
+function scan_setup(
     op, ::Type{D}, ::Type{T}, sz::Dims, backend::Backend;
     init=_NoInit(),
     neutral=nothing,
@@ -168,9 +168,9 @@ function _accumulate_setup(
             inclusive)
 end
 
-# Scan `src` into `v` (which may be `src`), as set up by `_accumulate_setup`, with the plan's
+# Scan `src` into `v` (which may be `src`), as set up by `scan_setup`, with the plan's
 # scratch buffers `bufs`
-function _accumulate_run!(op, v, src, s, bufs)
+function scan_run!(op, v, src, s, bufs)
     backend, a = s.plan.backend, s.plan.alg
     init, neutral, dims, inclusive = s.init, s.seed, s.dims, s.inclusive
     A = _unval(s.A)
@@ -286,9 +286,9 @@ function _scan_apply_init!(w, op, init, dims, backend, launch)
 end
 
 # A scan nested in another operation, with the scratch buffers of its plan in the outer one
-function _accumulate_nested!(op, v, bufs; backend, kwargs...)
-    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), backend; kwargs...)
-    _accumulate_run!(op, v, v, s, bufs)
+function accumulate_nested!(op, v, bufs; backend, kwargs...)
+    s = scan_setup(op, eltype(v), eltype(v), size(v), backend; kwargs...)
+    scan_run!(op, v, v, s, bufs)
 end
 
 
@@ -313,7 +313,7 @@ end
 function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),
                dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
-    _accumulate_setup(op, D, eltype(v), size(v), resolve_backend(backend, v); init, dims,
+    scan_setup(op, D, eltype(v), size(v), resolve_backend(backend, v); init, dims,
                       inclusive, acctype, kwargs...).plan
 end
 

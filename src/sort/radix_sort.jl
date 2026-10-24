@@ -396,14 +396,14 @@ struct _RSMinMax end
 function _rs_key_range_setup(v::AbstractArray{T}, backend::Backend) where T
     K = typeof(_to_sort_key(zero(T)))
     ident = (typemax(K), typemin(K))
-    return _mapreduce_setup(_RSKeyPair(), _RSMinMax(), v, backend, ident, ident, nothing, :,
+    return mapreduce_setup(_RSKeyPair(), _RSMinMax(), v, backend, ident, ident, nothing, :,
                             Auto()), ident
 end
 
 # Return the extrema of the transformed sort keys, with the scratch of `_rs_key_range_setup`
 function _rs_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool, bufs) where T
     s, ident = _rs_key_range_setup(v, backend)
-    min_k, max_k = _mapreduce_run(_RSKeyPair(), _RSMinMax(), v, s, ident, bufs)
+    min_k, max_k = mapreduce_run(_RSKeyPair(), _RSMinMax(), v, s, ident, bufs)
     if descending
         UInt64(~max_k), UInt64(~min_k)
     else
@@ -440,7 +440,7 @@ function _radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     c = _rs_config(T, layout.len, backend, a.block_size, a.items_per_thread, a.chunk_size)
     c.one_block && return (;), (;)
     hist_len = Base.checked_mul(Int(_RS_SIZE), _rs_num_blocks(layout, a.block_size * c.items))
-    scan = _accumulate_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
+    scan = scan_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                              inclusive=false).plan
     key_range = first(_rs_key_range_setup(v, backend)).plan
     return (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
@@ -513,7 +513,7 @@ function _radix_sort!(
 
         shift32 = UInt32(shift)
         hist_kern!(hist, p1, shift32, descending, vitems, layout, bps; ndrange)
-        _accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
+        accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
         scat_kern!(p2, p1, hist, shift32, descending, scat_args..., layout, bps; ndrange)
 
         p1, p2 = p2, p1

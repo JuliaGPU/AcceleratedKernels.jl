@@ -65,15 +65,15 @@ function sort!(
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
 )
-    p, ord = _sort_setup(v; backend, alg, dims, lt, by, rev, order)
+    p, ord = sort_setup(v; backend, alg, dims, lt, by, rev, order)
     _sort_impl!(p.alg, _one_based(v), p.backend, dims, ord, scratch_buffers(p, workspace, v);
                 lt, by, rev, order)
     return v
 end
 
-plan(::typeof(sort!), v::AbstractArray; kwargs...) = first(_sort_setup(v; kwargs...))
+plan(::typeof(sort!), v::AbstractArray; kwargs...) = first(sort_setup(v; kwargs...))
 
-function _sort_setup(
+function sort_setup(
     v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
@@ -187,7 +187,7 @@ function sortperm!(
 end
 
 plan(::typeof(sortperm!), ix::AbstractArray, v::AbstractArray; dims=Colon(), kwargs...) =
-    (_check_sortperm_shape(ix, v, dims); first(_sortperm_setup(ix, v; dims, kwargs...)))
+    (_check_sortperm_shape(ix, v, dims); first(sortperm_setup(ix, v; dims, kwargs...)))
 
 function _check_sortperm_shape(ix, v, dims)
     if dims isa Colon
@@ -205,7 +205,7 @@ function _sortperm!(ix, v; backend=nothing, alg::Algorithm=Auto(),
                     dims::Union{Colon, Integer}=Colon(), lt=isless, by=identity,
                     rev::Union{Nothing, Bool}=nothing,
                     order::Base.Order.Ordering=Base.Order.Forward, workspace=nothing)
-    p, ord = _sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
+    p, ord = sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
     bufs = scratch_buffers(p, workspace, ix, v)
     ix_one_based = _one_based(ix)
     _sortperm_impl!(p.alg, ix_one_based, _one_based(v), p.backend, dims, ord, bufs;
@@ -221,7 +221,7 @@ function _shift_indices!(ix, shift, backend)
     end
 end
 
-function _sortperm_setup(
+function sortperm_setup(
     ix, v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
@@ -282,7 +282,7 @@ end
 
 # `ix` is only needed for its element type and shape, which `v` gives here
 plan(::typeof(sortperm), v::AbstractArray; kwargs...) =
-    first(_sortperm_setup(_IndexShape(v), v; kwargs...))
+    first(sortperm_setup(_IndexShape(v), v; kwargs...))
 
 # The element type and shape of `similar(v, Int)`, without allocating it
 struct _IndexShape{N, A <: AbstractArray} <: AbstractArray{Int, N}
@@ -338,16 +338,16 @@ function sort_by_key!(
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
 )
-    p, ord = _sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
+    p, ord = sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
     _sort_by_key_impl!(p.alg, _one_based(keys), _one_based(values), p.backend, dims, ord,
                        scratch_buffers(p, workspace, keys, values); lt, by, rev, order)
     return keys, values
 end
 
 plan(::typeof(sort_by_key!), keys::AbstractArray, values::AbstractArray; kwargs...) =
-    first(_sort_by_key_setup(keys, values; kwargs...))
+    first(sort_by_key_setup(keys, values; kwargs...))
 
-function _sort_by_key_setup(
+function sort_by_key_setup(
     keys, values; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
