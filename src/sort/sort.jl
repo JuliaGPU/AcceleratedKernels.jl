@@ -66,12 +66,12 @@ function sort!(
     workspace=nothing,
 )
     p, ord = _sort_setup(v; backend, alg, dims, lt, by, rev, order)
-    _sort_impl!(p.alg, _one_based(v), p.backend, dims, ord, _buffers(p, workspace, v);
+    _sort_impl!(p.alg, _one_based(v), p.backend, dims, ord, scratch_buffers(p, workspace, v);
                 lt, by, rev, order)
     return v
 end
 
-_plan(::typeof(sort!), v::AbstractArray; kwargs...) = first(_sort_setup(v; kwargs...))
+plan(::typeof(sort!), v::AbstractArray; kwargs...) = first(_sort_setup(v; kwargs...))
 
 function _sort_setup(
     v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
@@ -83,7 +83,7 @@ function _sort_setup(
     ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord)
     sizes, nested = _sort_plan(a, v, backend, dims, by)
-    return _Plan(backend, a, nested, sizes), ord
+    return Plan(backend, a, nested, sizes), ord
 end
 
 # The scratch of `sort!` with each algorithm, and the algorithms of the operations it calls
@@ -93,10 +93,10 @@ _sort_plan(a::RadixSort, v, backend, dims, by) = _radix_plan(a, v, backend, dims
 function _sort_sizes(a::MergeSort, v, backend, dims, by)
     layout = slice_layout(v, dims)
     (isempty(v) || layout.len <= 1) && return (;)
-    by === identity || return (; keys=_buffer(Base.promote_op(by, eltype(v)), size(v)),
+    by === identity || return (; keys=scratch(Base.promote_op(by, eltype(v)), size(v)),
                                  _merge_by_key_sizes(a, layout, size(v), Base.promote_op(by, eltype(v)),
                                                      size(v), eltype(v))...)
-    return layout.len > 2 * a.block_size ? (; temp=_buffer(eltype(v), size(v))) : (;)
+    return layout.len > 2 * a.block_size ? (; temp=scratch(eltype(v), size(v))) : (;)
 end
 _sort_sizes(a::BitonicSort, v, backend, dims, by) = (;)
 _sort_sizes(a::CPUThreads.SampleSort, v, backend, dims, by) =
@@ -139,11 +139,11 @@ function sort(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, worksp
               kwargs...)
     backend = _resolve_backend(backend, v)
     # The workspace must not alias the input either
-    workspace === nothing || _buffers(_plan(sort!, v; backend, kwargs...), workspace, v)
+    workspace === nothing || scratch_buffers(plan(sort!, v; backend, kwargs...), workspace, v)
     return sort!(_copy(backend, v); backend, workspace, kwargs...)
 end
 
-_plan(::typeof(sort), v::AbstractArray; kwargs...) = _plan(sort!, v; kwargs...)
+plan(::typeof(sort), v::AbstractArray; kwargs...) = plan(sort!, v; kwargs...)
 
 
 """
@@ -186,7 +186,7 @@ function sortperm!(
     _sortperm!(ix, v; backend, alg, dims, lt, by, rev, order, workspace)
 end
 
-_plan(::typeof(sortperm!), ix::AbstractArray, v::AbstractArray; dims=Colon(), kwargs...) =
+plan(::typeof(sortperm!), ix::AbstractArray, v::AbstractArray; dims=Colon(), kwargs...) =
     (_check_sortperm_shape(ix, v, dims); first(_sortperm_setup(ix, v; dims, kwargs...)))
 
 function _check_sortperm_shape(ix, v, dims)
@@ -206,7 +206,7 @@ function _sortperm!(ix, v; backend=nothing, alg::Algorithm=Auto(),
                     rev::Union{Nothing, Bool}=nothing,
                     order::Base.Order.Ordering=Base.Order.Forward, workspace=nothing)
     p, ord = _sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
-    bufs = _buffers(p, workspace, ix, v)
+    bufs = scratch_buffers(p, workspace, ix, v)
     ix_one_based = _one_based(ix)
     _sortperm_impl!(p.alg, ix_one_based, _one_based(v), p.backend, dims, ord, bufs;
                     lt, by, rev, order)
@@ -230,16 +230,16 @@ function _sortperm_setup(
     ix, v = _one_based(ix), _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord; perm=true)
-    return _Plan(backend, a, _sortperm_sizes(a, ix, v, dims)), ord
+    return Plan(backend, a, _sortperm_sizes(a, ix, v, dims)), ord
 end
 
 # The scratch of `sortperm!` with each algorithm
 function _sortperm_sizes(a::MergeSort, ix, v, dims)
     layout = slice_layout(v, dims)
     (isempty(v) || layout.len <= 1) && return (;)
-    a.lowmem && return layout.len > 2 * a.block_size ? (; temp=_buffer(eltype(ix), size(ix))) : (;)
+    a.lowmem && return layout.len > 2 * a.block_size ? (; temp=scratch(eltype(ix), size(ix))) : (;)
     # The keys are sorted in a copy, carrying the indices along
-    return (; keys=_buffer(eltype(v), size(v)),
+    return (; keys=scratch(eltype(v), size(v)),
             _merge_by_key_sizes(a, layout, size(v), eltype(v), size(ix), eltype(ix))...)
 end
 _sortperm_sizes(a::CPUThreads.SampleSort, ix, v, dims) =
@@ -281,7 +281,7 @@ function sortperm(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kw
 end
 
 # `ix` is only needed for its element type and shape, which `v` gives here
-_plan(::typeof(sortperm), v::AbstractArray; kwargs...) =
+plan(::typeof(sortperm), v::AbstractArray; kwargs...) =
     first(_sortperm_setup(_IndexShape(v), v; kwargs...))
 
 # The element type and shape of `similar(v, Int)`, without allocating it
@@ -340,11 +340,11 @@ function sort_by_key!(
 )
     p, ord = _sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
     _sort_by_key_impl!(p.alg, _one_based(keys), _one_based(values), p.backend, dims, ord,
-                       _buffers(p, workspace, keys, values); lt, by, rev, order)
+                       scratch_buffers(p, workspace, keys, values); lt, by, rev, order)
     return keys, values
 end
 
-_plan(::typeof(sort_by_key!), keys::AbstractArray, values::AbstractArray; kwargs...) =
+plan(::typeof(sort_by_key!), keys::AbstractArray, values::AbstractArray; kwargs...) =
     first(_sort_by_key_setup(keys, values; kwargs...))
 
 function _sort_by_key_setup(
@@ -363,7 +363,7 @@ function _sort_by_key_setup(
     end
     keys, values = _one_based(keys), _one_based(values)
     a = _resolve_sort(alg, backend, keys, dims, ord; pairs=true)
-    return _Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
+    return Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
 end
 
 function _sort_by_key_sizes(a::MergeSort, keys, values, dims)
@@ -375,8 +375,8 @@ function _sort_by_key_sizes(a::CPUThreads.SampleSort, keys, values, dims)
     # The sorting permutation (sorted by `_sample_sortperm!` for `dims=:`), and the old keys and
     # values to gather from
     perm = dims isa Colon ? (; perm=_sample_sort_sizes(a, Int, length(keys))) : (;)
-    return (; ix=_buffer(Int, size(keys)), perm..., keys=_buffer(eltype(keys), size(keys)),
-            values=_buffer(eltype(values), size(values)))
+    return (; ix=scratch(Int, size(keys)), perm..., keys=scratch(eltype(keys), size(keys)),
+            values=scratch(eltype(values), size(values)))
 end
 
 function _sort_by_key_impl!(a::MergeSort, keys, values, backend, dims, ord, bufs;

@@ -38,7 +38,7 @@
         check_sizes(sizes)
         ws = AK.workspace(op, args...; kw...)
         @test ws isa AK.Workspace
-        @test AK._public_sizes(ws.sizes) == sizes
+        @test AK.size_pairs(ws.sizes) == sizes
         @test occursin("Workspace(", sprint(show, ws))
         # The operation runs with it, as without it
         @test (op(args...; kw..., workspace=ws); true)

@@ -90,7 +90,7 @@ function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=noth
     s = _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
                           kwargs...)
     w = _one_based(v)
-    _accumulate_run!(op, w, w, s, _buffers(s.plan, workspace, v))
+    _accumulate_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
     return v
 end
 
@@ -104,14 +104,14 @@ function accumulate!(
     s = _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
                           _resolve_backend(backend, dst, src); kwargs...)
     _accumulate_run!(op, _one_based(dst), _one_based(src), s,
-                     _buffers(s.plan, workspace, dst, src))
+                     scratch_buffers(s.plan, workspace, dst, src))
     return dst
 end
 
-_plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
+plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
     _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
                       kwargs...).plan
-function _plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
+function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
                backend=nothing, kwargs...)
     _check_scan_destination(dst, src)
     _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
@@ -154,17 +154,17 @@ function _accumulate_setup(
             "which is not known for $op; pass `init` or `neutral`"))
     end
     # A destination of another element type scans in a scratch array of the accumulator type
-    work = D === A ? (;) : (; work=_buffer(A, sz))
+    work = D === A ? (;) : (; work=scratch(A, sz))
     prefixes = if a isa ScanPrefixes
-        (; prefixes=_buffer(typeof(seed), _scan_prefixes_length(n, a)))
+        (; prefixes=scratch(typeof(seed), _scan_prefixes_length(n, a)))
     elseif a isa SliceScan
         # The chunk totals of slices split into chunks
         m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
-        m == 0 ? (;) : (; totals=_buffer(typeof(seed), m))
+        m == 0 ? (;) : (; totals=scratch(typeof(seed), m))
     else
         (;)
     end
-    return (; plan=_Plan(backend, a, merge(work, prefixes)), A=Val(A), seed, init, dims,
+    return (; plan=Plan(backend, a, merge(work, prefixes)), A=Val(A), seed, init, dims,
             inclusive)
 end
 
@@ -310,7 +310,7 @@ function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothi
                 acctype, kwargs...)
 end
 
-function _plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),
+function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),
                dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
     _accumulate_setup(op, D, eltype(v), size(v), _resolve_backend(backend, v); init, dims,
@@ -374,5 +374,5 @@ p = AK.cumprod(m, dims=1)
 """
 cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)
 
-_plan(::typeof(cumsum), src::AbstractArray; kwargs...) = _plan(accumulate, Base.add_sum, src; kwargs...)
-_plan(::typeof(cumprod), src::AbstractArray; kwargs...) = _plan(accumulate, Base.mul_prod, src; kwargs...)
+plan(::typeof(cumsum), src::AbstractArray; kwargs...) = plan(accumulate, Base.add_sum, src; kwargs...)
+plan(::typeof(cumprod), src::AbstractArray; kwargs...) = plan(accumulate, Base.mul_prod, src; kwargs...)

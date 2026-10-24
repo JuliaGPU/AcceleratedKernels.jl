@@ -307,4 +307,4 @@ end
 
 # The scratch of `_sample_sort!` over `n` elements of type `T`: the sorted output when the sort is
 # parallel, `Base.sort!`'s scratch when it is not
-_sample_sort_sizes(a::CPUThreads.SampleSort, ::Type{T}, n) where {T} = (; temp=_buffer(T, n))
+_sample_sort_sizes(a::CPUThreads.SampleSort, ::Type{T}, n) where {T} = (; temp=scratch(T, n))

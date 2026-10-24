@@ -208,11 +208,11 @@ function _mapreduce_nd_sizes(src, backend, alg, ::Type{A}, neutral, dims_valid, 
     if dst_size == 1 && _mapreduce_nd_linear(src, dims_valid) !== nothing
         n = _mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
                                    reduce_tuning(backend, A).target_blocks, 0; device=true)
-        return n == 0 ? (;) : (; partials=_buffer(typeof(neutral), n))
+        return n == 0 ? (;) : (; partials=scratch(typeof(neutral), n))
     end
     segs = _mapreduce_segments(src_sizes, _mapreduce_layout(src)[3], dims_valid)
     shape, reduce_groups = _mapreduce_nd_shape(dst_size, len, segs, alg.block_size,
                                                reduce_tuning(backend, A), A)
     shape === :multigroup || shape === :columns && reduce_groups > 1 || return (;)
-    return (; partials=_buffer(typeof(neutral), dst_size, reduce_groups))
+    return (; partials=scratch(typeof(neutral), dst_size, reduce_groups))
 end

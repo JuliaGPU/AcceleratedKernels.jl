@@ -168,10 +168,10 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
     p = _predicate_plan(pred, |, v, backend, alg)
-    _any(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
+    _any(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
-_plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
     _predicate_plan(pred, |, v, backend, alg)
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
@@ -192,14 +192,14 @@ function _predicate_plan(pred, op, v, backend, alg)
     backend = _resolve_backend(backend, v)
     a = _resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
-        (; flag=_buffer(Int8, 1))
+        (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
         (; reduce=_mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
                                    nothing, nothing, :, a.reduce).plan.sizes)
     else
         (;)
     end
-    return _Plan(backend, a, sizes)
+    return Plan(backend, a, sizes)
 end
 
 function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
@@ -258,10 +258,10 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
     p = _predicate_plan(pred, &, v, backend, alg)
-    _all(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
+    _all(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
-_plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
     _predicate_plan(pred, &, v, backend, alg)
 
 _all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)

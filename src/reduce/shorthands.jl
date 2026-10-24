@@ -53,8 +53,8 @@ function _reduce_or_empty(empty, op, src; init=_NoInit(), dims=:, acctype=nothin
     if A !== Union{} && isempty(src) &&
        (_whole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))
         # (the algorithm and the workspace are checked as for any other input)
-        p = _plan(reduce, op, src; kwargs...)
-        _buffers(p, workspace, src)
+        p = plan(reduce, op, src; kwargs...)
+        scratch_buffers(p, workspace, src)
         _whole(dims) && return empty(A)
         dims_valid = _reduced_dims(dims, ndims(src))
         dst_sizes = ntuple(d -> d in dims_valid ? 1 : size(src, d), ndims(src))
@@ -120,10 +120,10 @@ count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
 count(f, src::AbstractArray; init=0, kwargs...) =
     mapreduce(_BoolValued(f), Base.add_sum, src; init, kwargs...)
 
-_plan(::typeof(sum), src::AbstractArray; kwargs...) = _plan(reduce, Base.add_sum, src; kwargs...)
-_plan(::typeof(prod), src::AbstractArray; kwargs...) = _plan(reduce, Base.mul_prod, src; kwargs...)
-_plan(::typeof(maximum), src::AbstractArray; kwargs...) = _plan(reduce, max, src; kwargs...)
-_plan(::typeof(minimum), src::AbstractArray; kwargs...) = _plan(reduce, min, src; kwargs...)
-_plan(::typeof(count), src::AbstractArray; kwargs...) = _plan(count, identity, src; kwargs...)
-_plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
-    _plan(mapreduce, _BoolValued(f), Base.add_sum, src; init, kwargs...)
+plan(::typeof(sum), src::AbstractArray; kwargs...) = plan(reduce, Base.add_sum, src; kwargs...)
+plan(::typeof(prod), src::AbstractArray; kwargs...) = plan(reduce, Base.mul_prod, src; kwargs...)
+plan(::typeof(maximum), src::AbstractArray; kwargs...) = plan(reduce, max, src; kwargs...)
+plan(::typeof(minimum), src::AbstractArray; kwargs...) = plan(reduce, min, src; kwargs...)
+plan(::typeof(count), src::AbstractArray; kwargs...) = plan(count, identity, src; kwargs...)
+plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
+    plan(mapreduce, _BoolValued(f), Base.add_sum, src; init, kwargs...)

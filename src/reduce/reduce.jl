@@ -133,11 +133,11 @@ function mapreduce(
 ) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
     s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
-    bufs = _buffers(s.plan, workspace, src)
+    bufs = scratch_buffers(s.plan, workspace, src)
     return _mapreduce_run(f, op, _mapreduce_source(src, s.plan.backend), s, init, bufs; commutative)
 end
 
-function _plan(
+function plan(
     ::typeof(mapreduce), f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
     backend=nothing, init=_NoInit(), neutral=nothing, acctype=nothing, dims=:,
     commutative::Bool=true, alg::Algorithm=Auto(),
@@ -146,8 +146,8 @@ function _plan(
     return _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
 end
 
-_plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
-    _plan(mapreduce, identity, op, src; kwargs...)
+plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
+    plan(mapreduce, identity, op, src; kwargs...)
 
 # The source of a reduction, indexed from 1 (`_one_based`): several arrays become one
 # `Broadcasted` object
@@ -187,11 +187,11 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
         sizes = if a isa BlockReduce && seed !== nothing
             n = _mapreduce_1d_partials(length(src), a.block_size, a.items_per_thread,
                                        reduce_tuning(backend, A).target_blocks, a.switch_below)
-            (; partials=_buffer(typeof(seed), n))
+            (; partials=scratch(typeof(seed), n))
         else
             (;)
         end
-        return (; plan=_Plan(backend, a, sizes), A=Val(A), seed)
+        return (; plan=Plan(backend, a, sizes), A=Val(A), seed)
     end
 
     dims_valid = _reduced_dims(dims, ndims(src))
@@ -202,7 +202,7 @@ function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, di
     a = _resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, Base.prod(dst_sizes))
-    return (; plan=_Plan(backend, a, sizes), A=Val(A), seed, dims_valid, R_type=Val(R_type),
+    return (; plan=Plan(backend, a, sizes), A=Val(A), seed, dims_valid, R_type=Val(R_type),
             dst_sizes)
 end
 
@@ -317,13 +317,13 @@ end
 
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
 function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
-    bufs = _buffers(s.plan, workspace, R, src)
+    bufs = scratch_buffers(s.plan, workspace, R, src)
     backend = s.plan.backend
     mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, _unval(s.A);
                   init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
-_plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
+plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
       backend=nothing, init=_NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
       commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
     _mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
@@ -352,7 +352,7 @@ function _mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, 
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
     init = init isa _NoInit && !overwrite ? _Fold() : init
-    return (; plan=_Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
+    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
 end
 
 function _check_noalias(R, src::AbstractArray)

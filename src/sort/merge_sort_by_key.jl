@@ -240,4 +240,4 @@ end
 # with values of size `vsize` and type `V`: swap buffers, if the tiles need merging
 _merge_by_key_sizes(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
     layout.len > 2 * a.block_size ?
-        (; temp_keys=_buffer(K, ksize), temp_values=_buffer(V, vsize)) : (;)
+        (; temp_keys=scratch(K, ksize), temp_values=scratch(V, vsize)) : (;)

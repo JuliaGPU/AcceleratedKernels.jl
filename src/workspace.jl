@@ -1,20 +1,20 @@
-# Scratch memory: every operation that needs scratch plans it with `_plan`, which resolves the
+# Scratch memory: every operation that needs scratch plans it with `plan`, which resolves the
 # algorithm and lists its buffers. The operation allocates the buffers, or takes them from a
 # `Workspace` made from the same plan by `workspace`.
 
 
 # A buffer requirement, with its element type in the type domain so that the allocated buffers,
 # and the results computed with them, infer
-struct _Buf{T, N}
+struct Scratch{T, N}
     dims::NTuple{N, Int}
 end
-_buffer(::Type{T}, dims::Integer...) where {T} = _Buf{T, length(dims)}(Int.(dims))
-_buffer(::Type{T}, dims::Tuple) where {T} = _Buf{T, length(dims)}(Int.(dims))
-Base.show(io::IO, b::_Buf{T}) where {T} = print(io, (T, b.dims))
+scratch(::Type{T}, dims::Integer...) where {T} = Scratch{T, length(dims)}(Int.(dims))
+scratch(::Type{T}, dims::Tuple) where {T} = Scratch{T, length(dims)}(Int.(dims))
+Base.show(io::IO, b::Scratch{T}) where {T} = print(io, (T, b.dims))
 
 # The public form of the sizes: `(eltype, dims)` pairs
-_public_sizes(sizes::NamedTuple) = Base.map(_public_sizes, sizes)
-_public_sizes(b::_Buf{T}) where {T} = (T, b.dims)
+size_pairs(sizes::NamedTuple) = Base.map(size_pairs, sizes)
+size_pairs(b::Scratch{T}) where {T} = (T, b.dims)
 
 
 """
@@ -43,27 +43,27 @@ end
 
 function Base.show(io::IO, ws::Workspace)
     print(io, "Workspace(", _backend_name(ws.backend), ", ", _algname(ws.alg), ", ",
-          Base.format_bytes(_workspace_bytes(ws.sizes)), ")")
+          Base.format_bytes(nbytes(ws.sizes)), ")")
 end
 
-_workspace_bytes(sizes::NamedTuple) = Base.sum(_workspace_bytes, values(sizes); init=0)
-_workspace_bytes(b::_Buf{T}) where {T} = Base.prod(b.dims; init=1) * Base.elsize(Array{T})
+nbytes(sizes::NamedTuple) = Base.sum(nbytes, values(sizes); init=0)
+nbytes(b::Scratch{T}) where {T} = Base.prod(b.dims; init=1) * Base.elsize(Array{T})
 
 
 # An operation's scratch: its backend, its resolved algorithm (which the operation runs with),
 # the resolved algorithms of the operations it calls, and its buffers, as a `NamedTuple` of
 # `(eltype, dims)` requirements, or of the `NamedTuple`s of nested operations.
-struct _Plan{B <: Backend, A, N <: NamedTuple, S <: NamedTuple}
+struct Plan{B <: Backend, A, N <: NamedTuple, S <: NamedTuple}
     backend::B
     alg::A
     nested::N
     sizes::S
 end
-_Plan(backend, alg, sizes::NamedTuple) = _Plan(backend, alg, (;), sizes)
+Plan(backend, alg, sizes::NamedTuple) = Plan(backend, alg, (;), sizes)
 
-# `_plan(op, args...; kwargs...)` has one method per operation, taking the operation's arguments
+# `plan(op, args...; kwargs...)` has one method per operation, taking the operation's arguments
 # (without `workspace`); operations without scratch have none.
-function _plan end
+function plan end
 
 
 
@@ -84,7 +84,7 @@ julia> AK.workspace_size(AK.sum, CuArray(rand(Float32, 10_000)))
 (partials = (Float32, (4,)),)
 ```
 """
-workspace_size(op, args...; kwargs...) = _public_sizes(_plan(op, args...; kwargs...).sizes)
+workspace_size(op, args...; kwargs...) = size_pairs(plan(op, args...; kwargs...).sizes)
 
 """
     workspace(op, args...; kwargs...) -> Workspace
@@ -113,20 +113,20 @@ or different buffer sizes are an `ArgumentError`, and so is a workspace whose bu
 operation's arrays.
 """
 function workspace(op, args...; kwargs...)
-    p = _plan(op, args...; kwargs...)
+    p = plan(op, args...; kwargs...)
     return Workspace(p.backend, KernelAbstractions.device(p.backend), p.alg, p.nested, p.sizes,
-                     _allocate(p.backend, p.sizes))
+                     allocate_scratch(p.backend, p.sizes))
 end
 
-_allocate(backend, sizes::NamedTuple) = Base.map(s -> _allocate(backend, s), sizes)
-_allocate(backend, b::_Buf{T}) where {T} = KernelAbstractions.allocate(backend, T, b.dims)
+allocate_scratch(backend, sizes::NamedTuple) = Base.map(s -> allocate_scratch(backend, s), sizes)
+allocate_scratch(backend, b::Scratch{T}) where {T} = KernelAbstractions.allocate(backend, T, b.dims)
 
 _describe(sizes::NamedTuple) = isempty(sizes) ? "no buffers" : "the buffers $sizes"
 
 # The buffers of the plan: the workspace's, checked against the plan and the operation's arrays,
 # or new ones
-_buffers(p::_Plan, ::Nothing, arrays...) = _allocate(p.backend, p.sizes)
-function _buffers(p::_Plan, ws::Workspace, arrays...)
+scratch_buffers(p::Plan, ::Nothing, arrays...) = allocate_scratch(p.backend, p.sizes)
+function scratch_buffers(p::Plan, ws::Workspace, arrays...)
     ws.backend == p.backend && ws.device == KernelAbstractions.device(p.backend) ||
         throw(ArgumentError("the workspace was made for another backend or device"))
     ws.alg == p.alg && ws.nested == p.nested || throw(ArgumentError(
@@ -134,20 +134,20 @@ function _buffers(p::_Plan, ws::Workspace, arrays...)
         "$(p.alg) $(p.nested)"))
     ws.sizes == p.sizes || throw(ArgumentError(
         "the workspace holds $(_describe(ws.sizes)), but this call needs $(_describe(p.sizes))"))
-    for b in _leaves(ws.buffers), a in arrays
-        _aliases(b, a) &&
+    for b in leaves(ws.buffers), a in arrays
+        mayalias(b, a) &&
             throw(ArgumentError("the workspace must not alias the operation's arrays"))
     end
     return ws.buffers
 end
 
 # Whether the buffer `b` may alias the array or `Broadcasted` source `a`
-_aliases(b, a::AbstractArray) = Base.mightalias(b, a)
-_aliases(b, a::Base.Broadcast.Broadcasted) = Base.any(x -> _aliases(b, x), a.args)
-_aliases(b, a::Base.Broadcast.Extruded) = _aliases(b, a.x)
-_aliases(b, a) = false
-_buffers(p::_Plan, ws, arrays...) =
+mayalias(b, a::AbstractArray) = Base.mightalias(b, a)
+mayalias(b, a::Base.Broadcast.Broadcasted) = Base.any(x -> mayalias(b, x), a.args)
+mayalias(b, a::Base.Broadcast.Extruded) = mayalias(b, a.x)
+mayalias(b, a) = false
+scratch_buffers(p::Plan, ws, arrays...) =
     throw(ArgumentError("`workspace` must be a `Workspace` from `workspace`, got $(typeof(ws))"))
 
-_leaves(buffers::NamedTuple) = Iterators.flatten(Base.map(_leaves, values(buffers)))
-_leaves(buffer::AbstractArray) = (buffer,)
+leaves(buffers::NamedTuple) = Iterators.flatten(Base.map(leaves, values(buffers)))
+leaves(buffer::AbstractArray) = (buffer,)

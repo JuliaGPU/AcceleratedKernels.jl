@@ -443,7 +443,7 @@ function _radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     scan = _accumulate_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                              inclusive=false).plan
     key_range = first(_rs_key_range_setup(v, backend)).plan
-    return (; temp=_buffer(T, size(v)), hist=_buffer(UInt32, hist_len), scan=scan.sizes,
+    return (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
             key_range=key_range.sizes), (; scan=scan.alg, key_range=key_range.alg)
 end
 

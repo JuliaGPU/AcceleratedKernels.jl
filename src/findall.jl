@@ -288,7 +288,7 @@ function findall(values::AbstractArray; items::AbstractArray=keys(values),
                  workspace=nothing)
     values isa AbstractArray{Bool} || _check_bool_result(identity, values)
     s = _findall_setup(values, items, false, backend, alg)
-    _findall_run(identity, values, items, s, _buffers(s.plan, workspace, values, items))
+    _findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
 end
 
 function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
@@ -296,13 +296,13 @@ function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
                  workspace=nothing)
     _check_bool_result(pred, v)
     s = _findall_setup(v, items, true, backend, alg)
-    _findall_run(pred, v, items, s, _buffers(s.plan, workspace, v, items))
+    _findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
 end
 
-_plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
+plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
       backend=nothing, alg::Algorithm=Auto()) =
     _findall_setup(values, items, false, backend, alg).plan
-_plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
+plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
       alg::Algorithm=Auto()) =
     _findall_setup(v, items, true, backend, alg).plan
 
@@ -314,16 +314,16 @@ function _findall_setup(v, items, predicate::Bool, backend, alg)
     backend = _resolve_backend(backend, v, items)
     a = _resolve_findall(alg, backend, eltype(v))
     n = length(v)
-    mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=_buffer(Bool, size(v))) : (;)
+    mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)
     counts, nested = if a isa ScanScatter
         num_blocks = cld(n, a.block_size * a.items_per_thread)
         scan = _accumulate_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
-        (; counts=_buffer(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
+        (; counts=scratch(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
     else
         num_tasks = TaskPartitioner(n, a.max_tasks, a.min_elems).num_tasks
-        (; counts=_buffer(Int, num_tasks)), (;)
+        (; counts=scratch(Int, num_tasks)), (;)
     end
-    return (; plan=_Plan(backend, a, nested, merge(mask, counts)))
+    return (; plan=Plan(backend, a, nested, merge(mask, counts)))
 end
 
 function _findall_run(pred, v, items, s, bufs)
