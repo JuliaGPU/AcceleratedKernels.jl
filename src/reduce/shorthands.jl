@@ -51,13 +51,13 @@ function _reduce_or_empty(empty, op, src; init=NoInit(), dims=:, acctype=nothing
     init isa NoInit || return reduce(op, src; init, workspace, kwargs...)
     A = resolve_acctype(op, Union{}, mapped_eltype(identity, src), acctype)
     if A !== Union{} && isempty(src) &&
-       (iswhole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))
+       (iswhole(dims) || Base.any(d -> size(src, d) == 0, reduced_dims(dims, ndims(src))))
         # (the algorithm and the workspace are checked as for any other input)
         p = plan(reduce, op, src; kwargs...)
         scratch_buffers(p, workspace, src)
         iswhole(dims) && return empty(A)
-        dims_valid = _reduced_dims(dims, ndims(src))
-        dst_sizes = ntuple(d -> d in dims_valid ? 1 : size(src, d), ndims(src))
+        rdims = reduced_dims(dims, ndims(src))
+        dst_sizes = ntuple(d -> d in rdims ? 1 : size(src, d), ndims(src))
         return fill!(KernelAbstractions.allocate(p.backend, A, dst_sizes), empty(A))
     end
     return reduce(op, src; workspace, kwargs...)

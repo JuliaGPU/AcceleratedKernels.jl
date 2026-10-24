@@ -123,8 +123,8 @@ end
         @test_throws ArgumentError AK.mapreduce_nd!(identity, +, zeros(Int32, 1, 4),
                                                     zeros(Int32, 4, 4), RRB,
                                                     AK.BlockReduce(256, 2, 0), Int32;
-                                                    init=AK.NoInit(), neutral=nothing,
-                                                    dims_valid=(1,), bufs=(;))
+                                                    init=AK.NoInit(), seed=nothing,
+                                                    rdims=(1,), bufs=(;))
     end
 end
 

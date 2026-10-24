@@ -33,7 +33,7 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields;
   `items_per_thread=nothing` chooses it by the size of the accumulator type (see
-  `_reduce_items_per_thread`).
+  `default_items_per_thread`).
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.
@@ -85,7 +85,7 @@ reduce_tuning(::HostBackend, ::Type) = cpu_reduce_tuning()
 # on an RTX 5080 (kernel time of `sum`, 256 blocks): 16 for 4-byte types is within 1% of the best
 # setting from 10^4 to 10^8 elements, while 2 reaches the bandwidth only with many more blocks,
 # and wider accumulators (Float64, ComplexF64, tuples of 4 Float64s) do best at 4 to 8.
-_reduce_items_per_thread(::Type{T}) where {T} =
+default_items_per_thread(::Type{T}) where {T} =
     isbitstype(T) && sizeof(T) > 0 ? clamp(64 ÷ sizeof(T), 4, 16) : 4
 
 
@@ -123,7 +123,7 @@ end
 
 fill_defaults(a::BlockReduce, t::ReduceTuning, T) =
     BlockReduce(something(a.block_size, t.block_size),
-                something(a.items_per_thread, t.items_per_thread, _reduce_items_per_thread(T)),
+                something(a.items_per_thread, t.items_per_thread, default_items_per_thread(T)),
                 something(a.switch_below, t.switch_below))
 fill_defaults(a::CPUThreads.Partitioned, t::ReduceTuning, T) = fill_threads(a, t)
 fill_defaults(a::Algorithm, t::ReduceTuning, T) =

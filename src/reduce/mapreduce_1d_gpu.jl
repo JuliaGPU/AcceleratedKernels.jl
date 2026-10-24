@@ -5,16 +5,16 @@
 # `finish`, so the last one can write the result into a device array.
 
 # NI and K are compile-time values so the local-memory size is static and the load loop unrolls.
-# `neutral` seeds each thread's partial result (an empty `Optional` when `op` has no known neutral
+# `seed` seeds each thread's partial result (an empty `Optional` when `op` has no known neutral
 # element); `f === PartialInputs()` when `src` holds partial results of an earlier pass. Block
 # `iblock` reduces the tiles `iblock`, `iblock + nblocks`, ... of `src`, and stores
 # `finish(op, init, dst, iblock + 1, partial)` in `dst[iblock + 1]`.
-@kernel inbounds=true cpu=false unsafe_indices=true function _mapreduce_block!(
-    @Const(src), dst, f, op, neutral, init, nblocks, ::Val{NI}, ::Val{K},
+@kernel inbounds=true cpu=false unsafe_indices=true function mapreduce_1d_kernel!(
+    @Const(src), dst, f, op, seed, init, nblocks, ::Val{NI}, ::Val{K},
 ) where {NI, K}
 
-    sdata = @localmem typeof(neutral) (NI,)
-    f_lanes, op_lanes = seeded_ops(f, op, neutral)
+    sdata = @localmem typeof(seed) (NI,)
+    mapf, accop = seeded_ops(f, op, seed)
     len = length(src)
 
     # NOTE: for many index calculations in this library, computation using zero-indexing leads to
@@ -28,11 +28,11 @@
 
     # Consecutive threads load consecutive elements, while each thread advances by NI; full
     # tiles need no bounds checks, and only the last tile can be partial.
-    acc = neutral
+    acc = seed
     tile = iblock * (NI * K)
     while tile + NI * K <= len
         for s in 0x0:(K - 0x1)
-            acc = op_lanes(acc, f_lanes(src[tile + s * NI + ithread + 0x1]))
+            acc = accop(acc, mapf(src[tile + s * NI + ithread + 0x1]))
         end
         tile += nblocks * (NI * K)
     end
@@ -40,7 +40,7 @@
         for s in 0x0:(K - 0x1)
             idx = tile + s * NI + ithread
             if idx < len
-                acc = op_lanes(acc, f_lanes(src[idx + 0x1]))
+                acc = accop(acc, mapf(src[idx + 0x1]))
             end
         end
     end
@@ -48,7 +48,7 @@
 
     @synchronize()
 
-    @inline reduce_group!(@context, op_lanes, sdata, ithread)
+    @inline reduce_group!(@context, accop, sdata, ithread)
 
     if ithread == 0x0
         dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
@@ -56,17 +56,17 @@
 end
 
 # The number of blocks of the first pass over `len` elements
-_mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) =
+mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) =
     min(cld(len, block_size * items_per_thread), max_blocks)
 
-# Reduce the non-empty `src`; `neutral` is the partial-result seed of `reduce_seed`, `init` is a
-# value, `NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `_mapreduce_1d_partials`
+# Reduce the non-empty `src`; `seed` is the partial-result seed of `reduce_seed`, `init` is a
+# value, `NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `mapreduce_1d_partials`
 # partial results (`nothing` if none are needed). Without `dst`, returns the result as a host
 # value; with `dst`, stores it in `dst[1]` on the device.
 function mapreduce_1d_gpu(
     f::F, op::OP, src::MapReduceSource, backend::Backend;
     init,
-    neutral,
+    seed,
     block_size::Int,
     items_per_thread::Int,
     max_blocks::Int,
@@ -77,45 +77,45 @@ function mapreduce_1d_gpu(
 ) where {F, OP}
     @argcheck max_blocks >= 1           # (from the tuning, which nothing else checks)
 
-    f_host, op_host = seeded_ops(f, op, neutral)
+    f_host, op_host = seeded_ops(f, op, seed)
     len = length(src)
 
     # Degenerate cases, finished on the host
     if dst === nothing
         # `f` may index device arrays too
         len == 1 && return finish(op, init, nothing, 0,
-                                  @allowscalar(op_host(neutral, f_host(src[1]))))
+                                  @allowscalar(op_host(seed, f_host(src[1]))))
         if len < switch_below
-            h_src = _host_copy(src)
+            h_src = host_copy(src)
             return finish(op, init, nothing, 0,
-                          Base.mapreduce(f_host, op_host, h_src; init=neutral))
+                          Base.mapreduce(f_host, op_host, h_src; init=seed))
         end
     end
 
     # (later passes see the source as a view, so use one for the first pass too)
-    src_view = _mapreduce_1d_src_view(src)
-    blocks = _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
+    src_view = mapreduce_1d_view(src)
+    blocks = mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
 
     # The last pass stores the result: in `dst` with `init` applied, or the bare partial in the
     # slot after the first pass's partials, for the host
     last_dst, last_init = dst === nothing ?
         (@view(partials[blocks + 1:blocks + 1]), Unfinished()) : (dst, init)
-    buffer = commutative ? nothing : _mapreduce_1d_buffer(src)
+    buffer = commutative ? nothing : mapreduce_1d_buffer(src)
     if blocks == 1
-        _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view,
-                            last_dst, f, op, neutral, last_init, 1; buffer)
+        mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view,
+                           last_dst, f, op, seed, last_init, 1; buffer)
     else
         p = @view partials[1:blocks]
-        _mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view, p,
-                            f, op, neutral, Unfinished(), blocks; buffer)
+        mapreduce_1d_pass!(commutative, backend, block_size, items_per_thread, src_view, p,
+                           f, op, seed, Unfinished(), blocks; buffer)
         if dst === nothing && blocks < switch_below
-            return finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=neutral))
+            return finish(op, init, nothing, 0, Base.reduce(op_host, Vector(p); init=seed))
         end
         # (the second pass reads the partials in unrolled steps of up to 16 loads per thread: in
         # one step for the default settings)
-        _mapreduce_1d_pass!(commutative, backend, block_size,
-                            clamp(cld(max_blocks, block_size), 1, 16), p, last_dst,
-                            PartialInputs(), op, neutral, last_init, 1)
+        mapreduce_1d_pass!(commutative, backend, block_size,
+                           clamp(cld(max_blocks, block_size), 1, 16), p, last_dst,
+                           PartialInputs(), op, seed, last_init, 1)
     end
     dst === nothing || return dst
     return finish(op, init, nothing, 0, @allowscalar(last_dst[1]))
@@ -123,56 +123,56 @@ end
 
 # A pass of `blocks` blocks over the linearly indexed `src`, each storing a partial result in
 # `dst`: with the strided kernel, or in element order, reading `buffer` (see
-# `_mapreduce_1d_buffer`) where one is given
-function _mapreduce_1d_pass!(commutative::Bool, backend, block_size, items_per_thread, src, dst,
-                             f::F, op::OP, neutral, init, blocks; buffer=nothing) where {F, OP}
+# `mapreduce_1d_buffer`) where one is given
+function mapreduce_1d_pass!(commutative::Bool, backend, block_size, items_per_thread, src, dst,
+                            f::F, op::OP, seed, init, blocks; buffer=nothing) where {F, OP}
     if commutative
-        kernel! = _mapreduce_block!(backend, block_size)
-        Base.inferencebarrier(kernel!)(src, dst, f, op, neutral, init, blocks, Val(block_size),
+        kernel! = mapreduce_1d_kernel!(backend, block_size)
+        Base.inferencebarrier(kernel!)(src, dst, f, op, seed, init, blocks, Val(block_size),
                                        Val(items_per_thread); ndrange=(block_size * blocks,))
     else
         len = length(src)
         src, base_offset = something(buffer, (src, 0))
-        _mapreduce_ordered_pass!(backend, block_size, items_per_thread, src, dst, f, op,
-                                 neutral, init, base_offset, (), (), (1,), (len,), 1, len, blocks;
-                                 dense_buffer=buffer !== nothing)
+        ordered_pass!(backend, block_size, items_per_thread, src, dst, f, op,
+                      seed, init, base_offset, (), (), (1,), (len,), 1, len, blocks;
+                      dense_buffer=buffer !== nothing)
     end
 end
 
 # A contiguous source as `(buffer, base_offset)`, its elements' dense buffer and their offset in
 # it, which the ordered kernel reads with vector loads; `nothing` for other sources
-function _mapreduce_1d_buffer(src)
+function mapreduce_1d_buffer(src)
     src isa AbstractArray || return nothing
-    layout = _mapreduce_strided_layout(src)
-    layout !== nothing && layout[3] == _mapreduce_dense_strides(size(src)) || return nothing
+    layout = strided_layout(src)
+    layout !== nothing && layout[3] == dense_strides(size(src)) || return nothing
     return layout[1], layout[2]
 end
 
-_host_copy(src::AbstractArray) = Array(src)
+host_copy(src::AbstractArray) = Array(src)
 # A `Broadcasted` source is evaluated on the host from host copies of its arrays, so that it needs
 # no device memory
-_host_copy(src::Base.Broadcast.Broadcasted) = Base.Broadcast.materialize(_on_host(src))
-_on_host(bc::Base.Broadcast.Broadcasted) =
-    Base.Broadcast.Broadcasted(bc.f, Base.map(_on_host, bc.args), bc.axes)
-_on_host(x::Base.Broadcast.Extruded) = _on_host(x.x)
-_on_host(x::AbstractArray) = Array(x)
-_on_host(x::AbstractRange) = x
-_on_host(x) = x
+host_copy(src::Base.Broadcast.Broadcasted) = Base.Broadcast.materialize(on_host(src))
+on_host(bc::Base.Broadcast.Broadcasted) =
+    Base.Broadcast.Broadcasted(bc.f, Base.map(on_host, bc.args), bc.axes)
+on_host(x::Base.Broadcast.Extruded) = on_host(x.x)
+on_host(x::AbstractArray) = Array(x)
+on_host(x::AbstractRange) = x
+on_host(x) = x
 
 # (a view of all elements, indexed from 1 also when the source's indices are not)
-_mapreduce_1d_src_view(src::AbstractArray) = @view src[begin:end]
-_mapreduce_1d_src_view(src::Base.Broadcast.Broadcasted) = src
+mapreduce_1d_view(src::AbstractArray) = @view src[begin:end]
+mapreduce_1d_view(src::Base.Broadcast.Broadcasted) = src
 
 # The number of partial results of `mapreduce_1d_gpu` over `len` elements: one per block of the
 # first pass, and for a host result (`device=false`) a slot for the last partial; 0 when it needs
 # none
-function _mapreduce_1d_partials(len, block_size, items_per_thread, max_blocks, switch_below;
-                                device::Bool=false)
+function mapreduce_1d_partials(len, block_size, items_per_thread, max_blocks, switch_below;
+                               device::Bool=false)
     if device
         len <= 1 && return 0
-        blocks = _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
+        blocks = mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
         return blocks == 1 ? 0 : blocks
     end
     (len <= 1 || len < switch_below) && return 0
-    return _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) + 1
+    return mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) + 1
 end

@@ -294,7 +294,7 @@ end
         for T in valid_backend_eltypes(BACKEND, (Float32, Int32, UInt32, Float64, Int64, UInt64))
             vh = T <: AbstractFloat ? rand(T, 1024, 1024) : rand(T(1):T(100), 1024, 1024)
             v = array_from_host(vh)
-            @test AK._contiguous_vector_width(v, 0, (1024,), (1,), 1024, 256) ==
+            @test AK.vector_width(v, 0, (1024,), (1,), 1024, 256) ==
                 16 ÷ sizeof(T)
             r = Array(AK.reduce(+, v; alg=REDUCE_ALG, init=zero(T), dims=1))
             @test T <: AbstractFloat ? r ≈ sum(vh; dims=1) : r == sum(vh; dims=1)
@@ -339,13 +339,13 @@ end
         # Misaligned rows and offsets fall back to scalar loads.
         rh = rand(Float32, 1027, 2048)
         r = array_from_host(rh)
-        @test AK._contiguous_vector_width(r, 0, (1027,), (1,), 1024, 256) == 0
+        @test AK.vector_width(r, 0, (1027,), (1,), 1024, 256) == 0
         @test Array(AK.reduce(+, @view(r[1:1024, :]); alg=REDUCE_ALG, init=0.0f0, dims=1)) ≈
             sum(@view(rh[1:1024, :]); dims=1)
 
         bh = rand(Int32(1):Int32(100), 260, 1024)
         b = array_from_host(bh)
-        @test AK._contiguous_vector_width(b, 2, (260,), (1,), 258, 256) == 0
+        @test AK.vector_width(b, 2, (260,), (1,), 258, 256) == 0
         @test Array(AK.reduce(+, @view(b[3:end, :]); alg=REDUCE_ALG, init=Int32(0), dims=1)) ==
             Base.reduce(+, @view(bh[3:end, :]); init=Int32(0), dims=1)
     end
@@ -355,7 +355,7 @@ end
         GC.@preserve storage begin
             offset = Int(mod(-UInt(pointer(storage)), 16)) + 4
             misaligned = unsafe_wrap(Array, Ptr{Float32}(pointer(storage) + offset), 4)
-            @test AK._contiguous_vector_width(misaligned, 0, (4,), (1,), 4, 256) == 0
+            @test AK.vector_width(misaligned, 0, (4,), (1,), 4, 256) == 0
         end
 
         # The CPU fallback should not require strided storage.
@@ -1083,9 +1083,9 @@ end
     if TEST_KERNELS
         h = rand(Int32(1):Int32(100), 64, 1000)
         R = array_from_host(fill(Int32(1), 64))
-        AK._mapreduce_nd_launch!(
+        AK.launch_shape!(
             Val(:columns), 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
-            init=AK.FoldInto(), neutral=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
+            init=AK.FoldInto(), seed=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
             reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
             reduce_size=1000, dense_buffer=true, items_per_thread=4)
         @test Array(R) == vec(sum(h; dims=2)) .+ 1
@@ -1101,8 +1101,8 @@ end
     alg = REDUCE_ALG
     if TEST_KERNELS
         segs = AK._mapreduce_segments((512, 1000), (1, 512), (1,))
-        @test AK._mapreduce_nd_shape(1000, 512, segs, 256, AK.reduce_tuning(BACKEND, Int32),
-                                     Int32)[1] === :segments
+        @test AK.reduce_shape(1000, 512, segs, 256, AK.reduce_tuning(BACKEND, Int32),
+                              Int32)[1] === :by_lanes
     end
     for (sz, dims) in (((16, 3000), 1), ((512, 1000), 1), ((513, 47), 1), ((4096, 33), 1),
                        ((64, 1, 300), 1), ((4, 8, 3000), (1, 2)))
@@ -1160,7 +1160,7 @@ end
         s = sum(Int.(h); dims=2)
         if TEST_KERNELS
             segs = AK._mapreduce_segments((m, n), (1, m), (2,))
-            @test AK._mapreduce_nd_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int), Int)[1] ===
+            @test AK.reduce_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int), Int)[1] ===
                   :columns
         end
         # `init` applied once, folding into `R`, into an `R` narrower than the accumulator
@@ -1183,9 +1183,9 @@ end
         @test Array(AK.sum(v; dims=2, alg)) == sum(Int.(Array(p)[2:m + 1, 4:n + 3]); dims=2)
     end
     # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
-    shape_of(x, dims, A) = AK._mapreduce_nd_shape(
+    shape_of(x, dims, A) = AK.reduce_shape(
         length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
-        AK._mapreduce_segments(size(x), AK._mapreduce_layout(x)[3], dims),
+        AK._mapreduce_segments(size(x), AK.source_layout(x)[3], dims),
         AK.resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
     # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
     # launch enough blocks, and one thread per output where a row of outputs fills the device
@@ -1684,15 +1684,15 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
              ((1, 5000, 2), 2), ((40, 3000, 30), 2))
     for (sz, dims) in cases
         if TEST_KERNELS
-            segs = AK._mapreduce_segments(sz, AK._mapreduce_dense_strides(sz),
-                                          AK._reduced_dims(dims, length(sz)))
+            segs = AK._mapreduce_segments(sz, AK.dense_strides(sz),
+                                          AK.reduced_dims(dims, length(sz)))
             dst_size = prod(d in dims ? 1 : sz[d] for d in eachindex(sz))
             len = prod(sz) ÷ dst_size
             block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, dims).block_size
-            shape, groups = AK._mapreduce_nd_shape(dst_size, len, segs, block_size,
-                                                   AK.reduce_tuning(BACKEND, RedMat2), RedMat2)
+            shape, groups = AK.reduce_shape(dst_size, len, segs, block_size,
+                                            AK.reduce_tuning(BACKEND, RedMat2), RedMat2)
             push!(shapes,
-                  shape => AK._ordered_shape(shape, groups, dst_size, len, block_size)[1])
+                  shape => AK.ordered_shape(shape, groups, dst_size, len, block_size)[1])
         end
         xh = [red_randmat() for _ in CartesianIndices(sz)]
         x = array_from_host(xh)
@@ -1723,9 +1723,9 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
                             :columns => :columns_ordered, :tiled_strided => :columns_ordered,
                             :by_block => :ordered, :by_block_each => :ordered,
                             :multigroup => :ordered))
-            t.segments_short_runs && push!(required, :segments => :by_thread)
+            t.segments_short_runs && push!(required, :by_lanes => :by_thread)
             # (the (512, 40) case has 256 bytes per lane)
-            t.segments_lane_bytes >= 256 && push!(required, :segments => :ordered)
+            t.segments_lane_bytes >= 256 && push!(required, :by_lanes => :ordered)
             @test shapes ⊇ required
         end
     end

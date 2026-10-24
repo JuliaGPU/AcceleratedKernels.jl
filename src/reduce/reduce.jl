@@ -4,7 +4,7 @@ include("tuning.jl")
 const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}
 
 # The size of a reduction source along `d`; `Broadcasted` objects only have `size` without `d`
-_srcsize(src, d::Int) = d <= ndims(src) ? size(src)[d] : 1
+srcsize(src, d::Int) = d <= ndims(src) ? size(src)[d] : 1
 
 function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
     src_axes = axes(src)
@@ -131,10 +131,10 @@ function mapreduce(
     alg::Algorithm=Auto(),
     workspace=nothing,
 ) where {F, OP}
-    f, src = _mapreduce_fuse(f, src, srcs)
+    f, src = fuse_sources(f, src, srcs)
     s = mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
     bufs = scratch_buffers(s.plan, workspace, src)
-    return mapreduce_run(f, op, _mapreduce_source(src, s.plan.backend), s, init, bufs; commutative)
+    return mapreduce_run(f, op, kernel_source(src, s.plan.backend), s, init, bufs; commutative)
 end
 
 function plan(
@@ -142,7 +142,7 @@ function plan(
     backend=nothing, init=NoInit(), neutral=nothing, acctype=nothing, dims=:,
     commutative::Bool=true, alg::Algorithm=Auto(),
 ) where {F, OP}
-    f, src = _mapreduce_fuse(f, src, srcs)
+    f, src = fuse_sources(f, src, srcs)
     return mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
 end
 
@@ -151,8 +151,8 @@ plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
 
 # The source of a reduction, indexed from 1 (`one_based`): several arrays become one
 # `Broadcasted` object
-_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, one_based(src))
-function _mapreduce_fuse(f::F, src, srcs::Tuple) where {F}
+fuse_sources(f::F, src, ::Tuple{}) where {F} = (f, one_based(src))
+function fuse_sources(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
     _mapreduce_check_map_axes(src, srcs...)
@@ -163,12 +163,12 @@ end
 # Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
 # Julia 1.12, so earlier versions materialize it when the reduction runs (after the plan and the
 # workspace checks, which see the original arrays); the plan treats it as a dense array.
-_mapreduce_source(src, backend) = src
-_mapreduce_source(src::Base.Broadcast.Broadcasted, backend) =
+kernel_source(src, backend) = src
+kernel_source(src::Base.Broadcast.Broadcasted, backend) =
     VERSION < v"1.12-" ? materialize_source(src, backend) : src
 
 # The seed of the partial results (`reduce_seed`), where an accumulator type exists
-_mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
+mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
     A === Union{} ? nothing : reduce_seed(op, A, neutral)
 
 # Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
@@ -182,11 +182,11 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
 
     if iswhole(dims)
         a = resolve_reduce(alg, backend, A, dims)
-        seed = _mapreduce_seed(op, A, neutral)
+        seed = mapreduce_seed(op, A, neutral)
         # (the buffer's name does not depend on the length, so that results infer)
         sizes = if a isa BlockReduce && seed !== nothing
-            n = _mapreduce_1d_partials(length(src), a.block_size, a.items_per_thread,
-                                       reduce_tuning(backend, A).target_blocks, a.switch_below)
+            n = mapreduce_1d_partials(length(src), a.block_size, a.items_per_thread,
+                                      reduce_tuning(backend, A).target_blocks, a.switch_below)
             (; partials=scratch(typeof(seed), n))
         else
             (;)
@@ -194,33 +194,33 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         return (; plan=Plan(backend, a, sizes), A=Val(A), seed)
     end
 
-    dims_valid = _reduced_dims(dims, ndims(src))
+    rdims = reduced_dims(dims, ndims(src))
     # The result has the accumulator type; where there is none (`op` always throws), only an
     # empty reduction can succeed
-    R_type = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
-    dst_sizes = ntuple(d -> d in dims_valid ? 1 : _srcsize(src, d), ndims(src))
-    a = resolve_reduce(alg, backend, A, dims_valid)
-    seed = _mapreduce_seed(op, A, neutral)
-    sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, Base.prod(dst_sizes))
-    return (; plan=Plan(backend, a, sizes), A=Val(A), seed, dims_valid, R_type=Val(R_type),
+    R = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
+    dst_sizes = ntuple(d -> d in rdims ? 1 : srcsize(src, d), ndims(src))
+    a = resolve_reduce(alg, backend, A, rdims)
+    seed = mapreduce_seed(op, A, neutral)
+    sizes = mapreduce_nd_sizes(src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
+    return (; plan=Plan(backend, a, sizes), A=Val(A), seed, rdims, R=Val(R),
             dst_sizes)
 end
 
 # Run the reduction set up by `mapreduce_setup`, with the plan's scratch buffers `bufs`
 function mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
-    if !haskey(s, :dims_valid)
-        return _mapreduce_whole(f, op, src, backend, a, unval(s.A); init, neutral=s.seed,
-                                partials=get(bufs, :partials, nothing), commutative)
+    if !haskey(s, :rdims)
+        return mapreduce_whole(f, op, src, backend, a, unval(s.A); init, seed=s.seed,
+                               partials=get(bufs, :partials, nothing), commutative)
     end
-    if init isa NoInit && Base.any(d -> _srcsize(src, d) == 0, s.dims_valid) &&
+    if init isa NoInit && Base.any(d -> srcsize(src, d) == 0, s.rdims) &&
        Base.prod(s.dst_sizes) > 0
         throw(ArgumentError(
             "reducing over an empty dimension is not allowed without `init`; pass `init`"))
     end
-    dst = KernelAbstractions.allocate(backend, unval(s.R_type), s.dst_sizes)
+    dst = KernelAbstractions.allocate(backend, unval(s.R), s.dst_sizes)
     return mapreduce_nd!(f, op, dst, src, backend, a, unval(s.A);
-                         init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
+                         init, seed=s.seed, rdims=s.rdims, bufs, commutative)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
@@ -319,8 +319,8 @@ end
 function mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
     bufs = scratch_buffers(s.plan, workspace, R, src)
     backend = s.plan.backend
-    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, unval(s.A);
-                  init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
+    mapreduce_nd!(f, op, s.dst, kernel_source(s.src, backend), backend, s.plan.alg, unval(s.A);
+                  init=s.init, seed=s.seed, rdims=s.rdims, bufs, commutative)
 end
 
 plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
@@ -333,41 +333,41 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
     backend = resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
-        sR, sA = size(R, d), _srcsize(src, d)
+        sR, sA = size(R, d), srcsize(src, d)
         sR == 1 || sR == sA || throw(DimensionMismatch(
             "cannot reduce an array of size $(size(src)) into one of size $(size(R))"))
     end
-    _check_noalias(R, src)
+    check_noalias(R, src)
     R, src = one_based(R), one_based(src)
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
-    dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)
-    return mapreducedim_setup(f, op, src, dst, dims_valid, backend, init, neutral, overwrite,
-                              acctype, alg)
+    rdims = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && srcsize(src, d) != 1)
+    return reducedim_setup(f, op, src, dst, rdims, backend, init, neutral, overwrite,
+                           acctype, alg)
 end
-function mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, neutral,
-                            overwrite, acctype, alg) where {F, OP}
+function reducedim_setup(f::F, op::OP, src, dst, rdims, backend, init, neutral,
+                         overwrite, acctype, alg) where {F, OP}
     A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
-    a = resolve_reduce(alg, backend, A, dims_valid)
-    seed = _mapreduce_seed(op, A, neutral)
-    sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
+    a = resolve_reduce(alg, backend, A, rdims)
+    seed = mapreduce_seed(op, A, neutral)
+    sizes = mapreduce_nd_sizes(src, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init
-    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
+    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, rdims, init)
 end
 
-function _check_noalias(R, src::AbstractArray)
+function check_noalias(R, src::AbstractArray)
     Base.mightalias(R, src) &&
         throw(ArgumentError("the destination of a reduction must not alias its source"))
     nothing
 end
-_check_noalias(R, src::Base.Broadcast.Broadcasted) = foreach(a -> _check_noalias(R, a), src.args)
-_check_noalias(R, src::Base.Broadcast.Extruded) = _check_noalias(R, src.x)
-_check_noalias(R, src) = nothing
+check_noalias(R, src::Base.Broadcast.Broadcasted) = foreach(a -> check_noalias(R, a), src.args)
+check_noalias(R, src::Base.Broadcast.Extruded) = check_noalias(R, src.x)
+check_noalias(R, src) = nothing
 
 # Reduce all of `src` to a host value, with accumulator type `A` and partial-result seed
-# `neutral`; `partials` is the plan's scratch
-function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
-                          partials, commutative) where {F, OP, A}
+# `seed`; `partials` is the plan's scratch
+function mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
+                         partials, commutative) where {F, OP, A}
     if length(src) == 0
         init isa NoInit || return init
         throw(ArgumentError(
@@ -381,16 +381,16 @@ function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neut
 
     # The result, `op(init, partial)` or `partial`, has the accumulator type (asserted, as the
     # threaded reduction is not inferred)
-    return convert(A, _mapreduce_whole_run(f, op, src, backend, alg, A; init, neutral, partials,
-                                           commutative))::A
+    return convert(A, mapreduce_whole_run(f, op, src, backend, alg, A; init, seed, partials,
+                                          commutative))::A
 end
 
-function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
-                              partials, commutative) where {F, OP, A}
+function mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
+                             partials, commutative) where {F, OP, A}
     if alg isa BlockReduce
         mapreduce_1d_gpu(
             f, op, src, backend;
-            init, neutral,
+            init, seed,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
             max_blocks=reduce_tuning(backend, A).target_blocks,
             partials, switch_below=alg.switch_below, commutative,
@@ -401,7 +401,7 @@ function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, 
         # of its host reductions recurse into `mapreduce` with ever more wrapped operators)
         Base.inferencebarrier(mapreduce_1d_cpu)(
             f, op, src, backend;
-            init, neutral,
+            init, seed,
             max_tasks=alg.max_tasks, min_elems=alg.min_elems,
         )
     end
