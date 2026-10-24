@@ -119,6 +119,17 @@
             @test Array(dst) == reverse(h; dims=dim)
         end
 
+        # Offset axes
+        h = rand(Float32, 4, 5)
+        for dims in (1, 2, (1, 2))
+            v = offset_from_host(h, (-3, 2))
+            AK.reverse!(v; dims)
+            @test Array(v.parent) == reverse(h; dims)
+            dst = offset_from_host(zeros(Float32, 4, 5), (1, 1))
+            AK.reverse!(dst, offset_from_host(h, (-3, 2)); dims)
+            @test Array(dst.parent) == reverse(h; dims)
+        end
+
         # Multiple dimensions at once, plus dims=: (dispatches to the flat whole-array path).
         # The odd sizes of [7, 6, 5] exercise the in-place middle-plane swaps, where only the
         # index ordering guard stops a pair from being swapped twice
