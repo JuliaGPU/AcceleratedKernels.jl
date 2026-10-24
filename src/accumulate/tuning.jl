@@ -104,8 +104,8 @@ scan_tuning(::HostBackend, ::Type) = cpu_scan_tuning()
     resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
 
 Resolve `alg` for a scan of element type `T` along `dims` (`nothing` for the whole array in
-linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (a
-lane type when the operator has no known neutral element). Returns `ScanPrefixes`, `SliceScan`
+linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (an
+`Optional` when the operator has no known neutral element). Returns `ScanPrefixes`, `SliceScan`
 or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
 function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,

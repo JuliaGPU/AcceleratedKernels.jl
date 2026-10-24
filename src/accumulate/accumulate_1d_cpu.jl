@@ -40,8 +40,8 @@ function accumulate_1d_cpu!(
     _accumulate_1d_cpu_section!(op, shared; seed=neutral, neutral, inclusive=true)
 
     # Now prepend the running total of all previous tasks to each element, except in the first
-    # task. An exclusive section starts with its seed, `neutral`, which may be an empty lane that
-    # cannot be stored: its first element is the running total itself.
+    # task. An exclusive section starts with its seed, `neutral`, which may be an unset `Optional`
+    # that cannot be stored: its first element is the running total itself.
     itask_partition(tp) do itask, irange
         @inbounds begin
             if itask != 1
@@ -62,7 +62,7 @@ end
 
 
 # Scan a section sequentially from `seed`, returning its total. `op` combines partial results
-# (lanes when `neutral` is an empty lane); elements are lifted to them and stored back lowered.
+# (`Optional`s when `neutral` is an unset one); elements are lifted to them and stored back lowered.
 function _accumulate_1d_cpu_section!(op, v; seed, neutral, inclusive)
     @inbounds begin
         running = seed

@@ -124,8 +124,8 @@ end
     block_offset = iblock * block_size * ITEMS
     prefix = totals[iblock]
 
-    # An exclusive tile starts with its seed, `neutral`, which may be an empty lane that cannot
-    # be stored: its first element is the prefix itself
+    # An exclusive tile starts with its seed, `neutral`, which may be an unset `Optional` that
+    # cannot be stored: its first element is the prefix itself
     j = 0
     while j < ITEMS
         gi = block_offset + j * block_size + ithread

@@ -146,7 +146,7 @@ function scan_setup(
     A = _scan_acctype(op, D, T, init, inclusive, _scan_combines(sz, dims, init, inclusive),
                       acctype)
     seed = reduce_seed(op, A, neutral)
-    # The kernels' tiles hold partial results: lanes, when `op` has no known neutral element
+    # The kernels' tiles hold partial results: `Optional`s, when `op` has no known neutral element
     a = resolve_scan(alg, backend, A, dims, typeof(seed))
     if !inclusive && init isa NoInit && seed isa Optional && !isset(seed)
         throw(ArgumentError(

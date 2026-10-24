@@ -79,12 +79,12 @@ resolve_acctype(op, ::Type, ::Type, acctype) =
     throw(ArgumentError("`acctype` must be a type or `nothing`, got $(repr(acctype))"))
 
 # A partial result of a reduction whose operator has no known neutral element. It starts out
-# empty and takes its first value from `Base.mapreduce_first`; combining with an empty lane
+# unset and takes its first value from `Base.mapreduce_first`; combining with an unset one
 # returns the other operand, keeping the order of the operands. For associative operators this
 # gives the same result as seeding with a neutral element.
 #
-# An empty lane of a bits type (every lane kernels see) holds zero bits; one of another type leaves
-# the value undefined, which is how it is recognised.
+# An unset `Optional` of a bits type (every one kernels see) holds zero bits; one of another type
+# leaves the value undefined, which is how it is recognised.
 struct Optional{T}
     value::T
     isset::Bool
@@ -132,7 +132,8 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
 @inline (o::AccOp{A})(a, b) where {A} = convert(A, o.op(a, b))
 
 # The map and operator a reduction applies for the given seed: `f` and `op` (converting to the
-# seed's type, the accumulator type) after a neutral element, lane-wrapped after an empty `Optional`.
+# seed's type, the accumulator type) after a neutral element, wrapped in `Optional`s after an unset
+# one.
 # Kernels call this on the device, so the wrappers never need to be converted for a backend.
 @inline seeded_ops(f, op, seed::A) where {A} = (f, AccOp{A}(op))
 @inline seeded_ops(::PartialInputs, op, seed::A) where {A} = (identity, AccOp{A}(op))
@@ -144,14 +145,14 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
 
 # Scans keep elements and partial results in one array or tile: an element enters the seed's
 # representation with `lift` (partials pass through), and a partial is stored in an array of
-# element type `E` with `lower` (as a lane only in arrays of lanes).
+# element type `E` with `lower` (as an `Optional` only in arrays of them).
 @inline lift(seed, x) = x
 @inline lift(::Optional{T}, x) where {T} = Optional{T}(x)
 @inline lift(::Optional{T}, x::Optional{T}) where {T} = x
 @inline lower(::Type{E}, p) where {E} = unwrap(p)
 @inline lower(::Type{E}, p) where {E <: Optional} = p
 
-# Store the partial `p` in `v[i]`, except an empty lane where elements are stored (a scan's
+# Store the partial `p` in `v[i]`, except an unset one where elements are stored (a scan's
 # carry pass fills that element later; its value field may not even be defined)
 @inline function store_partial!(v, i, p)
     if !(p isa Optional) || eltype(v) <: Optional || isset(p)
@@ -161,9 +162,9 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
 end
 
 # The seed of every partial result with accumulator type `A`: the caller's `neutral`, else
-# GPUArraysCore's neutral element for `op` when it has one, else an empty lane. A seed that is not
-# a lane stands for the accumulator type, so an abstract one (only on the host) is a lane: holding
-# the caller's `neutral`, or empty.
+# GPUArraysCore's neutral element for `op` when it has one, else an unset `Optional`. A seed that
+# is not an `Optional` stands for the accumulator type, so an abstract one (only on the host) is an
+# `Optional`: holding the caller's `neutral`, or unset.
 function reduce_seed(op::OP, ::Type{A}, neutral) where {OP, A}
     isconcretetype(A) || return neutral === nothing ? Optional{A}() : Optional{A}(neutral)
     neutral === nothing || return convert(A, neutral)
