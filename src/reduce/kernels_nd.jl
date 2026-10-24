@@ -41,7 +41,7 @@ end
     off
 end
 
-# `:by_thread` for sources without a dense buffer: one thread per output, iterating over the
+# `ByThread` for sources without a dense buffer: one thread per output, iterating over the
 # Cartesian indices of its slice as `mapreduce_nd_threads!` does on the host.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_cartesian_kernel!(
     src, dst,
@@ -65,7 +65,7 @@ end
     end
 end
 
-# `:tiled_strided`: each block reduces `rows` contiguous outputs, whose elements are
+# `Tiled`: each block reduces `rows` contiguous outputs, whose elements are
 # `reduce_stride` apart, with `N ÷ rows` lanes each, so that a warp's loads of one step are
 # consecutive elements.
 @kernel inbounds=true cpu=false unsafe_indices=true function tiled_strided_kernel!(
@@ -119,7 +119,7 @@ end
     end
 end
 
-# `:by_lanes`: each output reduces `reduce_size` consecutive elements (from the offset
+# `ByLanes`: each output reduces `reduce_size` consecutive elements (from the offset
 # of its outer index), with `lanes` threads that read them in an interleaved order; a block of
 # `N` threads covers `N ÷ lanes` outputs, which are combined in local memory with log2(lanes)
 # steps.
@@ -168,7 +168,7 @@ end
     end
 end
 
-# `:columns`: a long strided reduction into contiguous outputs, e.g. the row sums of
+# `Columns`: a long strided reduction into contiguous outputs, e.g. the row sums of
 # a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs of a run of
 # `run` (the outputs at an offset of the other kept dimensions, `run_strides` and `run_sizes`),
 # with `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
@@ -274,7 +274,7 @@ end
     end
 end
 
-# `:by_thread`: one thread per output, which reduces its slice sequentially; for at least as
+# `ByThread`: one thread per output, which reduces its slice sequentially; for at least as
 # many outputs as elements each, e.g. `dims=1` of a 3×1000 matrix.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_kernel!(
     @Const(src), dst,
@@ -303,7 +303,7 @@ end
     end
 end
 
-# `:by_block` and `:by_block_each`: each block reduces the outputs `iblock`, `iblock + num_blocks`,
+# `ByBlock`: each block reduces the outputs `iblock`, `iblock + num_blocks`,
 # ..., one at a time.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_kernel!(
     @Const(src), dst,
@@ -399,7 +399,7 @@ end
     end
 end
 
-# `:multigroup`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + reduce_groups`,
+# `ByBlocks`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + groups`,
 # ... of `N` elements of output `iout`'s slice into `partial[iout + igroup * output_size + 1]`.
 @kernel inbounds=true cpu=false unsafe_indices=true function multigroup_kernel!(
     @Const(src), partial,
@@ -407,7 +407,7 @@ end
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    ::Val{output_size}, reduce_size, reduce_groups,
+    ::Val{output_size}, reduce_size, groups,
 ) where {output_size}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
@@ -427,7 +427,7 @@ end
     while j < reduce_size
         off = reduce_offset(j, reduce_strides, reduce_sizes)
         acc = accop(acc, mapf(src[input_base + off + 0x1]))
-        j  += N * reduce_groups
+        j  += N * groups
     end
 
     sdata[ithread + 0x1] = acc
@@ -440,12 +440,12 @@ end
     end
 end
 
-# The second pass of `:multigroup` and the commutative `:columns`: one block per output combines
-# its `reduce_groups` partial results and applies `init` (see `finish`).
+# The second pass of `ByBlocks` and the commutative `Columns`: one block per output combines
+# its `groups` partial results and applies `init` (see `finish`).
 @kernel inbounds=true cpu=false unsafe_indices=true function combine_groups_kernel!(
     @Const(partial), dst,
     op, seed, init,
-    output_size, reduce_groups,
+    output_size, groups,
 )
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
@@ -457,7 +457,7 @@ end
     if iblock < output_size
         acc = seed
         g = ithread
-        while g < reduce_groups
+        while g < groups
             acc = accop(acc, partial[iblock + g * output_size + 0x1])
             g += N
         end

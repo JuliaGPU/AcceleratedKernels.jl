@@ -202,15 +202,20 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, commutative)
     end
 
-    rdims = reduced_dims(dims, ndims(src))
+    return mapreduce_dims_setup(f, op, src, backend, init, neutral, A, M,
+                                reduced_dims(dims, ndims(src)), alg, empty, commutative)
+end
+# (a function barrier: the type of `rdims` depends on the number of reduced dimensions)
+function mapreduce_dims_setup(f::F, op::OP, src, backend, init, neutral, ::Type{A}, ::Type{M},
+                              rdims, alg, empty, commutative) where {F, OP, A, M}
     # The result has the accumulator type; where there is none (`op` always throws), only an
     # empty reduction can succeed
     R = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in rdims ? 1 : srcsize(src, d), ndims(src))
     a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
-    launch, sizes = select_launch(src, backend, a, A, seed, rdims, Base.prod(dst_sizes),
-                                  commutative)
+    launch = select_launch(src, backend, a, A, rdims, Base.prod(dst_sizes), commutative)
+    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
     return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, rdims,
             R=Val(R), dst_sizes, launch)
 end
@@ -366,7 +371,8 @@ function reducedim_setup(f::F, op::OP, src, dst, rdims, backend, init, neutral,
     A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
     a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
-    launch, sizes = select_launch(src, backend, a, A, seed, rdims, length(dst), commutative)
+    launch = select_launch(src, backend, a, A, rdims, length(dst), commutative)
+    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init
     return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, rdims, init, launch)
 end

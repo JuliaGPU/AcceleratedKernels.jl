@@ -1,8 +1,8 @@
 # The launch shapes of a reduction along `dims`: which kernel reduces it, with how many threads
 # or blocks per output, and the scratch that takes.
 
-# Fewer outputs than this split their reductions across blocks (`:multigroup`), as a block per
-# output leaves most of a GPU idle (5 or 9 blocks on an 84-SM one); `:by_lanes` needs at least this
+# Fewer outputs than this split their reductions across blocks (`ByBlocks`), as a block per
+# output leaves most of a GPU idle (5 or 9 blocks on an 84-SM one); `ByLanes` needs at least this
 # many
 const FEW_OUTPUTS = 32
 
@@ -10,7 +10,7 @@ const FEW_OUTPUTS = 32
 # blocks per output
 const SPLIT_MIN_ITEMS = 8
 
-# The outputs per block of the tiled kernel (`:tiled_strided`): 32 lanes each in a block of 256
+# The outputs per block of the tiled kernel (`Tiled`): 32 lanes each in a block of 256
 const TILED_OUTPUTS = 8
 
 # The most consecutive outputs per block of the columns kernel (fewer outputs take the next power
@@ -18,13 +18,13 @@ const TILED_OUTPUTS = 8
 # threads issues together
 const COLUMNS_OUTPUTS = 32
 const COLUMNS_ITEMS_PER_THREAD = 8
-# The `:by_lanes` reduction: at most this many lanes per output (the kernel is compiled for each
+# The `ByLanes` reduction: at most this many lanes per output (the kernel is compiled for each
 # number of lanes), doubling the lanes of runs with few outputs up to this many threads
 const MAX_LANES = 32
 const LANES_MIN_THREADS = 8192
 
 # The fewest outputs the columns kernel is used for: with 4 or fewer, its blocks' scattered loads
-# lose to `:multigroup` on Metal and oneAPI
+# lose to `ByBlocks` on Metal and oneAPI
 const COLUMNS_MIN_OUTPUTS = 8
 # The most threads per block of the columns kernel: its unrolled loads take more registers than
 # the other kernels, and Metal allows it fewer than 1024 threads per block
@@ -40,19 +40,67 @@ const BY_THREAD_ROW_BYTES = 64 * 1024
 const COLUMNS_MIN_REDUCE = 32
 
 
+# The launch shapes, after CUB's `DeviceSegmentedReduce` (a thread, a group of lanes or a block
+# per output) and PyTorch's `ReduceConfig` (tiles of contiguous outputs, and several blocks per
+# output). Each but `Whole` has a `launch!` method (mapreduce_nd.jl).
+abstract type ReduceShape end
+
+# One thread per output, which reduces its slice in order
+struct ByThread <: ReduceShape end
+
+# `lanes` threads per output, which read a run of consecutive elements in turn, several outputs
+# per block
+struct ByLanes <: ReduceShape
+    lanes::Int
+end
+
+# A block per output: `blocks` blocks, which reduce the outputs `iblock`, `iblock + blocks`, ...
+struct ByBlock <: ReduceShape
+    blocks::Int
+end
+
+# `groups` blocks per output, whose partial results a second pass combines
+struct ByBlocks <: ReduceShape
+    groups::Int
+end
+
+# Tiles of `outputs` contiguous outputs per block, whose elements are a stride apart, each output's
+# reduction split across `groups` blocks; `ordered` combines the elements in their order
+struct Columns <: ReduceShape
+    outputs::Int
+    groups::Int
+    ordered::Bool
+end
+
+# The tiled kernel: TILED_OUTPUTS contiguous outputs per block, in one pass
+struct Tiled <: ReduceShape end
+
+# In element order: `groups` blocks per output, combining neighbouring partial results
+struct Ordered <: ReduceShape
+    groups::Int
+end
+
+# A single output of a contiguous source: the whole-array kernels (`mapreduce_1d_gpu`, which
+# `mapreduce_nd!` calls itself), in element order if `ordered`
+struct Whole <: ReduceShape
+    ordered::Bool
+end
+
+# The blocks per output, whose partial results take scratch where there are several
+split_groups(shape) = shape isa Union{ByBlocks, Columns, Ordered} ? shape.groups : 1
+
+
 # The launch shape of a strided reduction along `dims` into `dst_size` outputs of `reduce_size`
-# elements each (merged into the segments `segs`), and its parameter: the blocks per output of
-# `:multigroup` and `:columns`, the lanes per output of `:by_lanes`, else 0. In order:
+# elements each (merged into the segments `segs`). In order:
 #   - outputs in runs of contiguous ones, each reducing elements a stride apart: see
 #     `strided_shape`, where it takes them;
 #   - at least FEW_OUTPUTS outputs, each reducing a run of consecutive elements of a length the
-#     tuning's `segments_*` settings allow: `:by_lanes`;
-#   - at least as many outputs as elements each: `:by_thread`, or `:by_block` where that reads
+#     tuning's `segments_*` settings allow: `ByLanes`;
+#   - at least as many outputs as elements each: `ByThread`, or `ByBlock` where that reads
 #     with a stride or fills too few blocks (see below);
-#   - fewer than FEW_OUTPUTS outputs: `:multigroup`, its blocks per output launching about the
-#     tuning's `target_blocks` blocks, or `:by_block_each` where that is one block per output;
-#   - else `:by_block`, a block per output, grid-striding over the outputs with at most
-#     `target_blocks` blocks.
+#   - fewer than FEW_OUTPUTS outputs: `ByBlocks`, its blocks per output launching about the
+#     tuning's `target_blocks` blocks, or `ByBlock` with a block per output where that is one;
+#   - else `ByBlock`, grid-striding over the outputs with at most `target_blocks` blocks.
 function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
                       ::Type{A}) where {A}
     target_blocks = t.target_blocks
@@ -74,7 +122,7 @@ function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
        (t.segments_short_runs || reduce_size >= block_size)
         lanes = lanes_per_output(dst_size, reduce_size, block_size)
         if lanes > 1 && cld(reduce_size, lanes) * accsize(A) <= t.segments_lane_bytes
-            return :by_lanes, lanes
+            return ByLanes(lanes)
         end
     end
 
@@ -92,19 +140,17 @@ function reduce_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
 
     if dst_size >= reduce_size && !use_by_block
-        return :by_thread, 0
-    elseif use_by_block
-        return :by_block, 0
-    elseif dst_size == 1 || dst_size < FEW_OUTPUTS
-        reduce_groups = min(
+        return ByThread()
+    elseif !use_by_block && dst_size < FEW_OUTPUTS
+        groups = min(
             cld(reduce_size, block_size),
             block_size,
             cld(target_blocks, dst_size),
             cld(reduce_size, block_size * SPLIT_MIN_ITEMS),
         )
-        return reduce_groups > 1 ? (:multigroup, reduce_groups) : (:by_block_each, 0)
+        return groups > 1 ? ByBlocks(groups) : ByBlock(dst_size)
     else
-        return :by_block, 0
+        return ByBlock(min(dst_size, target_blocks))
     end
 end
 
@@ -126,40 +172,40 @@ end
 function strided_shape(dst_size, reduce_size, run, block_size, t::ReduceTuning,
                        ::Type{A}) where {A}
     if widemul(dst_size, accsize(A)) >= BY_THREAD_ROW_BYTES || reduce_size < COLUMNS_MIN_REDUCE
-        return :by_thread, 0
+        return ByThread()
     end
     threads = min(block_size, COLUMNS_MAX_THREADS)
-    cols = columns_outputs(run)
+    outputs = columns_outputs(run)
     runs = dst_size ÷ run
-    tiles = runs * cld(run, cols)
+    tiles = runs * cld(run, outputs)
     rows = TILED_OUTPUTS
     if runs == 1 && dst_size >= reduce_size && tiles < t.target_blocks &&
        block_size % rows == 0 && ispow2(block_size ÷ rows) && reduce_size >= block_size ÷ rows
-        return :tiled_strided, 0
+        return Tiled()
     end
-    run >= COLUMNS_MIN_OUTPUTS && threads >= cols || return nothing
-    lanes = threads ÷ cols
+    run >= COLUMNS_MIN_OUTPUTS && threads >= outputs || return nothing
+    lanes = threads ÷ outputs
     groups = clamp(cld(t.target_blocks, tiles), 1, cld(reduce_size, lanes * SPLIT_MIN_ITEMS))
     groups > 1 && widemul(dst_size, reduce_size) < t.columns_min_elements && return nothing
-    return :columns, groups
+    return Columns(outputs, groups, false)
 end
 
 # The launch shape of a reduction in element order (`commutative=false`), from the shape
 # `reduce_shape` chose for it: one thread per output, which reduces its slice in order,
 # where that shape is one, or for runs shorter than a block; the columns kernel in order for
 # strided reductions into contiguous outputs, which it reads coalesced across outputs; else
-# `:ordered`, a block per output, or the groups of a `:multigroup` reduction. Split reductions keep
-# the chosen shape's blocks per output.
-function ordered_shape(shape, reduce_groups, dst_size, reduce_size, block_size)
-    (shape === :by_thread || shape === :by_lanes && reduce_size < block_size) &&
-        return :by_thread, 0
-    shape === :columns && return :columns_ordered, reduce_groups
-    shape === :tiled_strided && min(block_size, COLUMNS_MAX_THREADS) >= columns_outputs(dst_size) &&
-        return :columns_ordered, 1
-    return :ordered, shape === :multigroup ? reduce_groups : 1
+# `Ordered`, a block per output, or the groups of a `ByBlocks` reduction.
+function ordered_shape(shape::ReduceShape, dst_size, reduce_size, block_size)
+    (shape isa ByThread || shape isa ByLanes && reduce_size < block_size) && return ByThread()
+    shape isa Columns && return Columns(shape.outputs, shape.groups, true)
+    if shape isa Tiled
+        outputs = columns_outputs(dst_size)
+        min(block_size, COLUMNS_MAX_THREADS) >= outputs && return Columns(outputs, 1, true)
+    end
+    return Ordered(shape isa ByBlocks ? shape.groups : 1)
 end
 
-# The lanes per output of a `:by_lanes` reduction: about the square root of the length of the
+# The lanes per output of a `ByLanes` reduction: about the square root of the length of the
 # runs, and more (keeping 16 elements per lane) while fewer than LANES_MIN_THREADS threads
 # would run; a power of two of at most 32 and the block size. Measured on an M1, from runs of 8
 # elements (2 lanes) to 2048 (32 lanes).
@@ -173,7 +219,7 @@ function lanes_per_output(dst_size, reduce_size, block_size)
     return lanes
 end
 
-# The size of the accumulator, which the lanes of a `:by_lanes` reduction each reduce a share of
+# The size of the accumulator, which the lanes of a `ByLanes` reduction each reduce a share of
 # the run into; an indicative size for types without one
 accsize(::Type{A}) where {A} = isbitstype(A) && sizeof(A) > 0 ? sizeof(A) : 8
 
@@ -181,36 +227,51 @@ accsize(::Type{A}) where {A} = isbitstype(A) && sizeof(A) > 0 ? sizeof(A) : 8
 columns_outputs(dst_size) = min(nextpow(2, dst_size), COLUMNS_OUTPUTS)
 
 # The launch of a reduction along `dims` of `src` into `dst_size` outputs, chosen once by its
-# setup, and the scratch it takes. The launch holds where the kernels find the source's elements
-# (see `buffer_kind`), at which offset, the segments of its layout (see `source_layout` and
-# `merge_dims`), and the launch shape with its parameter: that of `reduce_shape`, or of
-# `ordered_shape` for `commutative=false`, or `:whole` for the whole-array kernels, which reduce
-# a single output of a contiguous source; `:none` where no kernel runs (at most one element per
-# output, no outputs, or no accumulator type). The scratch holds the partial results of a
-# reduction in two passes, with the type of the partial-result seed `seed` (see `reduce_seed`).
-# The threaded algorithm takes no launch.
-select_launch(src, backend, alg, ::Type{A}, seed, rdims, dst_size, commutative) where {A} =
-    nothing, (;)
-function select_launch(src, backend, alg::BlockReduce, ::Type{A}, seed, rdims, dst_size,
+# setup; the threaded algorithm takes none. `shape` is that of `reduce_shape`, or of
+# `ordered_shape` for `commutative=false`, or `Whole` for a single output of a contiguous source;
+# `nothing` where no kernel runs (at most one element per output, no outputs, or no accumulator
+# type). `buffer` is where the kernels find the source's elements (see `buffer_kind`), from
+# `offset` on, and `segs` the segments of its layout (see `source_layout` and `merge_dims`).
+struct DimsLaunch{G}
+    # (abstract, so that the setups holding it infer; the launch dispatches on it)
+    shape::Union{Nothing, ReduceShape}
+    buffer::Symbol
+    offset::Int
+    segs::G
+end
+
+select_launch(src, backend, alg, ::Type{A}, rdims, dst_size, commutative) where {A} = nothing
+function select_launch(src, backend, alg::BlockReduce, ::Type{A}, rdims, dst_size,
                        commutative) where {A}
     strided = strided_layout(src)
     layout = isnothing(strided) ? linear_layout(src) : strided
     segs = merge_dims(size(src), layout.strides, rdims)
     kind, offset = buffer_kind(src, strided), layout.offset::Int
-    launch(shape, param) = (; shape, param, buffer=kind, offset, segs, commutative)
+    launch(shape) = DimsLaunch(shape, kind, offset, segs)
     len = Base.prod(size(src)[d] for d in rdims; init=1)
-    (len <= 1 || dst_size == 0 || A === Union{}) && return launch(:none, 0), (;)
-    tuning = reduce_tuning(backend, A)
+    (len <= 1 || dst_size == 0 || A === Union{}) && return launch(nothing)
     (rstrides, _, nr), _ = segs
     if dst_size == 1 && (isnothing(strided) || nr == 1 && rstrides[1] == 1)
-        n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
-                                  tuning.target_blocks)
-        return launch(:whole, 0), n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
+        return launch(Whole(!commutative))
     end
-    shape, param = reduce_shape(dst_size, len, segs, alg.block_size, tuning, A)
-    commutative || ((shape, param) = ordered_shape(shape, param, dst_size, len, alg.block_size))
-    two_pass = shape === :multigroup || param > 1 &&
-               (shape === :ordered || shape === :columns || shape === :columns_ordered)
-    return launch(shape, param),
-           two_pass ? (; partials=scratch(typeof(seed), dst_size, param)) : (;)
+    shape = reduce_shape(dst_size, len, segs, alg.block_size, reduce_tuning(backend, A), A)
+    commutative || (shape = ordered_shape(shape, dst_size, len, alg.block_size))
+    return launch(shape)
+end
+
+# The scratch of the launch `launch` of a reduction along `dims` of `src` into `dst_size`
+# outputs: the partial results of a reduction in two passes, with the type of the partial-result
+# seed `seed` (see `reduce_seed`)
+launch_scratch(launch, src, backend, alg, A, seed, rdims, dst_size) = (;)
+function launch_scratch(launch::DimsLaunch, src, backend, alg, ::Type{A}, seed, rdims,
+                        dst_size) where {A}
+    shape = launch.shape
+    if shape isa Whole
+        len = Base.prod(size(src)[d] for d in rdims; init=1)
+        n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
+                                  reduce_tuning(backend, A).target_blocks)
+        return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
+    end
+    groups = split_groups(shape)
+    return groups > 1 ? (; partials=scratch(typeof(seed), dst_size, groups)) : (;)
 end

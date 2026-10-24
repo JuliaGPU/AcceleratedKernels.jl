@@ -719,12 +719,18 @@ end
 # each launch shape and vector-load path reach them with this backend's tuning
 if TEST_KERNELS
 @testset "reduce: launch paths" begin
-    # The launch shape of a reduction of `x` along `dims` with operator `op`, and its parameter
-    # (the blocks per output of `:columns` and `:multigroup`), as its setup chooses them
-    function launch_shape(x, dims, op; commutative=true)
-        launch = AK.mapreduce_setup(identity, op, x, BACKEND, AK.NoInit(), nothing, nothing, dims,
-                                    REDUCE_ALG; commutative).launch
-        return launch.shape, launch.param
+    # The launch shape of a reduction of `x` along `dims` with operator `op`, as its setup
+    # chooses it
+    launch_shape(x, dims, op; commutative=true) =
+        AK.mapreduce_setup(identity, op, x, BACKEND, AK.NoInit(), nothing, nothing, dims,
+                           REDUCE_ALG; commutative).launch.shape
+    # ... as a name, which tells grid-striding blocks and columns in order apart
+    function shape_name(x, dims, op; commutative=true)
+        shape = launch_shape(x, dims, op; commutative)
+        dst_size = length(x) ÷ prod(size(x, d) for d in dims)
+        shape isa AK.ByBlock && shape.blocks < dst_size && return :ByBlockStrided
+        shape isa AK.Columns && shape.ordered && return :ColumnsOrdered
+        return nameof(typeof(shape))
     end
     # The width of the vector loads of the reduction of `x` along `dims` (0 for scalar loads)
     function vector_width(x, dims)
@@ -738,36 +744,36 @@ if TEST_KERNELS
     end
 
     # "reduce: runs of consecutive elements"
-    @test launch_shape(Array{Int32}(undef, 512, 1000), 1, +)[1] === :by_lanes
+    @test launch_shape(Array{Int32}(undef, 512, 1000), 1, +) isa AK.ByLanes
     # "reduce: strided slices", in two passes and in one
     for sz in ((8, 600_000), (40, 110_000))
-        shape, groups = launch_shape(Array{Int8}(undef, sz), 2, Base.add_sum)
-        @test shape === :columns && groups > 1
+        shape = launch_shape(Array{Int8}(undef, sz), 2, Base.add_sum)
+        @test shape isa AK.Columns && shape.groups > 1
     end
-    @test launch_shape(Array{Int32}(undef, 4096, 1024), 2, +)[1] === :tiled_strided
-    @test launch_shape(Array{Int32}(undef, 8192, 300), 2, +) === (:columns, 1)
-    @test launch_shape(Array{Int64}(undef, 8192, 300), 2, +)[1] === :by_thread
+    @test launch_shape(Array{Int32}(undef, 4096, 1024), 2, +) isa AK.Tiled
+    @test launch_shape(Array{Int32}(undef, 8192, 300), 2, +) == AK.Columns(32, 1, false)
+    @test launch_shape(Array{Int64}(undef, 8192, 300), 2, +) isa AK.ByThread
     for x in (Array{Int32}(undef, 96, 7000, 10), Array{Int32}(undef, 40, 30_000, 3, 2),
               view(Array{Int32}(undef, 50, 30_000, 7), 3:42, :, 1:2:7))
-        @test launch_shape(x, 2, +)[1] === :columns
+        @test launch_shape(x, 2, +) isa AK.Columns
     end
 
     # "reduce: non-commutative": every shape in order, and every shape of the commutative
     # reductions with the default settings (tunings can rule some out)
-    shapes = Set(launch_shape(Array{Mat2}(undef, sz), dims, matmul2)[1] =>
-                 launch_shape(Array{Mat2}(undef, sz), dims, matmul2; commutative=false)[1]
+    shapes = Set(shape_name(Array{Mat2}(undef, sz), dims, matmul2) =>
+                 shape_name(Array{Mat2}(undef, sz), dims, matmul2; commutative=false)
                  for (sz, dims) in ORDERED_CASES)
-    @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
+    @test Set(last.(shapes)) == Set((:ByThread, :ColumnsOrdered, :Ordered))
     t = AK.reduce_tuning(BACKEND, Mat2)
     if AK.resolve_reduce(REDUCE_ALG, BACKEND, Mat2, 1).block_size == 256 &&
        t.columns_min_elements <= 1 << 18
-        required = Set((:by_thread => :by_thread,
-                        :columns => :columns_ordered, :tiled_strided => :columns_ordered,
-                        :by_block => :ordered, :by_block_each => :ordered,
-                        :multigroup => :ordered))
-        t.segments_short_runs && push!(required, :by_lanes => :by_thread)
+        required = Set((:ByThread => :ByThread,
+                        :Columns => :ColumnsOrdered, :Tiled => :ColumnsOrdered,
+                        :ByBlockStrided => :Ordered, :ByBlock => :Ordered,
+                        :ByBlocks => :Ordered))
+        t.segments_short_runs && push!(required, :ByLanes => :ByThread)
         # (the (512, 40) case has 256 bytes per lane)
-        t.segments_lane_bytes >= 256 && push!(required, :by_lanes => :ordered)
+        t.segments_lane_bytes >= 256 && push!(required, :ByLanes => :Ordered)
         @test shapes ⊇ required
     end
 
