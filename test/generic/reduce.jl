@@ -1383,6 +1383,10 @@ end
     @test AK.reduce(+, v8; alg) === Int8(-29)
     @test AK.reduce(+, v8; init=0, alg) === 227
     @test AK.sum(array_from_host([1, 2]); init=Int8(0), alg) === 3
+    @test AK.reduce(+, array_from_host(Float32[1, 2]); init=0, alg) === 3.0f0
+    # (`init` is not a partial result: only the type of `op(init, x)` counts)
+    @test AK.reduce((a, b) -> something(a, 0) + something(b, 0), array_from_host(Int32[1, 2]);
+                    init=nothing, alg) === 3
     @test AK.reduce((a, b) -> Base.add_sum(a, b), v8; alg) === 227
     @test AK.maximum(v8; alg) === Int8(100)
     # ... joined with the one-element partial results': here the element type, not the narrower
@@ -1404,6 +1408,8 @@ end
     # a negative zero
     for n in (1, 2, 1000)
         @test AK.sum(array_from_host(fill(-0.0f0, n)); alg) === -0.0f0
+        @test AK.sum(array_from_host(fill(complex(-0.0f0, -0.0f0), n)); alg) ===
+              complex(-0.0f0, -0.0f0)
         @test Base.all(signbit, Array(AK.sum(array_from_host(fill(-0.0f0, 2, n)); dims=2, alg)))
     end
 
@@ -1477,9 +1483,12 @@ end
     @test Array(AK.reduce(throws, array_from_host(Int32[5 6]); dims=1, alg)) == [5 6]
     @test_throws ArgumentError AK.reduce(throws, array_from_host(Int32[5, 6]); alg)
     @test_throws ArgumentError AK.reduce(throws, array_from_host(Int32[5, 6]); dims=1, alg)
-    # On the host, an abstract accumulator type with the caller's neutral element
+    # On the host, an abstract accumulator type with the caller's neutral element, and partial
+    # results of a type that is not a bits type without one
     if !TEST_KERNELS
         @test AK.reduce(+, Real[1, 2.5, 3]; neutral=0, alg=AK.CPUThreads.Partitioned(max_tasks=2, min_elems=1)) == 6.5
+        @test AK.reduce((a, b) -> a * b, fill("x", 8);
+                        alg=AK.CPUThreads.Partitioned(max_tasks=4, min_elems=2)) == "x"^8
     end
 
     # Operators without a known neutral element: partial results start from their first element

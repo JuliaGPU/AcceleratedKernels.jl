@@ -64,28 +64,25 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
 @testset "sort resolution: Auto" begin
     v = zeros(Float32, 1000)
 
-    # The default tuning reproduces AK's historical choices and settings
-    @test resolve(AK.Auto(), v) === AK.MergeSort(256, false)
-    @test resolve(AK.Auto(), v; perm=true) === AK.MergeSort(256, false)
-    @test resolve(AK.Auto(), v; pairs=true) === AK.MergeSort(256, false)
-    @test resolve(AK.Auto(), zeros(Int32, 10^8 ÷ 100)) isa AK.MergeSort
+    # A tuning without thresholds: merge sort, filled as an explicit one; on the host backend,
+    # the threaded sample sort
+    for kw in ((;), (perm=true,), (pairs=true,))
+        @test resolve(AK.Auto(), v; kw...) === resolve(AK.MergeSort(), v; kw...)
+        @test resolve(AK.Auto(), v; backend=HOST, kw...) ===
+              resolve(AK.CPUThreads.SampleSort(), v; backend=HOST, kw...)
+    end
+    @test resolve(AK.Auto(), zeros(Int32, 10^6)) isa AK.MergeSort
     @test resolve(AK.Auto(), zeros(Int32, 10, 10); dims=1) isa AK.MergeSort
-
-    # On the host backend: the threaded sample sort, filled
-    a = resolve(AK.Auto(), v; backend=HOST)
-    @test a isa AK.CPUThreads.SampleSort
-    @test a.max_tasks == Threads.nthreads() && a.min_elems == 1
-    @test resolve(AK.Auto(), v; backend=HOST, perm=true) isa AK.CPUThreads.SampleSort
-    @test resolve(AK.Auto(), v; backend=HOST, pairs=true) isa AK.CPUThreads.SampleSort
 
     # Thresholds: bitonic sort up to and including `bitonic_max_len`, radix sort from
     # `radix_min_len`, for element types and orderings where they give the same result
     with_tuning(AK.SortTuning(bitonic_max_len=1024, radix_min_len=4096, radix_block_size=128,
-                              radix_items_per_thread=4, bitonic_block_size=64, bitonic_items_per_thread=4)) do
+                              radix_items_per_thread=4, radix_chunk_size=64, bitonic_block_size=64,
+                              bitonic_items_per_thread=4)) do
         @test resolve(AK.Auto(), zeros(Int32, 1024)) === AK.BitonicSort(64, 4)
         @test resolve(AK.Auto(), zeros(Int32, 1025)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 4095)) isa AK.MergeSort
-        @test resolve(AK.Auto(), zeros(Int32, 4096)) === AK.RadixSort(128, 4, 32)
+        @test resolve(AK.Auto(), zeros(Int32, 4096)) === AK.RadixSort(128, 4, 64)
         @test resolve(AK.Auto(), zeros(Int32, 4096); ord=REV) isa AK.RadixSort
         @test resolve(AK.Auto(), zeros(Int32, 64, 16); dims=1) isa AK.BitonicSort
         @test resolve(AK.Auto(), zeros(Int32, 2048, 16); dims=1) isa AK.MergeSort
@@ -147,8 +144,10 @@ end
         @test resolve(AK.RadixSort(chunk_size=16), v) === AK.RadixSort(512, 8, 16)
         @test resolve(AK.BitonicSort(block_size=128), v) === AK.BitonicSort(128, 16)
     end
+    # (on the host, `max_tasks` defaults to the number of threads)
+    min_elems = AK.sort_tuning(HOST, Float32).threads_min_elems
     @test resolve(AK.CPUThreads.SampleSort(max_tasks=3), v; backend=HOST) ===
-          AK.CPUThreads.SampleSort(3, 1)
+          AK.CPUThreads.SampleSort(3, min_elems)
     @test resolve(AK.CPUThreads.SampleSort(min_elems=5), v; backend=HOST) ===
           AK.CPUThreads.SampleSort(Threads.nthreads(), 5)
 
@@ -323,31 +322,28 @@ resolve_reduce(alg; T=Float32, dims=:, backend=FAKE) = AK.resolve_reduce(alg, ba
 
 
 @testset "reduce resolution: Auto" begin
-    # The default tuning, for whole arrays and `dims`
-    @test resolve_reduce(AK.Auto()) === AK.BlockReduce(256, 16, 0)
-    @test resolve_reduce(AK.Auto(); dims=nothing) === AK.BlockReduce(256, 16, 0)
-    @test resolve_reduce(AK.Auto(); dims=2) === AK.BlockReduce(256, 16, 0)
-    @test resolve_reduce(AK.Auto(); dims=(1, 3)) === AK.BlockReduce(256, 16, 0)
+    # On a GPU, BlockReduce, whose every field the tuning fills, for whole arrays and along `dims`;
+    # `stable` means nothing to a reduction
+    with_tuning(AK.ReduceTuning(block_size=512, items_per_thread=4, switch_below=100)) do
+        for dims in (:, nothing, 2, (1, 3))
+            @test resolve_reduce(AK.Auto(); dims) === AK.BlockReduce(512, 4, 100)
+        end
+        @test resolve_reduce(AK.Auto(stable=false)) === AK.BlockReduce(512, 4, 100)
+    end
 
     # On the host backend: the threaded algorithm, filled
-    @test resolve_reduce(AK.Auto(); backend=HOST) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
-    @test resolve_reduce(AK.Auto(); backend=HOST, dims=1) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
-
-    # The tuning fills every field; `stable` means nothing to a reduction
-    with_tuning(AK.ReduceTuning(block_size=512, items_per_thread=4, switch_below=100)) do
-        @test resolve_reduce(AK.Auto()) === AK.BlockReduce(512, 4, 100)
-        @test resolve_reduce(AK.Auto(stable=false)) === AK.BlockReduce(512, 4, 100)
+    for dims in (:, 1)
+        @test resolve_reduce(AK.Auto(); backend=HOST, dims) ===
+              resolve_reduce(AK.CPUThreads.Partitioned(); backend=HOST, dims)
     end
 
     # A tuning without `items_per_thread` loads 64 bytes of accumulators per thread and tile, 4 to
     # 16 elements
-    @test resolve_reduce(AK.Auto(); T=Float64) === AK.BlockReduce(256, 8, 0)
-    @test resolve_reduce(AK.Auto(); T=NTuple{8, Float64}) === AK.BlockReduce(256, 4, 0)
-    @test resolve_reduce(AK.Auto(); T=Union{}) === AK.BlockReduce(256, 4, 0)
     with_tuning(AK.ReduceTuning(block_size=512, switch_below=100)) do
-        @test resolve_reduce(AK.Auto(); T=Int8) === AK.BlockReduce(512, 16, 100)
+        for (T, items_per_thread) in ((Int8, 16), (Float32, 16), (Float64, 8),
+                                      (NTuple{8, Float64}, 4), (Union{}, 4))
+            @test resolve_reduce(AK.Auto(); T) === AK.BlockReduce(512, items_per_thread, 100)
+        end
     end
 end
 
@@ -363,7 +359,7 @@ end
         @test resolve_reduce(AK.BlockReduce(block_size=128); dims=1) === AK.BlockReduce(128, 4, 100)
     end
     @test resolve_reduce(AK.CPUThreads.Partitioned(max_tasks=3); backend=HOST) ===
-          AK.CPUThreads.Partitioned(3, 1)
+          AK.CPUThreads.Partitioned(3, AK.reduce_tuning(HOST, Float32).threads_min_elems)
     @test resolve_reduce(AK.CPUThreads.Partitioned(min_elems=1000); backend=HOST) ===
           AK.CPUThreads.Partitioned(Threads.nthreads(), 1000)
 
@@ -386,11 +382,11 @@ end
     # Whole-array reductions need tiles of at least two elements (one never shrinks the input)
     # and at most typemax(Int32), whether the settings are explicit or from the tuning
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(block_size=1, items_per_thread=1))
-    @test resolve_reduce(AK.BlockReduce(block_size=1, items_per_thread=2)) === AK.BlockReduce(1, 2, 0)
-    @test resolve_reduce(AK.BlockReduce(block_size=1); dims=1) === AK.BlockReduce(1, 16, 0)
+    @test resolve_reduce(AK.BlockReduce(block_size=1, items_per_thread=2)).items_per_thread == 2
+    @test resolve_reduce(AK.BlockReduce(block_size=1); dims=1).block_size == 1
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(items_per_thread=1 << 56))
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(block_size=1024, items_per_thread=1 << 22))
-    with_tuning(AK.ReduceTuning(block_size=1, items_per_thread=1)) do
+    with_tuning(AK.ReduceTuning(block_size=1, items_per_thread=1, switch_below=0)) do
         @test_throws ArgumentError resolve_reduce(AK.Auto())
         @test resolve_reduce(AK.Auto(); dims=2) === AK.BlockReduce(1, 1, 0)
     end
@@ -399,7 +395,7 @@ end
     @test_throws ArgumentError resolve_reduce(AK.CPUThreads.Partitioned())
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=NoKernelsBackend())
     if AK.runs_kernels(HOST)
-        @test resolve_reduce(AK.BlockReduce(); backend=HOST) === AK.BlockReduce(256, 16, 0)
+        @test resolve_reduce(AK.BlockReduce(); backend=HOST) isa AK.BlockReduce
     else
         @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=HOST)
     end
@@ -460,38 +456,7 @@ end
 end
 
 
-@testset "reduce resolution: accumulator and seed" begin
-    # The accumulator type follows Base's promotion to a fixed point
-    @test AK.accumulator_type(Base.add_sum, Int8, Int8) === Int
-    @test AK.accumulator_type(+, Int8, Int8) === Int8
-    @test AK.accumulator_type(+, Bool, Bool) === Int
-    @test AK.accumulator_type(+, Int, Float32) === Float32
-    @test AK.accumulator_type(max, Tuple{Int32, Int32}, Tuple{Int32, Int32}) === Tuple{Int32, Int32}
-    @test AK.first_type(Base.add_sum, Int8) === Int
-    if VERSION >= v"1.13-"      # older `add_sum`s keep mixed-signedness small integers small
-        @test AK.accumulator_type(Base.add_sum, UInt8, Int8) === Int
-        @test AK.accumulator_type(Base.add_sum, UInt8, Bool) === Int
-    end
-    @test AK.accumulator_type(+, Union{}, Char) === Union{}
-    @test AK.accumulator_type(Returns(false), Union{}, Int) === Int
-    @test AK.accumulator_type(coalesce, Int, Union{Missing, Int}) === Union{Missing, Int}
-    # `init` is applied once, not a partial result: only `op(init, x)`'s type counts
-    @test AK.accumulator_type((a, b) -> something(a, 0) + something(b, 0), Nothing, Int) === Int
-
-    # Seeds: the caller's neutral, else GPUArraysCore's, else an empty lane
-    @test AK.reduce_seed(+, Int32, nothing) === Int32(0)
-    @test AK.reduce_seed(min, Float32, nothing) === Inf32
-    @test AK.reduce_seed(+, Float32, nothing) === -0.0f0
-    @test AK.reduce_seed(Base.add_sum, ComplexF32, nothing) === complex(-0.0f0, -0.0f0)
-    @test AK.reduce_seed(+, Int32, 0) === Int32(0)
-    @test AK.reduce_seed((a, b) -> a + b, Int32, nothing) isa AK.Optional{Int32}
-    @test !AK.isset(AK.reduce_seed((a, b) -> a + b, Int32, nothing))
-    # Empty lanes of every kind of type
-    @test !AK.isset(AK.Optional{Tuple{Int8, Int64}}())
-    @test !AK.isset(AK.Optional{Union{Missing, Int}}())
-    @test !AK.isset(AK.Optional{String}())
-    @test AK.isset(AK.Optional{String}("x"))
-
+@testset "reduce resolution: accumulator types" begin
     # Results infer, whether or not the operator has a known neutral element
     @test only(Base.return_types(v -> AK.sum(v), (Vector{Int8},))) === Int
     @test only(Base.return_types(v -> AK.reduce((a, b) -> a + b, v), (Vector{Int32},))) === Int32
@@ -510,24 +475,27 @@ resolve_scan(alg; T=Float32, dims=nothing, backend=FAKE) = AK.resolve_scan(alg, 
 
 
 @testset "scan resolution: Auto" begin
-    # The default tuning reproduces AK's historical settings: 256 threads, at most 8 items per
-    # thread, fewer for wide element types
-    @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
-    @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
-    @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
-    @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
+    # On a GPU, ScanPrefixes for whole arrays and SliceScan along `dims`, with the tuning's block
+    # size and as many items per thread as fit its local memory, at most `max_items`
+    with_tuning(AK.ScanTuning(block_size=256, local_mem_bytes=32 * 1024, max_items=8)) do
+        @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
+        @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
+        @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
+        @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
+    end
 
     # On the host backend: the threaded algorithm, filled
-    @test resolve_scan(AK.Auto(); backend=HOST) === AK.CPUThreads.Partitioned(Threads.nthreads(), 2)
-    @test resolve_scan(AK.Auto(); backend=HOST, dims=1) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 2)
+    for dims in (nothing, 1)
+        @test resolve_scan(AK.Auto(); backend=HOST, dims) ===
+              resolve_scan(AK.CPUThreads.Partitioned(); backend=HOST, dims)
+    end
 end
 
 
 @testset "scan resolution: explicit algorithms" begin
     # Explicit fields win over the tuning; `items_per_thread` is derived from the effective
     # `block_size`, so an explicit block size gets a matching default
-    with_tuning(AK.ScanTuning(block_size=128, max_items=16)) do
+    with_tuning(AK.ScanTuning(block_size=128, local_mem_bytes=32 * 1024, max_items=16)) do
         @test resolve_scan(AK.ScanPrefixes()) === AK.ScanPrefixes(128, 16)
         @test resolve_scan(AK.ScanPrefixes(block_size=1024)) === AK.ScanPrefixes(1024, 7)
         @test resolve_scan(AK.ScanPrefixes(block_size=1024, items_per_thread=12)) ===
@@ -539,7 +507,7 @@ end
         @test resolve_scan(AK.ScanPrefixes(block_size=1024)) === AK.ScanPrefixes(1024, 1)
     end
     @test resolve_scan(AK.CPUThreads.Partitioned(max_tasks=3); backend=HOST) ===
-          AK.CPUThreads.Partitioned(3, 2)
+          AK.CPUThreads.Partitioned(3, AK.scan_tuning(HOST, Float32).threads_min_elems)
 
     # Domains of explicit fields
     for bad in (AK.ScanPrefixes(block_size=0), AK.ScanPrefixes(block_size=96),
@@ -565,9 +533,11 @@ end
     # Tiles of partial results: lanes (a Bool and a value) are wider than elements, so fewer fit.
     # NTuple{3, Int32} is 4-byte aligned everywhere, so its lanes take 16 bytes on every platform
     # (Int64 lanes take 12 on 32-bit x86)
-    @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
-    @test AK.resolve_scan(AK.Auto(), FAKE, NTuple{3, Int32}, nothing,
-                          AK.Optional{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
+    with_tuning(AK.ScanTuning(block_size=256, local_mem_bytes=32 * 1024, max_items=8)) do
+        @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
+        @test AK.resolve_scan(AK.Auto(), FAKE, NTuple{3, Int32}, nothing,
+                              AK.Optional{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
+    end
 
     # Kernels need a bits-type element
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); T=String)
@@ -614,16 +584,21 @@ end
 
 @testset "predicate resolution" begin
     @test AK.resolve_predicate(AK.Auto(), HOST, Float32) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
-    @test AK.resolve_predicate(AK.Auto(), FAKE, Float32) === AK.ConcurrentWrite(256)
-    with_tuning(AK.PredicateTuning(prefer_concurrent_write=false)) do
-        @test AK.resolve_predicate(AK.Auto(), FAKE, Float32) === AK.ViaReduce(AK.BlockReduce(256, 16, 0))
-        # The nested reduction is resolved like any reduction
+          AK.resolve_predicate(AK.CPUThreads.Partitioned(), HOST, Float32)
+    # On a GPU, ConcurrentWrite, or ViaReduce where the tuning prefers it, whose reduction is
+    # resolved like any reduction
+    with_tuning(AK.PredicateTuning(block_size=128)) do
+        @test AK.resolve_predicate(AK.Auto(), FAKE, Float32) === AK.ConcurrentWrite(128)
+    end
+    with_tuning(AK.PredicateTuning(prefer_concurrent_write=false, block_size=128)) do
+        @test AK.resolve_predicate(AK.Auto(), FAKE, Float32) ===
+              AK.ViaReduce(AK.resolve_reduce(AK.BlockReduce(), FAKE, Bool, :))
         @test AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=64)), FAKE, Float32) ===
-              AK.ViaReduce(AK.BlockReduce(64, 16, 0))
-        @test_throws ArgumentError AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)), FAKE, Float32)
-        # A tuning only guides `Auto`
-        @test AK.resolve_predicate(AK.ConcurrentWrite(), FAKE, Float32) === AK.ConcurrentWrite(256)
+              AK.ViaReduce(AK.resolve_reduce(AK.BlockReduce(block_size=64), FAKE, Bool, :))
+        @test_throws ArgumentError AK.resolve_predicate(AK.ViaReduce(AK.BlockReduce(block_size=3)),
+                                                        FAKE, Float32)
+        # (a tuning only guides `Auto`)
+        @test AK.resolve_predicate(AK.ConcurrentWrite(), FAKE, Float32) === AK.ConcurrentWrite(128)
     end
     for bad in (AK.ConcurrentWrite(block_size=0), AK.ConcurrentWrite(block_size=96),
                 AK.ConcurrentWrite(block_size=2048))
@@ -642,7 +617,7 @@ end
         @test AK.resolve_findall(AK.ScanScatter(block_size=64), FAKE, Bool) === AK.ScanScatter(64, 4)
     end
     @test AK.resolve_findall(AK.Auto(), HOST, Bool) ===
-          AK.CPUThreads.Partitioned(Threads.nthreads(), 1)
+          AK.resolve_findall(AK.CPUThreads.Partitioned(), HOST, Bool)
     for bad in (AK.ScanScatter(block_size=0), AK.ScanScatter(block_size=96),
                 AK.ScanScatter(block_size=2048), AK.ScanScatter(items_per_thread=0),
                 AK.ScanScatter(block_size=1024, items_per_thread=1 << 22))
