@@ -15,7 +15,9 @@ end
     ViaReduce(; reduce::ReduceAlgorithm=BlockReduce())
 
 `any`/`all` as a reduction with `|` or `&`, using the reduction algorithm `reduce`. It runs on
-every backend that runs AcceleratedKernels' kernels, but reads every element.
+every backend that runs AcceleratedKernels' kernels. Both algorithms read every element, but
+this one takes the reduction's passes over partial results, where [`ConcurrentWrite`](@ref)
+takes a single pass.
 """
 Base.@kwdef struct ViaReduce{R <: ReduceAlgorithm} <: PredicateAlgorithm
     reduce::R = BlockReduce()
@@ -133,9 +135,9 @@ reduction.
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and [`ConcurrentWrite`](@ref) on GPUs
-([`ViaReduce`](@ref) on oneAPI and Metal). `backend` is derived from `v`; pass it for inputs that do not
-determine it, such as index ranges. `workspace` takes
-the scratch memory of a [`workspace`](@ref) made for the same call.
+([`ViaReduce`](@ref) on oneAPI and Metal). `backend` is derived from `v`; pass it for inputs
+that do not determine it, such as index ranges. `workspace` takes the scratch memory of a
+[`workspace`](@ref) made for the same call.
 
 On the host, multithreaded parallelisation is only worth it for large arrays, relatively expensive
 predicates, and/or rare occurrence of true; use `CPUThreads.Partitioned(; max_tasks, min_elems)`
