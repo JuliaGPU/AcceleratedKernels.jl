@@ -60,9 +60,10 @@ mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) =
     min(cld(len, block_size * items_per_thread), max_blocks)
 
 # Reduce the non-empty `src`; `seed` is the partial-result seed of `reduce_seed`, `init` is a
-# value, `NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `mapreduce_1d_partials`
-# partial results (`nothing` if none are needed). Without `dst`, returns the result as a host
-# value; with `dst`, stores it in `dst[1]` on the device.
+# value, `NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds the partial results of
+# `mapreduce_1d_partials` (with `dst`) or `mapreduce_1d_host_partials` (`nothing` if none are
+# needed). Without `dst`, returns the result as a host value; with `dst`, stores it in `dst[1]`
+# on the device.
 function mapreduce_1d_gpu(
     f::F, op::OP, src::MapReduceSource, backend::Backend;
     init,
@@ -163,16 +164,16 @@ on_host(x) = x
 mapreduce_1d_view(src::AbstractArray) = @view src[begin:end]
 mapreduce_1d_view(src::Base.Broadcast.Broadcasted) = src
 
-# The number of partial results of `mapreduce_1d_gpu` over `len` elements: one per block of the
-# first pass, and for a host result (`device=false`) a slot for the last partial; 0 when it needs
-# none
-function mapreduce_1d_partials(len, block_size, items_per_thread, max_blocks, switch_below;
-                               device::Bool=false)
-    if device
-        len <= 1 && return 0
-        blocks = mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
-        return blocks == 1 ? 0 : blocks
-    end
+# The number of partial results `mapreduce_1d_gpu` stores over `len` elements into `dst`: one
+# per block of the first pass, or none when one block reduces them all
+function mapreduce_1d_partials(len, block_size, items_per_thread, max_blocks)
+    len <= 1 && return 0
+    blocks = mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
+    return blocks == 1 ? 0 : blocks
+end
+# ... and for a host result: one per block of the first pass and a slot for the last pass's
+# partial result, or none when the host reduces them (fewer than `switch_below` elements)
+function mapreduce_1d_host_partials(len, block_size, items_per_thread, max_blocks, switch_below)
     (len <= 1 || len < switch_below) && return 0
     return mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) + 1
 end

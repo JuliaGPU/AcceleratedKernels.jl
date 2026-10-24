@@ -207,7 +207,7 @@ function mapreduce_nd_sizes(src, backend, alg, ::Type{A}, seed, rdims, dst_size)
     (len <= 1 || dst_size == 0) && return (;)
     if dst_size == 1 && linear_source(src, rdims) !== nothing
         n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
-                                  reduce_tuning(backend, A).target_blocks, 0; device=true)
+                                  reduce_tuning(backend, A).target_blocks)
         return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
     end
     segs = merge_dims(src_sizes, source_layout(src)[3], rdims)
