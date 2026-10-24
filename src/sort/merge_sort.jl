@@ -131,18 +131,10 @@ end
 # GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
 # `sort_sizes(::MergeSort, ...)`.
 function merge_sort!(
-    v::AbstractArray, backend::Backend, bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+    v::AbstractArray, backend::Backend, bufs::NamedTuple, ord::Base.Order.Ordering, by;
+    block_size::Int, dims::Union{Colon, Integer},
 )
     layout = slice_layout(v, dims)
-    ord = Base.Order.ord(lt, by, rev, order)
     (isempty(v) || layout.len <= 1) && return v
 
     # Compute keys once instead of evaluating `by` in every comparison, into an array of the
@@ -150,7 +142,7 @@ function merge_sort!(
     if by !== identity
         keys = bufs.keys
         map!(by, keys, v; backend, block_size)
-        merge_sort_by_key!(keys, v, backend, bufs; lt, rev, order, block_size, dims)
+        merge_sort_by_key!(keys, v, backend, bufs, ord.order; block_size, dims)
         return v
     end
 

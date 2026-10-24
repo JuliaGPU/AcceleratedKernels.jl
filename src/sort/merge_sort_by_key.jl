@@ -165,28 +165,10 @@ end
 # GPU merge sort of `keys` (or of each slice along `dims`) carrying `values` along, in place, with
 # the scratch buffers of `merge_by_key_scratch`.
 function merge_sort_by_key!(
-    keys::AbstractArray,
-    values::AbstractArray,
-    backend::Backend,
-    bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+    keys::AbstractArray, values::AbstractArray, backend::Backend, bufs::NamedTuple,
+    ord::Base.Order.Ordering; block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck length(keys) == length(values)
     layout = slice_layout(keys, dims)
-    if !(dims isa Colon)
-        @argcheck axes(keys) == axes(values)
-    end
-
-    # Construct comparator
-    ord = Base.Order.ord(lt, by, rev, order)
     (isempty(keys) || layout.len <= 1) && return keys, values
     comp = (x, y) -> Base.Order.lt(ord, x, y)
 

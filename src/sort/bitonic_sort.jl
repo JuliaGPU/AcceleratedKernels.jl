@@ -100,21 +100,12 @@ end
 
 # GPU bitonic sort of `v` (or of each slice along `dims`), in place.
 function bitonic_sort!(
-    v::AbstractArray, backend::Backend=get_backend(v);
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    items_per_thread::Int=8,
-    dims::Union{Colon, Integer}=Colon(),
+    v::AbstractArray, backend::Backend, ord::Base.Order.Ordering;
+    block_size::Int, items_per_thread::Int, dims::Union{Colon, Integer},
 )
     layout = slice_layout(v, dims)
     len = layout.len
     (isempty(v) || len <= 1) && return v
-    ord = Base.Order.ord(lt, by, rev, order)
 
     # Pack short slices into one tile; split long slices across tiles.
     tile_size = block_size * items_per_thread

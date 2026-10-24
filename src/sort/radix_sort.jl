@@ -458,11 +458,7 @@ integers and floats, with the scratch buffers of `radix_scratch`.
 """
 function radix_sort!(
     v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;
-    rev::Bool=false,
-    block_size::Int=256,
-    items_per_thread::Int=2,
-    chunk_size::Int=32,
-    dims::Union{Colon, Integer}=Colon(),
+    rev::Bool, block_size::Int, items_per_thread::Int, chunk_size::Int, dims::Union{Colon, Integer},
 ) where T
     layout = slice_layout(v, dims)
     len = layout.len

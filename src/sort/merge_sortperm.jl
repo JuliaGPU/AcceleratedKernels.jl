@@ -1,23 +1,9 @@
 # GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
 function merge_sortperm!(
-    ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend,
-    bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+    ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
+    ord::Base.Order.Ordering; block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck length(ix) == length(v)
-    dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
-    Base.Order.ord(lt, by, rev, order)      # validate the ordering keywords before touching ix
 
     # Initialise the linear indices that will be sorted by the keys in v
     foreachindex_on(Base.OneTo(length(ix)), backend; block_size) do i
@@ -27,7 +13,7 @@ function merge_sortperm!(
     # (a range, for instance, has no backend: collected on the host first)
     keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
 
-    merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
+    merge_sort_by_key!(keys, ix, backend, bufs, ord; block_size, dims)
 
     ix
 end
@@ -35,24 +21,10 @@ end
 
 # GPU merge sort permutation comparing the keys in global memory, without copying them.
 function merge_sortperm_lowmem!(
-    ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend,
-    bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+    ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
+    ord::Base.Order.Ordering; block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck length(ix) == length(v)
-    dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
-    ord = Base.Order.ord(lt, by, rev, order)
 
     # Initialise the linear indices that will be sorted by the keys in v
     foreachindex_on(Base.OneTo(length(ix)), backend; block_size) do i
