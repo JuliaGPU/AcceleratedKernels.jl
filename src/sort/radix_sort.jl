@@ -114,10 +114,9 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function _radix_scatter!(
     v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val, layout, bps::Int,
 )
-    @uniform N   = @groupsize()[1]
     @uniform NI  = Int(@groupsize()[1])
-    s_elem  = @localmem eltype(v_in) (N,)
-    s_digit = @localmem UInt32       (N,)
+    s_elem  = @localmem eltype(v_in) (NI,)
+    s_digit = @localmem UInt32       (NI,)
     s_gbase = @localmem UInt32       (Int(_RS_SIZE),)
 
     iblock  = Int(@index(Group, Linear)) - 1

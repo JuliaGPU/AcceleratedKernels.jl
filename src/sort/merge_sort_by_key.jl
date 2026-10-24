@@ -202,7 +202,6 @@ function _merge_sort_by_key!(
     # Global level: merge the sorted tiles of each slice, doubling the run length every pass
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
     half_size_group = block_size * 2
-    size_group = half_size_group * 2
     if len > half_size_group
         pk1 = keys
         pk2 = bufs.temp_keys
@@ -221,7 +220,6 @@ function _merge_sort_by_key!(
             )
 
             half_size_group = half_size_group << 1;
-            size_group = size_group << 1;
             pk1, pk2 = pk2, pk1
             pv1, pv2 = pv2, pv1
 

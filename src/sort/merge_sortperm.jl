@@ -76,7 +76,6 @@ function _merge_sortperm_lowmem!(
     # Global level
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
     half_size_group = block_size * 2
-    size_group = half_size_group * 2
     if len > half_size_group
         p1 = ix
         p2 = bufs.temp
@@ -92,7 +91,6 @@ function _merge_sortperm_lowmem!(
             )
 
             half_size_group = half_size_group << 1;
-            size_group = size_group << 1;
             p1, p2 = p2, p1
 
             niter += 1

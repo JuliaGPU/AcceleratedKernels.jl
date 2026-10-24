@@ -139,33 +139,6 @@ function _sample_sort_parallel!(
         )
     end
 
-    # # Debug: single-threaded version
-    # tp = TaskPartitioner(length(v), max_tasks, 1)
-    # for itask in 1:max_tasks
-    #     irange = tp[itask]
-    #     _sample_sort_histogram!(
-    #         v, ord,
-    #         splitters, histograms,
-    #         itask, irange,
-    #     )
-    # end
-    # _sample_sort_compute_offsets!(histograms, max_tasks)
-    # offsets = @view histograms[1:max_tasks, max_tasks + 1]
-    # for itask in 1:max_tasks
-    #     irange = tp[itask]
-    #     _sample_sort_move_buckets!(
-    #         v, temp, ord,
-    #         splitters, offsets, histograms,
-    #         itask, max_tasks, irange,
-    #     )
-    # end
-    # for itask in 1:max_tasks
-    #     _sample_sort_sort_bucket!(
-    #         v, temp, offsets, itask, max_tasks;
-    #         lt, by, rev, order,
-    #     )
-    # end
-
     nothing
 end
 
@@ -215,9 +188,8 @@ function _sample_sort!(
 
     # Take equally spaced samples, save them in dest for the moment
     num_samples = oversampling_factor * max_tasks
-    isamples = IntLinSpace(1, num_elements, num_samples)
     @inbounds for i in 1:num_samples
-        dest[i] = v[isamples[i]]
+        dest[i] = v[1 + div((i - 1) * (num_elements - 1), num_samples - 1, RoundUp)]
     end
 
     # Sort samples and choose splitters; these are small allocations, which Julia is fast at

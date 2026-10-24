@@ -336,7 +336,6 @@ function mapreduce_nd!(
     # Launch settings of the elementwise passes, and of the reduction kernels
     launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
                                    (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
-    block_size = alg isa BlockReduce ? alg.block_size : 256
 
     # Number of blocks the by_block / multigroup paths aim to launch, so a reduction with
     # few output elements can still fill the GPU. A heuristic GPU-occupancy target.
@@ -380,6 +379,7 @@ function mapreduce_nd!(
         _mapreduce_nd_cpu_sections!(f, op, dst, src; init, neutral, launch...)
         return dst
     end
+    block_size = alg.block_size
 
     # A single output of a contiguous source: the whole-array kernels, finishing on the device
     if dst_size == 1
