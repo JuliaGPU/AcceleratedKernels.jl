@@ -6,6 +6,20 @@ const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}
 # The size of a reduction source along `d`; `Broadcasted` objects only have `size` without `d`
 srcsize(src, d::Int) = d <= ndims(src) ? size(src)[d] : 1
 
+# The reduced dimensions `dims` (an integer or a collection of integers), as Base validates them:
+# duplicates are ignored, and dimensions beyond `ndims` reduce nothing.
+function reduced_dims(dims, ndim::Int)
+    dims_src = dims isa Number ? (dims,) : dims
+    dims_buf = Int[]
+    for d in dims_src
+        d isa Integer || throw(ArgumentError("reduced dimension(s) must be integers"))
+        dim = Int(d)
+        dim < 1 && throw(ArgumentError("region dimension(s) must be ≥ 1, got $d"))
+        push!(dims_buf, dim)
+    end
+    return Tuple(d for d in Base.unique(dims_buf) if d <= ndim)
+end
+
 function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
     src_axes = axes(src)
     for other in srcs
