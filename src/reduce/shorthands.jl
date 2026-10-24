@@ -20,7 +20,7 @@ m = MtlArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.sum(m; dims=1)                   # row-wise
 ```
 """
-sum(src::AbstractArray; kwargs...) = _reduce_or_empty(zero, Base.add_sum, src; kwargs...)
+sum(src::AbstractArray; kwargs...) = reduce_or_empty(zero, Base.add_sum, src; kwargs...)
 
 
 """
@@ -39,28 +39,19 @@ p = AK.prod(v)
 p = AK.prod(ROCArray(rand(Int32(1):Int32(100), 10, 100_000)); dims=1)
 ```
 """
-prod(src::AbstractArray; kwargs...) = _reduce_or_empty(one, Base.mul_prod, src; kwargs...)
+prod(src::AbstractArray; kwargs...) = reduce_or_empty(one, Base.mul_prod, src; kwargs...)
 
 # `reduce(op, src; kwargs...)`, except that without `init` an empty reduction gives `empty(A)` of
-# the accumulator type `A` (for a whole array, and for every output along `dims`), instead of
-# applying it as an `init`, which would change results such as the sign of a sum of `-0.0`s
-function _reduce_or_empty(empty, op, src; init=NoInit(), dims=:, acctype=nothing,
-                          backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
-                          workspace=nothing, kwargs...)
-    kwargs = (; dims, acctype, backend, alg, kwargs...)
-    init isa NoInit || return reduce(op, src; init, workspace, kwargs...)
-    A = resolve_acctype(op, Union{}, mapped_eltype(identity, src), acctype)
-    if A !== Union{} && isempty(src) &&
-       (iswhole(dims) || Base.any(d -> size(src, d) == 0, reduced_dims(dims, ndims(src))))
-        # (the algorithm and the workspace are checked as for any other input)
-        p = plan(reduce, op, src; kwargs...)
-        scratch_buffers(p, workspace, src)
-        iswhole(dims) && return empty(A)
-        rdims = reduced_dims(dims, ndims(src))
-        dst_sizes = ntuple(d -> d in rdims ? 1 : size(src, d), ndims(src))
-        return fill!(KernelAbstractions.allocate(p.backend, A, dst_sizes), empty(A))
-    end
-    return reduce(op, src; workspace, kwargs...)
+# the accumulator type `A` (see `mapreduce_setup`), instead of applying it as an `init`, which would
+# change results such as the sign of a sum of `-0.0`s
+function reduce_or_empty(empty, op::OP, src; backend::Union{Nothing, Backend}=nothing,
+                         init=NoInit(), neutral=nothing, acctype=nothing, dims=:,
+                         commutative::Bool=true, alg::Algorithm=Auto(),
+                         workspace=nothing) where {OP}
+    src = one_based(src)
+    s = mapreduce_setup(identity, op, src, backend, init, neutral, acctype, dims, alg; empty)
+    bufs = scratch_buffers(s.plan, workspace, src)
+    return mapreduce_run(identity, op, src, s, init, bufs; commutative)
 end
 
 

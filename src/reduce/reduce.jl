@@ -179,13 +179,17 @@ mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
     A === Union{} ? nothing : reduce_seed(op, A, neutral)
 
 # Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
-# plan), accumulator type and partial-result seed, and for reductions along `dims` the result
+# plan), accumulator type and partial-result seed, and for reductions along `dims` the result.
+# `empty`, when given, makes an empty reduction without `init` give `empty(A)` of the accumulator
+# type `A` (for a whole array, and for every output along `dims`) instead of throwing.
 function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
-                         alg) where {F, OP}
+                         alg; empty=nothing) where {F, OP}
     backend = resolve_backend(backend, src)
     M = mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
     A = resolve_acctype(op, init isa NoInit ? Union{} : typeof(init), M, acctype)
+    # (called only for an empty reduction: `zero(A)` need not exist otherwise)
+    empty = A === Union{} ? nothing : empty
 
     if iswhole(dims)
         a = resolve_reduce(alg, backend, A, dims)
@@ -199,7 +203,7 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         else
             (;)
         end
-        return (; plan=Plan(backend, a, sizes), A=Val(A), seed)
+        return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty)
     end
 
     rdims = reduced_dims(dims, ndims(src))
@@ -210,8 +214,8 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
     a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
     sizes = mapreduce_nd_sizes(src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
-    return (; plan=Plan(backend, a, sizes), A=Val(A), seed, rdims, R=Val(R),
-            dst_sizes)
+    return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, rdims,
+            R=Val(R), dst_sizes)
 end
 
 # Run the reduction set up by `mapreduce_setup`, with the plan's scratch buffers `bufs`
@@ -219,12 +223,15 @@ function mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true)
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :rdims)
         return mapreduce_whole(f, op, src, backend, a, unval(s.A); init, seed=s.seed,
-                               partials=get(bufs, :partials, nothing), commutative)
+                               empty=s.empty, partials=get(bufs, :partials, nothing),
+                               commutative)
     end
     if init isa NoInit && Base.any(d -> srcsize(src, d) == 0, s.rdims) &&
        Base.prod(s.dst_sizes) > 0
-        throw(ArgumentError(
+        s.empty === nothing && throw(ArgumentError(
             "reducing over an empty dimension is not allowed without `init`; pass `init`"))
+        # (every output's slice is empty, so this only sets the outputs)
+        init = s.empty(unval(s.A))
     end
     dst = KernelAbstractions.allocate(backend, unval(s.R), s.dst_sizes)
     return mapreduce_nd!(f, op, dst, src, backend, a, unval(s.A);
@@ -373,11 +380,12 @@ check_noalias(R, src::Base.Broadcast.Extruded) = check_noalias(R, src.x)
 check_noalias(R, src) = nothing
 
 # Reduce all of `src` to a host value, with accumulator type `A` and partial-result seed
-# `seed`; `partials` is the plan's scratch
-function mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
+# `seed`; `empty` is the setup's, and `partials` the plan's scratch
+function mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed, empty,
                          partials, commutative) where {F, OP, A}
     if length(src) == 0
         init isa NoInit || return init
+        empty === nothing || return empty(A)
         throw(ArgumentError(
             "reducing over an empty collection is not allowed without `init`; pass `init`"))
     end

@@ -865,6 +865,14 @@ end
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.sum(v; alg=REDUCE_ALG, bad=:kwarg)
 
+    # Element types without `zero(T)`, which only an empty sum needs
+    if !TEST_KERNELS
+        ms = [ones(2, 2), ones(2, 2)]
+        @test AK.sum(ms; alg=REDUCE_ALG) == sum(ms)
+        @test AK.prod(ms; alg=REDUCE_ALG, commutative=false) == prod(ms)
+        @test AK.sum(Matrix{Float64}[]; init=zeros(2, 2), alg=REDUCE_ALG) == zeros(2, 2)
+    end
+
     # The other settings are stress-tested in reduce
 end
 
