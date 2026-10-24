@@ -207,18 +207,3 @@ function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
         dst[i] = _finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
     end
 end
-
-# Tree-reduce the `@groupsize()[1]` values in `sdata` into `sdata[1]`; the group size must be a power
-# of two. All threads in the group must call it, after writing their value and synchronising.
-@inline function reduce_group!(@context, op, sdata, ithread)
-    # The group size is static, so this loop has a constant trip count; the conversion keeps the
-    # index arithmetic in `ithread`'s integer type.
-    s = typeof(ithread)(@groupsize()[1] >> 1)
-    while s > 0x0
-        if ithread < s
-            sdata[ithread + 0x1] = op(sdata[ithread + 0x1], sdata[ithread + s + 0x1])
-        end
-        @synchronize()
-        s >>= 0x1
-    end
-end
