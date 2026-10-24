@@ -1,8 +1,6 @@
 include("tuning.jl")
 include("slices.jl")
 include("merge_sort.jl")
-include("merge_sort_by_key.jl")
-include("merge_sortperm.jl")
 include("cpu_sample_sort.jl")
 include("radix_sort.jl")
 include("bitonic_sort.jl")
