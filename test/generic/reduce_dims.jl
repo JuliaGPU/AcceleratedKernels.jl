@@ -719,16 +719,12 @@ end
 # each launch shape and vector-load path reach them with this backend's tuning
 if TEST_KERNELS
 @testset "reduce: launch paths" begin
-    # The launch shape of a reduction of `x` along `dims` with accumulator type `A`, and its
-    # parameter (the blocks per output of `:columns` and `:multigroup`)
-    function launch_shape(x, dims, A; commutative=true)
-        rdims = AK.reduced_dims(dims, ndims(x))
-        len = prod(size(x, d) for d in rdims)
-        dst_size = length(x) ÷ len
-        block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, A, rdims).block_size
-        segs = AK.merge_dims(size(x), AK.source_layout(x).strides, rdims)
-        shape = AK.reduce_shape(dst_size, len, segs, block_size, AK.reduce_tuning(BACKEND, A), A)
-        return commutative ? shape : AK.ordered_shape(shape..., dst_size, len, block_size)
+    # The launch shape of a reduction of `x` along `dims` with operator `op`, and its parameter
+    # (the blocks per output of `:columns` and `:multigroup`), as its setup chooses them
+    function launch_shape(x, dims, op; commutative=true)
+        launch = AK.mapreduce_setup(identity, op, x, BACKEND, AK.NoInit(), nothing, nothing, dims,
+                                    REDUCE_ALG; commutative).launch
+        return launch.shape, launch.param
     end
     # The width of the vector loads of the reduction of `x` along `dims` (0 for scalar loads)
     function vector_width(x, dims)
@@ -742,24 +738,24 @@ if TEST_KERNELS
     end
 
     # "reduce: runs of consecutive elements"
-    @test launch_shape(Array{Int32}(undef, 512, 1000), 1, Int32)[1] === :by_lanes
+    @test launch_shape(Array{Int32}(undef, 512, 1000), 1, +)[1] === :by_lanes
     # "reduce: strided slices", in two passes and in one
     for sz in ((8, 600_000), (40, 110_000))
-        shape, groups = launch_shape(Array{Int8}(undef, sz), 2, Int)
+        shape, groups = launch_shape(Array{Int8}(undef, sz), 2, Base.add_sum)
         @test shape === :columns && groups > 1
     end
-    @test launch_shape(Array{Int32}(undef, 4096, 1024), 2, Int32)[1] === :tiled_strided
-    @test launch_shape(Array{Int32}(undef, 8192, 300), 2, Int32) === (:columns, 1)
-    @test launch_shape(Array{Int64}(undef, 8192, 300), 2, Int64)[1] === :by_thread
+    @test launch_shape(Array{Int32}(undef, 4096, 1024), 2, +)[1] === :tiled_strided
+    @test launch_shape(Array{Int32}(undef, 8192, 300), 2, +) === (:columns, 1)
+    @test launch_shape(Array{Int64}(undef, 8192, 300), 2, +)[1] === :by_thread
     for x in (Array{Int32}(undef, 96, 7000, 10), Array{Int32}(undef, 40, 30_000, 3, 2),
               view(Array{Int32}(undef, 50, 30_000, 7), 3:42, :, 1:2:7))
-        @test launch_shape(x, 2, Int32)[1] === :columns
+        @test launch_shape(x, 2, +)[1] === :columns
     end
 
     # "reduce: non-commutative": every shape in order, and every shape of the commutative
     # reductions with the default settings (tunings can rule some out)
-    shapes = Set(launch_shape(Array{Mat2}(undef, sz), dims, Mat2)[1] =>
-                 launch_shape(Array{Mat2}(undef, sz), dims, Mat2; commutative=false)[1]
+    shapes = Set(launch_shape(Array{Mat2}(undef, sz), dims, matmul2)[1] =>
+                 launch_shape(Array{Mat2}(undef, sz), dims, matmul2; commutative=false)[1]
                  for (sz, dims) in ORDERED_CASES)
     @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
     t = AK.reduce_tuning(BACKEND, Mat2)

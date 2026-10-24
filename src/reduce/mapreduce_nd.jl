@@ -12,8 +12,8 @@
 # Main entry point
 
 # Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
-# dimensions `rdims`; `A` is the accumulator type, and `init` is a value, `NoInit()` or
-# `FoldInto()` (see `finish`). Without `commutative`, the GPU kernels combine elements in order.
+# dimensions `rdims`; `A` is the accumulator type, `init` is a value, `NoInit()` or `FoldInto()`
+# (see `finish`), and `launch` is the setup's (see `select_launch`).
 function mapreduce_nd!(
     f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
     alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
@@ -21,15 +21,11 @@ function mapreduce_nd!(
     seed,
     rdims::Tuple,
     bufs::NamedTuple,
-    commutative::Bool=true,
+    launch,
 ) where {F, OP, A}
     # Launch settings of the elementwise passes, and of the reduction kernels
-    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
-                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
-
-    # (the blocks that fill the device, which the shapes of few outputs aim to launch)
-    tuning = reduce_tuning(backend, A)
-    target_blocks = tuning.target_blocks
+    launch_kw = alg isa BlockReduce ? (; block_size=alg.block_size) :
+                                      (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
 
     src_sizes = size(src)
 
@@ -54,7 +50,7 @@ function mapreduce_nd!(
         # (a runtime dispatch on the GPU, see `launch_shape!`)
         single! = alg isa BlockReduce ? Base.inferencebarrier(mapreduce_singles!) :
                                         mapreduce_singles!
-        single!(f, op, dst, src, backend, A; init, launch...)
+        single!(f, op, dst, src, backend, A; init, launch_kw...)
         return dst
     end
 
@@ -63,37 +59,29 @@ function mapreduce_nd!(
     dst_size = length(dst)
 
     if alg isa CPUThreads.Partitioned
-        mapreduce_nd_threads!(f, op, dst, src; init, seed, launch...)
+        mapreduce_nd_threads!(f, op, dst, src; init, seed, launch_kw...)
         return dst
     end
     block_size = alg.block_size
+    target_blocks = reduce_tuning(backend, A).target_blocks
+    (; shape, param) = launch
 
     # A single output of a contiguous source: the whole-array kernels, finishing on the device
-    if dst_size == 1
-        linear = linear_source(src, rdims)
-        if linear !== nothing
-            Base.inferencebarrier(mapreduce_1d_gpu)(
-                f, op, linear, backend; init, seed, block_size,
-                items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
-                partials=get(bufs, :partials, nothing), switch_below=0, commutative, dst)
-            return dst
-        end
+    if shape === :whole
+        Base.inferencebarrier(mapreduce_1d_gpu)(
+            f, op, linear_source(src, launch.buffer, launch.offset), backend; init, seed,
+            block_size, items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
+            partials=get(bufs, :partials, nothing), switch_below=0,
+            commutative=launch.commutative, dst)
+        return dst
     end
 
-    # The kernels below index a flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`
-    # (see `source_layout`)
-    strided = strided_layout(src)
-    layout = isnothing(strided) ? linear_layout(src) : strided
-    buffer, base_offset = layout.buffer, layout.offset
-    segs = merge_dims(src_sizes, layout.strides, rdims)
-    reduce_size = len
-    shape, reduce_groups = reduce_shape(dst_size, reduce_size, segs, block_size, tuning, A)
-    commutative || ((shape, reduce_groups) = ordered_shape(shape, reduce_groups, dst_size,
-                                                           reduce_size, block_size))
+    # The kernels below index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`
+    buffer, dense = kernel_buffer(src, launch.buffer)
 
     # One output per thread of a source without a dense buffer: iterating over the Cartesian
     # indices of each output's elements saves decoding every linear index
-    if isnothing(strided) && shape === :by_thread
+    if !dense && shape === :by_thread
         blocks = cld(dst_size, block_size)
         kernel! = by_thread_cartesian_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
@@ -104,11 +92,11 @@ function mapreduce_nd!(
         return dst
     end
 
-    with_segments(segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
+    with_segments(launch.segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
         Base.inferencebarrier(launch_shape!)(
-            Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
-            init, seed, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
-            outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(strided),
+            Val(shape), param, f, op, dst, buffer, backend, block_size, target_blocks;
+            init, seed, bufs, base_offset=launch.offset, reduce_strides, reduce_sizes,
+            outer_strides, outer_sizes, dst_size, reduce_size=len, dense_buffer=dense,
             items_per_thread=alg.items_per_thread,
         )
     end

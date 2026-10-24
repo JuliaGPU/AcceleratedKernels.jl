@@ -148,8 +148,8 @@ end
 # `reduce_shape` chose for it: one thread per output, which reduces its slice in order,
 # where that shape is one, or for runs shorter than a block; the columns kernel in order for
 # strided reductions into contiguous outputs, which it reads coalesced across outputs; else
-# `:ordered`, a block per output, or the groups of a `:multigroup` reduction. The groups are those
-# of the chosen shape, so that partial results take the same scratch.
+# `:ordered`, a block per output, or the groups of a `:multigroup` reduction. Split reductions keep
+# the chosen shape's blocks per output.
 function ordered_shape(shape, reduce_groups, dst_size, reduce_size, block_size)
     (shape === :by_thread || shape === :by_lanes && reduce_size < block_size) &&
         return :by_thread, 0
@@ -180,22 +180,37 @@ accsize(::Type{A}) where {A} = isbitstype(A) && sizeof(A) > 0 ? sizeof(A) : 8
 # The outputs per block of the columns kernel
 columns_outputs(dst_size) = min(nextpow(2, dst_size), COLUMNS_OUTPUTS)
 
-# The scratch of a reduction along `dims` into `dst_size` outputs: the partial results of a
-# `:multigroup` reduction, of a `:columns` one in two passes or of the whole-array kernels, with
-# the type of the partial-result seed `seed` (see `reduce_seed`)
-function mapreduce_nd_sizes(src, backend, alg, ::Type{A}, seed, rdims, dst_size) where {A}
-    alg isa BlockReduce && A !== Union{} || return (;)
-    src_sizes = size(src)
-    len = Base.prod(src_sizes[d] for d in rdims; init=1)
-    (len <= 1 || dst_size == 0) && return (;)
-    if dst_size == 1 && linear_source(src, rdims) !== nothing
+# The launch of a reduction along `dims` of `src` into `dst_size` outputs, chosen once by its
+# setup, and the scratch it takes. The launch holds where the kernels find the source's elements
+# (see `buffer_kind`), at which offset, the segments of its layout (see `source_layout` and
+# `merge_dims`), and the launch shape with its parameter: that of `reduce_shape`, or of
+# `ordered_shape` for `commutative=false`, or `:whole` for the whole-array kernels, which reduce
+# a single output of a contiguous source; `:none` where no kernel runs (at most one element per
+# output, no outputs, or no accumulator type). The scratch holds the partial results of a
+# reduction in two passes, with the type of the partial-result seed `seed` (see `reduce_seed`).
+# The threaded algorithm takes no launch.
+select_launch(src, backend, alg, ::Type{A}, seed, rdims, dst_size, commutative) where {A} =
+    nothing, (;)
+function select_launch(src, backend, alg::BlockReduce, ::Type{A}, seed, rdims, dst_size,
+                       commutative) where {A}
+    strided = strided_layout(src)
+    layout = isnothing(strided) ? linear_layout(src) : strided
+    segs = merge_dims(size(src), layout.strides, rdims)
+    kind, offset = buffer_kind(src, strided), layout.offset::Int
+    launch(shape, param) = (; shape, param, buffer=kind, offset, segs, commutative)
+    len = Base.prod(size(src)[d] for d in rdims; init=1)
+    (len <= 1 || dst_size == 0 || A === Union{}) && return launch(:none, 0), (;)
+    tuning = reduce_tuning(backend, A)
+    (rstrides, _, nr), _ = segs
+    if dst_size == 1 && (isnothing(strided) || nr == 1 && rstrides[1] == 1)
         n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
-                                  reduce_tuning(backend, A).target_blocks)
-        return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
+                                  tuning.target_blocks)
+        return launch(:whole, 0), n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
     end
-    segs = merge_dims(src_sizes, source_layout(src).strides, rdims)
-    shape, reduce_groups = reduce_shape(dst_size, len, segs, alg.block_size,
-                                        reduce_tuning(backend, A), A)
-    shape === :multigroup || shape === :columns && reduce_groups > 1 || return (;)
-    return (; partials=scratch(typeof(seed), dst_size, reduce_groups))
+    shape, param = reduce_shape(dst_size, len, segs, alg.block_size, tuning, A)
+    commutative || ((shape, param) = ordered_shape(shape, param, dst_size, len, alg.block_size))
+    two_pass = shape === :multigroup || param > 1 &&
+               (shape === :ordered || shape === :columns || shape === :columns_ordered)
+    return launch(shape, param),
+           two_pass ? (; partials=scratch(typeof(seed), dst_size, param)) : (;)
 end
