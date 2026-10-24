@@ -17,7 +17,10 @@ end
 include("mapreduce_1d_cpu.jl")
 include("mapreduce_ordered.jl")
 include("mapreduce_1d_gpu.jl")
+include("layout.jl")
+include("shapes.jl")
 include("mapreduce_nd.jl")
+include("kernels_nd.jl")
 
 
 """
