@@ -31,8 +31,6 @@ device, as returned by [`predicate_tuning`](@ref):
 - `prefer_concurrent_write`: whether `Auto` picks `ConcurrentWrite`, rather than `ViaReduce()`.
 - `block_size`: for `ConcurrentWrite`.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`.
-
-The defaults reproduce AK's historical settings. Internal: the fields may change in any release.
 """
 Base.@kwdef struct PredicateTuning
     prefer_concurrent_write::Bool = true

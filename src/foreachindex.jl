@@ -1,6 +1,4 @@
 @kernel inbounds=true cpu=false unsafe_indices=true function foreachindex_kernel!(f, indices)
-
-    # Calculate global index
     N = @groupsize()[1]
     iblock = @index(Group, Linear)
     ithread = @index(Local, Linear)

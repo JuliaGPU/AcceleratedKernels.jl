@@ -16,8 +16,7 @@ end
 
 Values that fill unset algorithm fields for `findall` on one device, as returned by
 [`findall_tuning`](@ref): `block_size` and `items_per_thread` for `ScanScatter`, and
-`threads_min_elems` for `CPUThreads.Partitioned`. The defaults reproduce AK's historical
-settings. Internal: the fields may change in any release.
+`threads_min_elems` for `CPUThreads.Partitioned`.
 """
 Base.@kwdef struct FindallTuning
     block_size::Int = 256

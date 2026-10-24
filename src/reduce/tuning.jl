@@ -52,8 +52,7 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 `items_per_thread` defaults to the choice by type, and `columns_min_elements` to 2^18, measured
 on CUDA. `segments_lane_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
 (at 512, a Ryzen 9950X's integrated GPU and an Iris Xe take up to twice as long as with a block
-per output); the other defaults reproduce AK's historical settings. Internal: the fields may
-change in any release.
+per output).
 """
 Base.@kwdef struct ReduceTuning
     block_size::Int = 256

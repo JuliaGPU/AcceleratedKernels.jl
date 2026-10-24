@@ -51,11 +51,11 @@ AcceleratedKernels.PredicateTuning
 AcceleratedKernels.predicate_tuning
 ```
 
-AcceleratedKernels defines the hook's generic method, whose values reproduce the library's
-historical defaults. A package extension adds one method for its backend type and may choose
+AcceleratedKernels defines the hook's generic method; values without a measurement next to them
+are AK's earlier defaults. A package extension adds one method for its backend type and may choose
 values per device, e.g. from the compute capability of the current CUDA device. Tuning queries run
 on the calling task, under its current device, never at load or precompilation time. Record the
-measurement behind each value (see `benchmark/tune_sort.jl`) next to it.
+measurement behind each value next to it.
 
 ## Capabilities
 

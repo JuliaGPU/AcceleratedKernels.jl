@@ -33,8 +33,8 @@ Base.@kwdef struct Auto <: Algorithm
 end
 
 
-# Algorithm families, for documentation and dispatch. An operation's `alg` keyword accepts any
-# `Algorithm`, and rejects those that do not implement it.
+# Algorithm families, for documentation and for type bounds such as `ViaReduce`'s. An operation's
+# `alg` keyword accepts any `Algorithm`, and rejects those that do not implement it.
 
 """
     SortAlgorithm <: Algorithm

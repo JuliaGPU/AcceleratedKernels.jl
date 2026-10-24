@@ -108,9 +108,9 @@ end
 end
 
 
-# Aligned load of `W` consecutive elements as one LLVM vector (`load <W x T>, align W*sizeof(T)`),
-# without depending on SIMD.jl. Julia 1.12 (LLVM 17+) passes `LLVMPtr` as an opaque `ptr`; older
-# versions pass it as `i8*`, which needs a bitcast to the vector pointer type.
+# Aligned load of `W` consecutive elements as one LLVM vector (`load <W x T>, align W*sizeof(T)`).
+# Julia 1.12 (LLVM 17+) passes `LLVMPtr` as an opaque `ptr`; older versions pass it as `i8*`,
+# which needs a bitcast to the vector pointer type.
 @generated function vload(::Val{W}, ptr::Core.LLVMPtr{T, AS}) where {W, T, AS}
     lt = T === Float32 ? "float" : T === Float64 ? "double" : "i$(8 * sizeof(T))"
     vt = "<$W x $lt>"

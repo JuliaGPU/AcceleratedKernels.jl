@@ -81,8 +81,7 @@ device, as returned by [`sort_tuning`](@ref).
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.SampleSort`; `max_tasks` defaults
   to `Threads.nthreads()`.
 
-The defaults never pick `BitonicSort` or `RadixSort`, and reproduce AK's historical settings.
-Internal: the fields may change in any release.
+The defaults never pick `BitonicSort` or `RadixSort`.
 """
 Base.@kwdef struct SortTuning
     bitonic_max_len::Int = 0

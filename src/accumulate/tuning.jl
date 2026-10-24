@@ -67,8 +67,7 @@ returned by [`scan_tuning`](@ref).
   operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
   memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
 
-The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070); the other defaults reproduce
-AK's historical settings. Internal: the fields may change in any release.
+The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070).
 """
 Base.@kwdef struct ScanTuning
     block_size::Int = 256
