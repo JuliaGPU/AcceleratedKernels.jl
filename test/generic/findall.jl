@@ -3,22 +3,6 @@ struct FindallCallable end
 
 struct OtherFindallAlgorithm <: AK.FindallAlgorithm end
 
-struct FindallOffsetVector{T, V <: AbstractVector{T}} <: AbstractVector{T}
-    data::V
-    offset::Int
-end
-
-Base.size(v::FindallOffsetVector) = size(v.data)
-Base.axes(v::FindallOffsetVector) =
-    (Base.IdentityUnitRange((firstindex(v.data) + v.offset):(lastindex(v.data) + v.offset)),)
-Base.IndexStyle(::Type{<:FindallOffsetVector}) = IndexLinear()
-Base.getindex(v::FindallOffsetVector, i::Int) = v.data[i - v.offset]
-Base.setindex!(v::FindallOffsetVector, x, i::Int) = (v.data[i - v.offset] = x)
-Base.similar(v::FindallOffsetVector, ::Type{T}) where T =
-    FindallOffsetVector(similar(v.data, T), v.offset)
-Base.similar(v::FindallOffsetVector, ::Type{T}, dims::Dims) where T = similar(v.data, T, dims)
-
-
 # Tests that do not choose an algorithm use `FINDALL_ALG`: `Auto()`, except in the `--cpu-ka`
 # configuration, whose point is to run AK's kernels on the host backend. `findall_alg` builds an
 # explicitly tuned algorithm for the configuration from both kinds of settings.
@@ -110,8 +94,8 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
 
         if !TEST_KERNELS
             # Positions are ordinal, so offset axes pair with any items
-            h = FindallOffsetVector([-1, 1, -2, 2, 0], -3)
-            mask = FindallOffsetVector(Bool[false, true, true, false, true], -3)
+            h = OffsetAxes([-1, 1, -2, 2, 0], (-3,))
+            mask = OffsetAxes(Bool[false, true, true, false, true], (-3,))
             for max_tasks in (1, 4)
                 alg = AK.CPUThreads.Partitioned(; max_tasks, min_elems=1)
                 @test AK.findall(x -> x > 0, h; backend=BACKEND, alg) == [-1, 1]

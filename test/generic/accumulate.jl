@@ -159,25 +159,6 @@ end
 end
 
 
-# An associative but non-commutative operator: 2x2 matrix products over UInt32, which wraps and so
-# forms a ring. Random products of SL(2, Z) generators stay invertible, so running products never
-# collapse to zero (as products of arbitrary matrices do, hiding ordering mistakes on long inputs).
-struct ScanMat2
-    a::UInt32
-    b::UInt32
-    c::UInt32
-    d::UInt32
-end
-Base.zero(::Type{ScanMat2}) = ScanMat2(0, 0, 0, 0)
-scan_matmul(x::ScanMat2, y::ScanMat2) = ScanMat2(
-    x.a * y.a + x.b * y.c, x.a * y.b + x.b * y.d,
-    x.c * y.a + x.d * y.c, x.c * y.b + x.d * y.d,
-)
-const SCAN_I2 = ScanMat2(1, 0, 0, 1)
-const SCAN_GENS = (ScanMat2(1, 1, 0, 1), ScanMat2(1, 0, 1, 1),
-                   ScanMat2(1, typemax(UInt32), 0, 1), ScanMat2(1, 0, typemax(UInt32), 1))
-scan_randmat() = foldl(scan_matmul, rand(SCAN_GENS, 3); init=SCAN_I2)
-
 # Sequential reference scan of each slice along `dims` (a vector is one slice)
 function scan_reference(xh, dims; init, inclusive)
     out = similar(xh)
@@ -186,11 +167,11 @@ function scan_reference(xh, dims; init, inclusive)
         for k in axes(xh, dims)
             J = Base.setindex(Tuple(I), k, dims)
             if inclusive
-                acc = scan_matmul(acc, xh[J...])
+                acc = matmul2(acc, xh[J...])
                 out[J...] = acc
             else
                 out[J...] = acc
-                acc = scan_matmul(acc, xh[J...])
+                acc = matmul2(acc, xh[J...])
             end
         end
     end
@@ -206,14 +187,14 @@ end
     # exercised. On the CPU, `max_tasks=4` exercises the carry between tasks.
     # With a neutral element, and without one (partial results then start from their first
     # element)
-    for neutral in (SCAN_I2, nothing), inclusive in (true, false),
+    for neutral in (I2, nothing), inclusive in (true, false),
         (block_size, items_per_thread) in ((256, nothing), (16, 1), (32, 3))
         # Includes exact tile boundaries (16 and 96 elements) and one past them
         for n in (1, 2, 5, 16, 17, 96, 97, 100, 1000, 5000, 70_000)
-            xh = [scan_randmat() for _ in 1:n]
-            init = scan_randmat()
+            xh = [randmat2() for _ in 1:n]
+            init = randmat2()
             y = array_from_host(xh)
-            AK.accumulate!(scan_matmul, y; init, neutral, inclusive,
+            AK.accumulate!(matmul2, y; init, neutral, inclusive,
                            alg=scan_alg(A; max_tasks=4, block_size, items_per_thread))
             @test Array(y) == scan_reference(xh, 1; init, inclusive)
         end
@@ -232,10 +213,10 @@ end
             @test Array(AK.accumulate(+, v; alg)) == cumsum(h)
             @test Array(AK.accumulate(+, v; init=Int32(3), inclusive=false, alg)) ==
                   vcat(Int32(3), Int32(3) .+ cumsum(h)[1:end-1])
-            xh = [scan_randmat() for _ in 1:n]
-            init = scan_randmat()
+            xh = [randmat2() for _ in 1:n]
+            init = randmat2()
             y = array_from_host(xh)
-            AK.accumulate!(scan_matmul, y; init, alg)
+            AK.accumulate!(matmul2, y; init, alg)
             @test Array(y) == scan_reference(xh, 1; init, inclusive=true)
             @test_throws ArgumentError AK.accumulate(+, v; alg=AK.ScanPrefixes(block_size=1, items_per_thread=1))
             ws = AK.workspace(AK.accumulate!, +, similar(v), v; alg)
@@ -254,10 +235,10 @@ end
     # with the slices whole or (for the largest arrays) split into chunks whose totals are scanned
     # in turn. Tiles of exactly one and two blocks' worth, and one element more, for both block
     # sizes.
-    for neutral in (SCAN_I2, nothing), inclusive in (true, false), block_size in (64, 256)
-        S = neutral === nothing ? AK.Optional{ScanMat2} : ScanMat2
+    for neutral in (I2, nothing), inclusive in (true, false), block_size in (64, 256)
+        S = neutral === nothing ? AK.Optional{Mat2} : Mat2
         tile = !TEST_KERNELS ? 2 * block_size :
-               block_size * AK.resolve_scan(AK.SliceScan(; block_size), BACKEND, ScanMat2, 1,
+               block_size * AK.resolve_scan(AK.SliceScan(; block_size), BACKEND, Mat2, 1,
                                             S).items_per_thread
         for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
                            ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3),
@@ -265,10 +246,10 @@ end
                            ((32, 20_000), 2), ((64, 3, 500), 2), ((9, 4, 3000), 3), ((3, 70_000), 2),
                            ((8, 6), 2), ((1, 5000, 2), 2), ((3, 200_000), 2), ((600_000, 1), 1),
                            ((40, 300), 1))
-            xh = [scan_randmat() for _ in CartesianIndices(sz)]
-            init = scan_randmat()
+            xh = [randmat2() for _ in CartesianIndices(sz)]
+            init = randmat2()
             y = array_from_host(xh)
-            AK.accumulate!(scan_matmul, y; init, neutral, inclusive, dims,
+            AK.accumulate!(matmul2, y; init, neutral, inclusive, dims,
                            alg=slice_alg(; max_tasks=4, block_size))
             @test Array(y) == scan_reference(xh, dims; init, inclusive)
         end
