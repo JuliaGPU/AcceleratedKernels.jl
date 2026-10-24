@@ -108,7 +108,6 @@ or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
 function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
                       ::Type{S}=T) where {T, S}
-    check_fields(alg)
     t = scan_tuning(backend, T)
     a = alg isa Auto ? select_scan(backend, dims) : alg
     a = fill_defaults(a, t, S)

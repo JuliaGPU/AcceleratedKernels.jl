@@ -6,15 +6,14 @@ public API: the hooks and tuning structs can change in any release, including pa
 ## Resolution
 
 Every operation resolves its `alg` keyword once, on the host, before touching any data. For
-sorting, `resolve_sort` runs four steps:
+sorting, `resolve_sort` runs three steps:
 
-1. `check_fields` checks the fields the caller set (e.g. a `block_size` that is not a power of
-   two), before any arithmetic uses them;
-2. for `Auto`, `select_sort` picks an algorithm from the device's tuning, the backend's
+1. for `Auto`, `select_sort` picks an algorithm from the device's tuning, the backend's
    capabilities and the call's static facts, returning it with unset fields;
-3. `fill_defaults` fills the unset fields from the tuning;
-4. `check_sort` checks the complete algorithm against the capabilities, the operation and the
-   arguments, and throws an `ArgumentError` for anything it cannot run.
+2. `fill_defaults` fills the unset fields from the tuning;
+3. `check_sort` checks the complete algorithm against the capabilities, the operation and the
+   arguments (with `check_fields` for its fields, e.g. a `block_size` that is not a power of
+   two), and throws an `ArgumentError` for anything it cannot run.
 
 ```@docs
 AcceleratedKernels.resolve_sort
@@ -31,7 +30,7 @@ AcceleratedKernels.resolve_findall
 AcceleratedKernels.resolve_predicate
 ```
 
-`Auto` and explicit algorithms share steps 3 and 4, so a tuning cannot make an invalid algorithm
+`Auto` and explicit algorithms share steps 2 and 3, so a tuning cannot make an invalid algorithm
 run, and an explicit setting always wins over the tuning.
 
 ## Tunings

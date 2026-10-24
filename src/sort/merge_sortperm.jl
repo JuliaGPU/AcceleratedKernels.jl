@@ -14,7 +14,6 @@ function _merge_sortperm!(
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
-    @argcheck block_size > 0
     @argcheck length(ix) == length(v)
     dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
@@ -50,7 +49,6 @@ function _merge_sortperm_lowmem!(
     dims::Union{Colon, Integer}=Colon(),
 )
     # Simple sanity checks
-    @argcheck block_size > 0
     @argcheck length(ix) == length(v)
     dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)

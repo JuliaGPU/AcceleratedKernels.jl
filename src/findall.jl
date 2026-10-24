@@ -40,7 +40,6 @@ Resolve `alg` for `findall` over elements of type `T` on `backend`: `ScanScatter
 `CPUThreads.Partitioned` with every field set, or an `ArgumentError`.
 """
 function resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    check_fields(alg)
     t = findall_tuning(backend, T)
     a = alg isa Auto ? (runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
     a = fill_defaults(a, t, T)

@@ -153,7 +153,7 @@ algname(a) = nameof(typeof(a))
 algname(::CPUThreads.SampleSort) = "CPUThreads.SampleSort"
 algname(::CPUThreads.Partitioned) = "CPUThreads.Partitioned"
 
-# Domain checks of the fields an algorithm was given explicitly, before any arithmetic uses them
+# Domain checks of the fields of a filled algorithm, for the family checks to call
 check_fields(::Algorithm) = nothing
 
 function check_positive(a, field)

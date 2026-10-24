@@ -54,7 +54,6 @@ Resolve `alg` for `any`/`all` over elements of type `T` on `backend`: `Concurren
 `ArgumentError`.
 """
 function resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    check_fields(alg)
     t = predicate_tuning(backend, T)
     a = alg isa Auto ? select_predicate(backend, t) : alg
     a = fill_defaults(a, t, backend)

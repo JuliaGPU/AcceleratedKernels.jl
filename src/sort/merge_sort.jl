@@ -141,8 +141,6 @@ function _merge_sort!(
     block_size::Int=256,
     dims::Union{Colon, Integer}=Colon(),
 )
-    # Simple sanity checks
-    @argcheck block_size > 0
     layout = slice_layout(v, dims)
     ord = Base.Order.ord(lt, by, rev, order)
     (isempty(v) || layout.len <= 1) && return v

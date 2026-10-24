@@ -98,7 +98,6 @@ whole-array reduction) on `backend`. Returns `BlockReduce` or `CPUThreads.Partit
 field set, or throws an `ArgumentError`.
 """
 function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where {T}
-    check_fields(alg)
     if alg isa BlockReduce && !iswhole(dims) &&
        (alg.items_per_thread !== nothing || alg.switch_below !== nothing)
         throw(ArgumentError("BlockReduce: `items_per_thread` and `switch_below` only apply to " *

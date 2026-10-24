@@ -158,9 +158,6 @@ function _sample_sort!(
     min_elems=1,
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    # Sanity checks
-    @argcheck max_tasks > 0
-
     # For uniform distributions, the error is O(1/sqrt(n)); still, there may be pathological
     # cases - maybe there's a fancier way to choose samples / splitters?
     oversampling_factor = 16
@@ -232,8 +229,6 @@ function _sample_sortperm!(
     min_elems=1,
     temp::Union{Nothing, AbstractArray}=nothing,
 )
-    # Sanity checks
-    @argcheck max_tasks > 0
     @argcheck length(ix) == length(v)
 
     # Initialise indices that will be sorted by the keys in v

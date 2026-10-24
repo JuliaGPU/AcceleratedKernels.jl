@@ -111,9 +111,6 @@ function _bitonic_sort!(
     items_per_thread::Int=8,
     dims::Union{Colon, Integer}=Colon(),
 )
-    @argcheck block_size > 0 && ispow2(block_size)
-    @argcheck items_per_thread > 0 && ispow2(items_per_thread)
-    @argcheck block_size <= typemax(Int) ÷ items_per_thread
     layout = slice_layout(v, dims)
     len = layout.len
     (isempty(v) || len <= 1) && return v

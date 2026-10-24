@@ -466,11 +466,6 @@ function _radix_sort!(
     len = layout.len
     (isempty(v) || len <= 1) && return v
 
-    @argcheck ispow2(block_size) && block_size >= 1
-    @argcheck items_per_thread >= 1
-    @argcheck ispow2(chunk_size)
-    @argcheck _rs_portable_local_memory(T, block_size) <= LOCAL_MEMORY_BUDGET
-
     (; has_atomics, use_fast, items, one_block) =
         _rs_config(T, len, backend, block_size, items_per_thread, chunk_size)
 

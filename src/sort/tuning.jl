@@ -1,12 +1,12 @@
 # Selection and tuning of sorting algorithms.
 #
 # Every sorting entry point resolves its `alg` once, before touching any data:
-#   1. `check_fields` checks the fields the caller set explicitly;
-#   2. `select_sort` picks an algorithm for `Auto`, from the device's `SortTuning`, the
+#   1. `select_sort` picks an algorithm for `Auto`, from the device's `SortTuning`, the
 #      capabilities of the backend and the call's static facts (element type, layout, ordering);
-#   3. `fill_defaults` fills the fields left at `nothing` from the tuning;
-#   4. `check_sort` checks the complete algorithm against the backend's capabilities, the operation
-#      and the arguments, throwing an `ArgumentError` for anything it cannot run.
+#   2. `fill_defaults` fills the fields left at `nothing` from the tuning;
+#   3. `check_sort` checks the complete algorithm (its fields with `check_fields`) against the
+#      backend's capabilities, the operation and the arguments, throwing an `ArgumentError` for
+#      anything it cannot run.
 # Selection returns algorithms with unset fields, so `Auto` and explicit algorithms are filled and
 # checked by the same code.
 
@@ -121,7 +121,6 @@ function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
                       ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
     T = eltype(v)
     layout = slice_layout(v, dims)
-    check_fields(alg)
     t = sort_tuning(backend, T)
     a = alg isa Auto ? select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
     a = fill_defaults(a, t, T)
@@ -155,7 +154,7 @@ _ties_invisible(::Type{T}, ord) where {T} =
 _rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 
-# Domain checks of explicitly set fields, before any arithmetic uses them
+# Domain checks of the fields
 
 check_fields(a::MergeSort) = check_positive(a, :block_size)
 

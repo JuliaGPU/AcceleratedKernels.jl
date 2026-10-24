@@ -75,11 +75,7 @@ function mapreduce_1d_gpu(
     commutative::Bool=true,
     dst::Union{Nothing, AbstractArray}=nothing,
 ) where {F, OP}
-    @argcheck 1 <= block_size <= 1024
-    @argcheck ispow2(block_size)
-    @argcheck items_per_thread >= 1
-    @argcheck max_blocks >= 1
-    @argcheck switch_below >= 0
+    @argcheck max_blocks >= 1           # (from the tuning, which nothing else checks)
 
     f_host, op_host = seeded_ops(f, op, neutral)
     len = length(src)
