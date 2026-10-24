@@ -237,7 +237,7 @@ function _sample_sortperm!(
     @argcheck length(ix) == length(v)
 
     # Initialise indices that will be sorted by the keys in v
-    _foreachindex(eachindex(ix), HOST_BACKEND; max_tasks, min_elems) do i
+    foreachindex_on(eachindex(ix), HOST_BACKEND; max_tasks, min_elems) do i
         @inbounds ix[i] = i
     end
 

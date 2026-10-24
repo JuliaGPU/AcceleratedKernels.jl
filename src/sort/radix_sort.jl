@@ -521,7 +521,7 @@ function _radix_sort!(
     end
 
     if isodd(n_actual)
-        _copyto!(v, p1, backend)
+        copyto_on!(v, p1, backend)
     end
 
     KernelAbstractions.synchronize(backend)

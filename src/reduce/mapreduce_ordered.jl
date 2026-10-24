@@ -44,8 +44,8 @@
         acc = neutral
         if W > 0 && (tile + 1) * tile_size <= reduce_size
             for k in 0x0:W:(K - 0x1)
-                v = _vloada(Val(W), pointer(src, input_base + run + k + 0x1))
-                acc = _acc_lanes(f_lanes, op_lanes, acc, v)
+                v = vload(Val(W), pointer(src, input_base + run + k + 0x1))
+                acc = fold_vector(f_lanes, op_lanes, acc, v)
             end
         elseif (tile + 1) * tile_size <= reduce_size
             for k in 0x0:(K - 0x1)
@@ -88,7 +88,7 @@ function _mapreduce_ordered_pass!(
         src, dst, f, op, neutral, init,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
         output_size, reduce_size, groups, Val(items_per_thread), Val(W),
-        _scan_subgroups(backend, typeof(neutral), block_size),
+        scan_subgroup_width(backend, typeof(neutral), block_size),
         ndrange=(block_size * output_size * groups,),
     )
     return nothing

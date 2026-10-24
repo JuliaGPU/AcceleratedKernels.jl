@@ -1,4 +1,4 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _forindices_global!(f, indices)
+@kernel inbounds=true cpu=false unsafe_indices=true function foreachindex_kernel!(f, indices)
 
     # Calculate global index
     N = @groupsize()[1]
@@ -8,12 +8,12 @@
 
     # Avoid an out-of-line device call that can copy captured state to local memory.
     if i <= length(indices)
-        @inline f(_nth(indices, i))
+        @inline f(nth(indices, i))
     end
 end
 
 # The `i`-th element of `indices`, counting from 1 whatever the first index of `indices` is
-@inline _nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
+@inline nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
 
 
 function _forindices_gpu(
@@ -26,7 +26,7 @@ function _forindices_gpu(
     # GPU implementation
     @argcheck block_size > 0
     blocks = (length(indices) + block_size - 1) ÷ block_size
-    _forindices_global!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
+    foreachindex_kernel!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
     nothing
 end
 
@@ -37,14 +37,14 @@ function _forindices_threads(f, indices; max_tasks, min_elems)
         # into indices, which supports arbitrary indices (and gets compiled away when using 1-based
         # collections); each thread processes this range
         for i in irange
-            @inline f(_nth(indices, i))
+            @inline f(nth(indices, i))
         end
     end
 end
 
 
 # Launch settings of the wrappers, checked on every backend (only one of them applies to each)
-function _check_launch(; block_size, max_tasks, min_elems)
+function check_launch(; block_size, max_tasks, min_elems)
     block_size >= 1 || throw(ArgumentError("`block_size` must be positive, got $block_size"))
     max_tasks >= 1 || throw(ArgumentError("`max_tasks` must be positive, got $max_tasks"))
     min_elems >= 1 || throw(ArgumentError("`min_elems` must be positive, got $min_elems"))
@@ -52,9 +52,9 @@ function _check_launch(; block_size, max_tasks, min_elems)
 end
 
 # Run `f` over `indices`: on Julia threads on the host backend, as a kernel elsewhere
-function _foreachindex(f, indices, backend::Backend;
+function foreachindex_on(f, indices, backend::Backend;
                        block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
-    _check_launch(; block_size, max_tasks, min_elems)
+    check_launch(; block_size, max_tasks, min_elems)
     if runs_threads(backend)
         _forindices_threads(f, indices; max_tasks, min_elems)
     else
@@ -162,7 +162,7 @@ function foreachindex(
     min_elems::Int=1,
 )
     backend = resolve_backend(backend, itr)
-    _foreachindex(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
+    foreachindex_on(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
 end
 
 
@@ -221,5 +221,5 @@ function foraxes(
 )
     backend = resolve_backend(backend, itr)
     indices = isnothing(dims) ? eachindex(itr) : axes(itr, dims)
-    _foreachindex(f, indices, backend; block_size, max_tasks, min_elems)
+    foreachindex_on(f, indices, backend; block_size, max_tasks, min_elems)
 end

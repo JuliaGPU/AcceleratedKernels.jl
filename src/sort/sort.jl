@@ -66,7 +66,7 @@ function sort!(
     workspace=nothing,
 )
     p, ord = sort_setup(v; backend, alg, dims, lt, by, rev, order)
-    _sort_impl!(p.alg, _one_based(v), p.backend, dims, ord, scratch_buffers(p, workspace, v);
+    _sort_impl!(p.alg, one_based(v), p.backend, dims, ord, scratch_buffers(p, workspace, v);
                 lt, by, rev, order)
     return v
 end
@@ -79,7 +79,7 @@ function sort_setup(
     order::Base.Order.Ordering=Base.Order.Forward,
 )
     backend = resolve_backend(backend, v)
-    v = _one_based(v)
+    v = one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = resolve_sort(alg, backend, v, dims, ord)
     sizes, nested = _sort_plan(a, v, backend, dims, by)
@@ -207,8 +207,8 @@ function _sortperm!(ix, v; backend=nothing, alg::Algorithm=Auto(),
                     order::Base.Order.Ordering=Base.Order.Forward, workspace=nothing)
     p, ord = sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
     bufs = scratch_buffers(p, workspace, ix, v)
-    ix_one_based = _one_based(ix)
-    _sortperm_impl!(p.alg, ix_one_based, _one_based(v), p.backend, dims, ord, bufs;
+    ix_one_based = one_based(ix)
+    _sortperm_impl!(p.alg, ix_one_based, one_based(v), p.backend, dims, ord, bufs;
                     lt, by, rev, order)
     # The kernels sort `v`'s linear indices counted from 1
     firstindex(v) == 1 || _shift_indices!(ix_one_based, firstindex(v) - 1, p.backend)
@@ -216,7 +216,7 @@ function _sortperm!(ix, v; backend=nothing, alg::Algorithm=Auto(),
 end
 
 function _shift_indices!(ix, shift, backend)
-    _foreachindex(Base.OneTo(length(ix)), backend) do i
+    foreachindex_on(Base.OneTo(length(ix)), backend) do i
         @inbounds ix[i] += shift
     end
 end
@@ -227,7 +227,7 @@ function sortperm_setup(
     order::Base.Order.Ordering=Base.Order.Forward,
 )
     backend = resolve_backend(backend, ix, v)
-    ix, v = _one_based(ix), _one_based(v)
+    ix, v = one_based(ix), one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = resolve_sort(alg, backend, v, dims, ord; perm=true)
     return Plan(backend, a, _sortperm_sizes(a, ix, v, dims)), ord
@@ -339,7 +339,7 @@ function sort_by_key!(
     workspace=nothing,
 )
     p, ord = sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
-    _sort_by_key_impl!(p.alg, _one_based(keys), _one_based(values), p.backend, dims, ord,
+    _sort_by_key_impl!(p.alg, one_based(keys), one_based(values), p.backend, dims, ord,
                        scratch_buffers(p, workspace, keys, values); lt, by, rev, order)
     return keys, values
 end
@@ -361,7 +361,7 @@ function sort_by_key_setup(
         axes(keys) == axes(values) || throw(ArgumentError(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
-    keys, values = _one_based(keys), _one_based(values)
+    keys, values = one_based(keys), one_based(values)
     a = resolve_sort(alg, backend, keys, dims, ord; pairs=true)
     return Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
 end

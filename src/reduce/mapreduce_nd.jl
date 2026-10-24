@@ -36,7 +36,7 @@ function _reduced_dims(dims, ndim::Int)
 end
 
 # Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
-# dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `_NoInit()` or
+# dimensions `dims_valid`; `A` is the accumulator type, and `init` is a value, `NoInit()` or
 # `FoldInto()` (see `finish`). Without `commutative`, the GPU kernels combine elements in order.
 function mapreduce_nd!(
     f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
@@ -66,14 +66,14 @@ function mapreduce_nd!(
 
     # Empty reductions, e.g. reduce(+, rand(3, 0, 5), dims=2): `init`, else nothing is written
     if len == 0
-        init isa Union{_NoInit, FoldInto} || _fill!(dst, init, backend)
+        init isa Union{NoInit, FoldInto} || fill_on!(dst, init, backend)
         return dst
     end
 
     # Nothing to write, e.g. reduce(+, rand(3, 0, 5), dims=3), a 3×0×1 array
     isempty(dst) && return dst
     # (overwriting with single elements combines nothing, even when `op` always throws)
-    len == 1 && init isa _NoInit || check_combinable(op, f, A)
+    len == 1 && init isa NoInit || check_combinable(op, f, A)
 
     # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
     # dimensions, or only ones of size 1
@@ -147,7 +147,7 @@ end
 # type `A`: `dst` and `src` have the same length.
 function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
                                launch...) where {F, OP, A}
-    _foreachindex(eachindex(dst), backend; launch...) do i
+    foreachindex_on(eachindex(dst), backend; launch...) do i
         x = Base.mapreduce_first(f, op, src[i])
         dst[i] = finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
     end
@@ -333,7 +333,7 @@ function _mapreduce_nd_cpu_sections!(
     Rreduce = _mapreduce_reduce_indices(src, dst)
     f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
-    _foreachindex(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
+    foreachindex_on(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
         @inbounds begin
             Iother = Rother[idst]
             res = neutral

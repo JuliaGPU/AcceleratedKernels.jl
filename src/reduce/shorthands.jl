@@ -44,11 +44,11 @@ prod(src::AbstractArray; kwargs...) = _reduce_or_empty(one, Base.mul_prod, src; 
 # `reduce(op, src; kwargs...)`, except that without `init` an empty reduction gives `empty(A)` of
 # the accumulator type `A` (for a whole array, and for every output along `dims`), instead of
 # applying it as an `init`, which would change results such as the sign of a sum of `-0.0`s
-function _reduce_or_empty(empty, op, src; init=_NoInit(), dims=:, acctype=nothing,
+function _reduce_or_empty(empty, op, src; init=NoInit(), dims=:, acctype=nothing,
                           backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                           workspace=nothing, kwargs...)
     kwargs = (; dims, acctype, backend, alg, kwargs...)
-    init isa _NoInit || return reduce(op, src; init, workspace, kwargs...)
+    init isa NoInit || return reduce(op, src; init, workspace, kwargs...)
     A = resolve_acctype(op, Union{}, mapped_eltype(identity, src), acctype)
     if A !== Union{} && isempty(src) &&
        (iswhole(dims) || Base.any(d -> size(src, d) == 0, _reduced_dims(dims, ndims(src))))

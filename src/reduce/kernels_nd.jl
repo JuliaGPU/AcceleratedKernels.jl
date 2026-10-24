@@ -373,7 +373,7 @@ end
 )
     @uniform N = @groupsize()[1]
     @uniform T = eltype(src)
-    @uniform W = _unval(valW)
+    @uniform W = unval(valW)
     sdata = @localmem typeof(neutral) (N,)
     f_lanes, op_lanes = seeded_ops(f, op, neutral)
 
@@ -388,8 +388,8 @@ end
         jw      = UInt32(ithread) * UInt32(W)
         stridew = UInt32(N) * UInt32(W)
         while jw + UInt32(W - 1) < rs
-            v = _vloada(Val(W), pointer(src, input_base + jw + 0x1))
-            acc = _acc_lanes(f_lanes, op_lanes, acc, v)
+            v = vload(Val(W), pointer(src, input_base + jw + 0x1))
+            acc = fold_vector(f_lanes, op_lanes, acc, v)
             jw += stridew
         end
         while jw < rs

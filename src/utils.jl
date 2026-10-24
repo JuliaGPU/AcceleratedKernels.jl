@@ -4,6 +4,6 @@ const LOCAL_MEMORY_BUDGET = 32 * 1024
 
 # The default of every `init` keyword: no initial value given. As in Base, this differs from
 # `init=nothing`, which is an explicit initial value.
-struct _NoInit end
+struct NoInit end
 
-@inline _unval(::Val{V}) where {V} = V
+@inline unval(::Val{V}) where {V} = V

@@ -57,7 +57,7 @@ function _accumulate_nd_cpu_sections!(
 
     # Each thread handles a section of the output array - i.e. reducing along the dims, for
     # multiple output strides
-    _foreachindex(1:length_outer, HOST_BACKEND; max_tasks, min_elems) do idst
+    foreachindex_on(1:length_outer, HOST_BACKEND; max_tasks, min_elems) do idst
 
         @inbounds begin
             # Compute the base index in v for this outer axis
@@ -229,7 +229,7 @@ function _slice_pass!(kind, backend, block_size, nslices, v, src, entry, op::OP,
     else
         kernel! = _slice_scan_tiles!(backend, block_size)
         kernel!(v, src, entry, op, seed, neutral, carries, totals, inclusive, n_inner, len,
-                nchunks, per_chunk, Val(items), _scan_subgroups(backend, typeof(neutral), block_size);
+                nchunks, per_chunk, Val(items), scan_subgroup_width(backend, typeof(neutral), block_size);
                 ndrange=(block_size * nslices * nchunks,))
     end
     return nothing

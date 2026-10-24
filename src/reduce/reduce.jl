@@ -123,7 +123,7 @@ rows = AK.mapreduce((x, y) -> x * y, +, a, b; dims=1)
 function mapreduce(
     f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
     backend::Union{Nothing, Backend}=nothing,
-    init=_NoInit(),
+    init=NoInit(),
     neutral=nothing,
     acctype=nothing,
     dims=:,
@@ -139,7 +139,7 @@ end
 
 function plan(
     ::typeof(mapreduce), f::F, op::OP, src::MapReduceSource, srcs::AbstractArray...;
-    backend=nothing, init=_NoInit(), neutral=nothing, acctype=nothing, dims=:,
+    backend=nothing, init=NoInit(), neutral=nothing, acctype=nothing, dims=:,
     commutative::Bool=true, alg::Algorithm=Auto(),
 ) where {F, OP}
     f, src = _mapreduce_fuse(f, src, srcs)
@@ -149,15 +149,15 @@ end
 plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
     plan(mapreduce, identity, op, src; kwargs...)
 
-# The source of a reduction, indexed from 1 (`_one_based`): several arrays become one
+# The source of a reduction, indexed from 1 (`one_based`): several arrays become one
 # `Broadcasted` object
-_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, _one_based(src))
+_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, one_based(src))
 function _mapreduce_fuse(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
     _mapreduce_check_map_axes(src, srcs...)
-    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, _one_based(src),
-                                                               Base.map(_one_based, srcs)...))
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, one_based(src),
+                                                               Base.map(one_based, srcs)...))
     return identity, bc
 end
 # Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
@@ -178,7 +178,7 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
     backend = resolve_backend(backend, src)
     M = mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
-    A = resolve_acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
+    A = resolve_acctype(op, init isa NoInit ? Union{} : typeof(init), M, acctype)
 
     if iswhole(dims)
         a = resolve_reduce(alg, backend, A, dims)
@@ -197,7 +197,7 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
     dims_valid = _reduced_dims(dims, ndims(src))
     # The result has the accumulator type; where there is none (`op` always throws), only an
     # empty reduction can succeed
-    R_type = A !== Union{} ? A : !(init isa _NoInit) ? typeof(init) : M === Union{} ? Nothing : M
+    R_type = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in dims_valid ? 1 : _srcsize(src, d), ndims(src))
     a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
@@ -210,23 +210,23 @@ end
 function mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :dims_valid)
-        return _mapreduce_whole(f, op, src, backend, a, _unval(s.A); init, neutral=s.seed,
+        return _mapreduce_whole(f, op, src, backend, a, unval(s.A); init, neutral=s.seed,
                                 partials=get(bufs, :partials, nothing), commutative)
     end
-    if init isa _NoInit && Base.any(d -> _srcsize(src, d) == 0, s.dims_valid) &&
+    if init isa NoInit && Base.any(d -> _srcsize(src, d) == 0, s.dims_valid) &&
        Base.prod(s.dst_sizes) > 0
         throw(ArgumentError(
             "reducing over an empty dimension is not allowed without `init`; pass `init`"))
     end
-    dst = KernelAbstractions.allocate(backend, _unval(s.R_type), s.dst_sizes)
-    return mapreduce_nd!(f, op, dst, src, backend, a, _unval(s.A);
+    dst = KernelAbstractions.allocate(backend, unval(s.R_type), s.dst_sizes)
+    return mapreduce_nd!(f, op, dst, src, backend, a, unval(s.A);
                          init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
-function mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing,
+function mapreduce_nested(f::F, op::OP, src, bufs; backend, init=NoInit(), neutral=nothing,
                            dims=:, alg) where {F, OP}
-    src = _one_based(src)
+    src = one_based(src)
     mapreduce_run(f, op, src,
                    mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
                    init, bufs)
@@ -302,7 +302,7 @@ AK.mapreducedim!(identity, +, R, A; init=100)        # [103 107]
 function mapreducedim!(
     f::F, op::OP, R::AbstractArray, src::MapReduceSource;
     backend::Union{Nothing, Backend}=nothing,
-    init=_NoInit(),
+    init=NoInit(),
     neutral=nothing,
     overwrite::Bool=false,
     acctype=nothing,
@@ -319,12 +319,12 @@ end
 function mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
     bufs = scratch_buffers(s.plan, workspace, R, src)
     backend = s.plan.backend
-    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, _unval(s.A);
+    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, unval(s.A);
                   init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
 plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
-      backend=nothing, init=_NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
+      backend=nothing, init=NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
       commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
     mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
 
@@ -338,7 +338,7 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
             "cannot reduce an array of size $(size(src)) into one of size $(size(R))"))
     end
     _check_noalias(R, src)
-    R, src = _one_based(R), _one_based(src)
+    R, src = one_based(R), one_based(src)
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)
@@ -351,7 +351,7 @@ function mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, n
     a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)
     sizes = _mapreduce_nd_sizes(src, backend, a, A, seed, dims_valid, length(dst))
-    init = init isa _NoInit && !overwrite ? FoldInto() : init
+    init = init isa NoInit && !overwrite ? FoldInto() : init
     return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, dims_valid, init)
 end
 
@@ -369,12 +369,12 @@ _check_noalias(R, src) = nothing
 function _mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, neutral,
                           partials, commutative) where {F, OP, A}
     if length(src) == 0
-        init isa _NoInit || return init
+        init isa NoInit || return init
         throw(ArgumentError(
             "reducing over an empty collection is not allowed without `init`; pass `init`"))
     end
     # (a single element without `init` has nothing to combine, even when `op` always throws)
-    if A === Union{} && length(src) == 1 && init isa _NoInit
+    if A === Union{} && length(src) == 1 && init isa NoInit
         return @allowscalar Base.mapreduce_first(f, op, src[first(eachindex(src))])
     end
     check_combinable(op, f, A)

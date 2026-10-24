@@ -23,21 +23,21 @@ end
 # between one and as many times as their width (the sub-group totals are scanned by a
 # sub-group); else 0, to scan in local memory.
 @static if isdefined(KernelAbstractions, :KernelInterface)
-    function _scan_subgroups(backend, ::Type{T}, block_size) where {T}
+    function scan_subgroup_width(backend, ::Type{T}, block_size) where {T}
         scan_tuning(backend, T).subgroups || return Val(0)
         KI.supports_linear_subgroups(backend) && KI.supports_shuffle(backend, T) || return Val(0)
         W = KI.sub_group_size(backend)
         return ispow2(W) && W <= block_size <= W * W ? Val(W) : Val(0)
     end
 else
-    _scan_subgroups(backend, T, block_size) = Val(0)
+    scan_subgroup_width(backend, T, block_size) = Val(0)
 end
 
 
 # Exclusive scan of one value per thread, `totals[ithread + 1]`, seeded with `seed`: returns the
 # thread's prefix and the block's total. All threads in the block must call it. Operands are
 # combined in element order (earlier on the left), so `op` need not be commutative. With a
-# sub-group width `W` (see `_scan_subgroups`), it scans with sub-group operations, else in local
+# sub-group width `W` (see `scan_subgroup_width`), it scans with sub-group operations, else in local
 # memory. It overwrites `totals`.
 @inline block_exclusive_scan!(@context, op, totals, seed, block_size, ithread, ::Val{0}) =
     block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
@@ -111,7 +111,7 @@ end
 # Aligned load of `W` consecutive elements as one LLVM vector (`load <W x T>, align W*sizeof(T)`),
 # without depending on SIMD.jl. Julia 1.12 (LLVM 17+) passes `LLVMPtr` as an opaque `ptr`; older
 # versions pass it as `i8*`, which needs a bitcast to the vector pointer type.
-@generated function _vloada(::Val{W}, ptr::Core.LLVMPtr{T, AS}) where {W, T, AS}
+@generated function vload(::Val{W}, ptr::Core.LLVMPtr{T, AS}) where {W, T, AS}
     lt = T === Float32 ? "float" : T === Float64 ? "double" : "i$(8 * sizeof(T))"
     vt = "<$W x $lt>"
     align = W * sizeof(T)
@@ -134,5 +134,5 @@ end
 end
 
 # Fold a vector into the thread-local accumulator. `W` is known at compile time.
-@inline _acc_lanes(f, op, acc, v::NTuple{W, Core.VecElement}) where {W} =
+@inline fold_vector(f, op, acc, v::NTuple{W, Core.VecElement}) where {W} =
     foldl(op, ntuple(k -> f(@inbounds v[k].value), Val(W)); init = acc)

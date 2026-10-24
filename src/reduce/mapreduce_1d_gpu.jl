@@ -60,7 +60,7 @@ _mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks) =
     min(cld(len, block_size * items_per_thread), max_blocks)
 
 # Reduce the non-empty `src`; `neutral` is the partial-result seed of `reduce_seed`, `init` is a
-# value, `_NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `_mapreduce_1d_partials`
+# value, `NoInit()` or (with `dst`) `FoldInto()`, and `partials` holds `_mapreduce_1d_partials`
 # partial results (`nothing` if none are needed). Without `dst`, returns the result as a host
 # value; with `dst`, stores it in `dst[1]` on the device.
 function mapreduce_1d_gpu(

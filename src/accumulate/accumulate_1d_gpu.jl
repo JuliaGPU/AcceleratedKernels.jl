@@ -142,7 +142,7 @@ end
 
 # The first block's seed: `init` in the element type, else the neutral seed
 _scan_first_seed(v, init, neutral) = lift(neutral, convert(eltype(v), init))
-_scan_first_seed(v, ::_NoInit, neutral) = neutral
+_scan_first_seed(v, ::NoInit, neutral) = neutral
 
 
 # The length of the scratch of `ScanPrefixes` for `n` elements: the totals of the tiles, of the
@@ -180,7 +180,7 @@ function accumulate_1d_gpu!(
     items = Val(items_per_thread)
     seed = _scan_first_seed(v, init, neutral)
 
-    subgroups = _scan_subgroups(backend, typeof(neutral), block_size)
+    subgroups = scan_subgroup_width(backend, typeof(neutral), block_size)
     kernel! = _accumulate_block!(backend, block_size)
     if num_blocks == 1
         kernel!(op, v, src, entry, seed, neutral, inclusive, nothing, nothing, items,
@@ -192,7 +192,7 @@ function accumulate_1d_gpu!(
     # totals (from `neutral`, as the first total includes `seed`)
     totals = view(prefixes, 1:num_blocks)
     scan_totals!() =
-        accumulate_1d_gpu!(op, totals, backend, alg; init=_NoInit(), neutral, inclusive=true,
+        accumulate_1d_gpu!(op, totals, backend, alg; init=NoInit(), neutral, inclusive=true,
                            prefixes=view(prefixes, num_blocks+1:length(prefixes)))
     if scan_tuning(backend, eltype(v)).reduce_then_scan
         # Reduce the tiles, then scan them from their prefix: this reads the source twice and

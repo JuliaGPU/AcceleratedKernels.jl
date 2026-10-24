@@ -243,36 +243,36 @@ copy_on(backend, v) = backendless(v) ? copyto!(similar_on(backend, v), collect(v
 # `A` with axes starting at 1, as the kernels and threaded loops index it, for an `A` whose axes
 # start elsewhere (an `OffsetArray`, for instance), and likewise the arrays of a `Broadcasted`
 # object. The operations pass these on, and keep `A` for their checks.
-_one_based(A::AbstractArray) = Base.has_offset_axes(A) ? _one_based_view(A) : A
-function _one_based(bc::Base.Broadcast.Broadcasted)
+one_based(A::AbstractArray) = Base.has_offset_axes(A) ? one_based_view(A) : A
+function one_based(bc::Base.Broadcast.Broadcasted)
     Base.has_offset_axes(bc) || return bc
-    args = Base.map(_one_based, bc.args)
+    args = Base.map(one_based, bc.args)
     # (keeping the shape of explicit axes, which may be larger than the arguments')
     return Base.Broadcast.Broadcasted(bc.f, args, Base.map(ax -> Base.OneTo(length(ax)), axes(bc)))
 end
-_one_based(x) = x
+one_based(x) = x
 # (a reshape keeps the linear indexing of an array of several dimensions, which starts at 1, and
 # `OffsetArrays` makes it the parent array; Base does not reshape vectors with offset axes)
-_one_based_view(A::AbstractVector) = @view A[begin:end]
-_one_based_view(A::AbstractArray) = reshape(A, size(A))
+one_based_view(A::AbstractVector) = @view A[begin:end]
+one_based_view(A::AbstractArray) = reshape(A, size(A))
 
-# Whether `A` is a view `_one_based` made. Base's `copyto!` and `fill!` index those element by
-# element on the host, which GPU arrays disallow, so `_copyto!` and `_fill!` use a kernel.
-_is_one_based_view(A) =
+# Whether `A` is a view `one_based` made. Base's `copyto!` and `fill!` index those element by
+# element on the host, which GPU arrays disallow, so `copyto_on!` and `fill_on!` use a kernel.
+has_offset_parent(A) =
     A isa Union{SubArray, Base.ReshapedArray} && Base.has_offset_axes(parent(A))
 
 # `copyto!(dst, src)` of arrays of the same size
-function _copyto!(dst, src, backend)
-    _is_one_based_view(dst) || _is_one_based_view(src) || return copyto!(dst, src)
-    _foreachindex(Base.OneTo(length(dst)), backend) do i
+function copyto_on!(dst, src, backend)
+    has_offset_parent(dst) || has_offset_parent(src) || return copyto!(dst, src)
+    foreachindex_on(Base.OneTo(length(dst)), backend) do i
         @inbounds dst[i] = src[i]
     end
     return dst
 end
 
-function _fill!(A, x, backend)
-    _is_one_based_view(A) || return fill!(A, x)
-    _foreachindex(Base.OneTo(length(A)), backend) do i
+function fill_on!(A, x, backend)
+    has_offset_parent(A) || return fill!(A, x)
+    foreachindex_on(Base.OneTo(length(A)), backend) do i
         @inbounds A[i] = x
     end
     return A

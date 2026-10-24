@@ -14,7 +14,7 @@ source_eltype(x) = Base.Broadcast._broadcast_getindex_eltype(x)
 function materialize_source(bc::Base.Broadcast.Broadcasted, backend)
     dst = KernelAbstractions.allocate(backend, source_eltype(bc), size(bc))
     indices = CartesianIndices(axes(bc))
-    _foreachindex(Base.OneTo(length(dst)), backend) do i
+    foreachindex_on(Base.OneTo(length(dst)), backend) do i
         @inbounds dst[i] = bc[indices[i]]
     end
     return dst
@@ -177,14 +177,14 @@ exact_neutral(op, n) = n
 exact_neutral(::Union{typeof(+), typeof(Base.add_sum)},
                n::Union{AbstractFloat, Complex{<:AbstractFloat}}) = iszero(n) ? -n : n
 
-# `init` of the kernels that write a destination: a value, `_NoInit()`, or `FoldInto()` to fold in
+# `init` of the kernels that write a destination: a value, `NoInit()`, or `FoldInto()` to fold in
 # the destination's previous value as `Base.mapreducedim!` does.
 struct FoldInto end
 
 # The value stored for an output whose reduction produced `partial`: `init` is applied exactly
 # once, here.
 @inline finish(op, init, dst, i, partial) = op(init, unwrap(partial))
-@inline finish(op, ::_NoInit, dst, i, partial) = unwrap(partial)
+@inline finish(op, ::NoInit, dst, i, partial) = unwrap(partial)
 @inline finish(op, ::FoldInto, dst, i, partial) = op(dst[i], unwrap(partial))
 
 # `init` of a pass that stores bare partial results, for a later pass or for the host
