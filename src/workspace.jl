@@ -61,9 +61,10 @@ struct Plan{B <: Backend, A, N <: NamedTuple, S <: NamedTuple}
 end
 Plan(backend, alg, sizes::NamedTuple) = Plan(backend, alg, (;), sizes)
 
-# `plan(op, args...; kwargs...)` has one method per operation, taking the operation's arguments
-# (without `workspace`); operations without scratch have none.
-function plan end
+# `plan(op, args...; kwargs...)` has one method per operation that takes a workspace, with the
+# operation's arguments (without `workspace`)
+plan(op, args...; kwargs...) = throw(ArgumentError(
+    "`$op` takes no workspace for arguments of types $(join(Base.map(Core.Typeof, args), ", "))"))
 
 
 
@@ -72,8 +73,8 @@ function plan end
 
 The scratch buffers the call `op(args...; kwargs...)` needs, as a `NamedTuple` of
 `(eltype, dims)` pairs (nested for the operations it calls), without allocating anything.
-An operation with an algorithm whose call needs no scratch gives an empty `NamedTuple`; the launch
-wrappers (`foreachindex`, `map!`, `reverse!`, the searches) take no workspace.
+An operation with an algorithm whose call needs no scratch gives an empty `NamedTuple`; an
+operation that takes no `workspace` keyword is an `ArgumentError`.
 
 ```julia
 julia> AK.workspace_size(AK.sort!, CuArray(rand(Float32, 10_000)); alg=AK.RadixSort())

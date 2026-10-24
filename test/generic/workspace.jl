@@ -136,6 +136,10 @@ end
                            merge(ws.buffers, (; temp=w)))
     @test_throws ArgumentError AK.sort!(w; alg, workspace=aliased)
 
+    # Operations without a workspace say so
+    @test_throws ArgumentError AK.workspace_size(AK.map!, identity, similar(v), v)
+    @test_throws ArgumentError AK.workspace(AK.foreachindex, identity, v)
+
     # The scratch keywords are gone
     @test_throws MethodError AK.sort!(copy(v); temp=similar(v))
     @test_throws MethodError AK.sum(v; temp=similar(v))
