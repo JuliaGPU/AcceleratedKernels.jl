@@ -107,7 +107,7 @@ lane type when the operator has no known neutral element). Returns `ScanPrefixes
 or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
 function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
-                       ::Type{S}=T) where {T, S}
+                      ::Type{S}=T) where {T, S}
     check_fields(alg)
     t = scan_tuning(backend, T)
     a = alg isa Auto ? select_scan(backend, dims) : alg
@@ -138,7 +138,7 @@ function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
 end
 
 function fill_defaults(a::A, t::ScanTuning,
-               ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
+                       ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
     items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
                                                        a.items_per_thread

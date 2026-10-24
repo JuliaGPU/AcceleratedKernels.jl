@@ -195,7 +195,7 @@ function predicate_setup(pred, op, v, backend, alg)
         (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
         (; reduce=mapreduce_setup(BoolResult(pred), op, v, backend, op === (|) ? false : true,
-                                   nothing, nothing, :, a.reduce).plan.sizes)
+                                  nothing, nothing, :, a.reduce).plan.sizes)
     else
         (;)
     end

@@ -270,12 +270,12 @@ end
     # Every array votes, destination first; backend-free leaves do not
     @test AK.resolve_backend(nothing, d) === RB
     @test AK.resolve_backend(nothing, d, 1:4, CartesianIndices((2, 2)), LinearIndices(h),
-                              1.0, Ref(2), (3, 1:2), nothing) === RB
+                             1.0, Ref(2), (3, 1:2), nothing) === RB
     @test AK.resolve_backend(nothing, 1:4, d) === RB
     @test AK.resolve_backend(nothing, h, 1:4) == host
     # ... nor do Base's views, reshapes and permutations of them, while those of arrays vote
     @test AK.resolve_backend(nothing, d, reshape(1:6, 2, 3), view(1:10, 2:4),
-                              PermutedDimsArray(reshape(1:6, 2, 3), (2, 1))) === RB
+                             PermutedDimsArray(reshape(1:6, 2, 3), (2, 1))) === RB
     @test AK.resolve_backend(nothing, view(d, 1:2)) === RB
     @test AK.resolve_backend(nothing, reshape(1:6, 2, 3)) == host
 

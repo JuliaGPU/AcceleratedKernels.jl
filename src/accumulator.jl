@@ -175,7 +175,7 @@ end
 # negative zeros into a positive zero; the identity of floating-point addition is `-0.0`
 exact_neutral(op, n) = n
 exact_neutral(::Union{typeof(+), typeof(Base.add_sum)},
-               n::Union{AbstractFloat, Complex{<:AbstractFloat}}) = iszero(n) ? -n : n
+              n::Union{AbstractFloat, Complex{<:AbstractFloat}}) = iszero(n) ? -n : n
 
 # `init` of the kernels that write a destination: a value, `NoInit()`, or `FoldInto()` to fold in
 # the destination's previous value as `Base.mapreducedim!` does.

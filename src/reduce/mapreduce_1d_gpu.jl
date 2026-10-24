@@ -88,11 +88,11 @@ function mapreduce_1d_gpu(
     if dst === nothing
         # `f` may index device arrays too
         len == 1 && return finish(op, init, nothing, 0,
-                                   @allowscalar(op_host(neutral, f_host(src[1]))))
+                                  @allowscalar(op_host(neutral, f_host(src[1]))))
         if len < switch_below
             h_src = _host_copy(src)
             return finish(op, init, nothing, 0,
-                           Base.mapreduce(f_host, op_host, h_src; init=neutral))
+                          Base.mapreduce(f_host, op_host, h_src; init=neutral))
         end
     end
 

@@ -174,7 +174,7 @@ _mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
 # Everything a reduction resolves before touching data: its backend, algorithm and scratch (the
 # plan), accumulator type and partial-result seed, and for reductions along `dims` the result
 function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
-                          alg) where {F, OP}
+                         alg) where {F, OP}
     backend = resolve_backend(backend, src)
     M = mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
@@ -225,11 +225,11 @@ end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
 function mapreduce_nested(f::F, op::OP, src, bufs; backend, init=NoInit(), neutral=nothing,
-                           dims=:, alg) where {F, OP}
+                          dims=:, alg) where {F, OP}
     src = one_based(src)
     mapreduce_run(f, op, src,
-                   mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
-                   init, bufs)
+                  mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
+                  init, bufs)
 end
 
 
@@ -324,12 +324,12 @@ function mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) wher
 end
 
 plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
-      backend=nothing, init=NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
-      commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
+     backend=nothing, init=NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
+     commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
     mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
 
 function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwrite, acctype,
-                             alg) where {F, OP}
+                            alg) where {F, OP}
     backend = resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
@@ -343,10 +343,10 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)
     return mapreducedim_setup(f, op, src, dst, dims_valid, backend, init, neutral, overwrite,
-                               acctype, alg)
+                              acctype, alg)
 end
 function mapreducedim_setup(f::F, op::OP, src, dst, dims_valid, backend, init, neutral,
-                             overwrite, acctype, alg) where {F, OP}
+                            overwrite, acctype, alg) where {F, OP}
     A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
     a = resolve_reduce(alg, backend, A, dims_valid)
     seed = _mapreduce_seed(op, A, neutral)

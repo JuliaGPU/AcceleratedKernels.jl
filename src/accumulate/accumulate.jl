@@ -88,7 +88,7 @@ AK.accumulate!(+, v; alg=AK.ScanPrefixes(block_size=512))
 function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                      workspace=nothing, kwargs...)
     s = scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
-                          kwargs...)
+                   kwargs...)
     w = one_based(v)
     scan_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
     return v
@@ -102,20 +102,20 @@ function accumulate!(
 )
     _check_scan_destination(dst, src)
     s = scan_setup(op, eltype(dst), eltype(src), size(dst),
-                          resolve_backend(backend, dst, src); kwargs...)
+                   resolve_backend(backend, dst, src); kwargs...)
     scan_run!(op, one_based(dst), one_based(src), s,
-                     scratch_buffers(s.plan, workspace, dst, src))
+              scratch_buffers(s.plan, workspace, dst, src))
     return dst
 end
 
 plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
     scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
-                      kwargs...).plan
+               kwargs...).plan
 function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
-               backend=nothing, kwargs...)
+              backend=nothing, kwargs...)
     _check_scan_destination(dst, src)
     scan_setup(op, eltype(dst), eltype(src), size(dst),
-                      resolve_backend(backend, dst, src); kwargs...).plan
+               resolve_backend(backend, dst, src); kwargs...).plan
 end
 
 function _check_scan_destination(dst, src)
@@ -308,10 +308,10 @@ function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothi
 end
 
 function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=NoInit(),
-               dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
+              dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
     scan_setup(op, D, eltype(v), size(v), resolve_backend(backend, v); init, dims,
-                      inclusive, acctype, kwargs...).plan
+               inclusive, acctype, kwargs...).plan
 end
 
 # The element type `accumulate` allocates: the running-value type from `init`'s type alone

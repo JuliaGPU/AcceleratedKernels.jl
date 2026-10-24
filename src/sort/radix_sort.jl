@@ -397,7 +397,7 @@ function _rs_key_range_setup(v::AbstractArray{T}, backend::Backend) where T
     K = typeof(_to_sort_key(zero(T)))
     ident = (typemax(K), typemin(K))
     return mapreduce_setup(_RSKeyPair(), _RSMinMax(), v, backend, ident, ident, nothing, :,
-                            Auto()), ident
+                           Auto()), ident
 end
 
 # Return the extrema of the transformed sort keys, with the scratch of `_rs_key_range_setup`
@@ -441,7 +441,7 @@ function _radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     c.one_block && return (;), (;)
     hist_len = Base.checked_mul(Int(_RS_SIZE), _rs_num_blocks(layout, a.block_size * c.items))
     scan = scan_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
-                             inclusive=false).plan
+                      inclusive=false).plan
     key_range = first(_rs_key_range_setup(v, backend)).plan
     return (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
             key_range=key_range.sizes), (; scan=scan.alg, key_range=key_range.alg)

@@ -118,7 +118,7 @@ Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `b
 concrete algorithm with every field set, or throws an `ArgumentError`.
 """
 function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
-                       ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
+                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
     T = eltype(v)
     layout = slice_layout(v, dims)
     check_fields(alg)
@@ -130,7 +130,7 @@ function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
 end
 
 function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
-                      perm, pairs) where {T}
+                     perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
     if (!a.stable || _ties_invisible(T, ord)) && layout.len <= t.bitonic_max_len

@@ -113,7 +113,7 @@ end
     @test_throws ArgumentError resolve_reduce(AK.MergeSort())
     @test_throws ArgumentError resolve_reduce(AK.CPUThreads.SampleSort(); backend=host)
     @test_throws ArgumentError AK.resolve_sort(AK.BlockReduce(), RRB, zeros(Float32, 10), :,
-                                                Base.Order.Forward; perm=false)
+                                               Base.Order.Forward; perm=false)
 end
 
 

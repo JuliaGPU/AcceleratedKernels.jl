@@ -258,7 +258,7 @@ end
         S = neutral === nothing ? AK.Optional{ScanMat2} : ScanMat2
         tile = !TEST_KERNELS ? 2 * block_size :
                block_size * AK.resolve_scan(AK.SliceScan(; block_size), BACKEND, ScanMat2, 1,
-                                             S).items_per_thread
+                                            S).items_per_thread
         for (sz, dims) in (((3, 2000), 2), ((2000, 3), 1), ((2000, 3), 2), ((7, 600), 2),
                            ((40, 5, 30), 1), ((40, 5, 30), 2), ((40, 5, 30), 3),
                            ((3, tile), 2), ((3, tile + 1), 2), ((3, 2tile), 2), ((2tile + 1, 3), 1),

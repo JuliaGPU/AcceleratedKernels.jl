@@ -296,10 +296,10 @@ function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
 end
 
 plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
-      backend=nothing, alg::Algorithm=Auto()) =
+     backend=nothing, alg::Algorithm=Auto()) =
     findall_setup(values, items, false, backend, alg).plan
 plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
-      alg::Algorithm=Auto()) =
+     alg::Algorithm=Auto()) =
     findall_setup(v, items, true, backend, alg).plan
 
 # The plan of `findall` over `v`: its scratch is a mask of `pred(v[i])` for the predicate form
