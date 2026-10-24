@@ -42,7 +42,6 @@ include("findall.jl")
 include("reverse.jl")
 include("searchsorted.jl")
 include("predicates.jl")
-include("arithmetics.jl")
 
 
 end     # module AcceleratedKernels

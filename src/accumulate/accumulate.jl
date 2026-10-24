@@ -321,3 +321,58 @@ end
 _accumulate_eltype(op, v, init, dims, inclusive, acctype) =
     _scan_acctype(op, Union{}, eltype(v), init, inclusive,
                   _scan_combines(size(v), dims, init, inclusive), acctype)
+
+
+"""
+    cumsum(src::AbstractArray; kwargs...)
+
+Cumulative sum of elements of an array, as `Base.cumsum` (Base's `add_sum`, so small integers are
+summed as `Int`), except that without `dims` a multidimensional array is summed in linear order.
+The keywords are those of [`accumulate`](@ref).
+
+# Examples
+Simple cumulative sum of elements in a vector:
+```julia
+import AcceleratedKernels as AK
+using AMDGPU
+
+v = ROCArray(rand(Int32(1):Int32(100), 100_000))
+s = AK.cumsum(v)
+```
+
+Row-wise cumulative sum of a matrix:
+```julia
+m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
+s = AK.cumsum(m, dims=1)
+```
+"""
+cumsum(src::AbstractArray; kwargs...) = accumulate(Base.add_sum, src; kwargs...)
+
+
+"""
+    cumprod(src::AbstractArray; kwargs...)
+
+Cumulative product of elements of an array, as `Base.cumprod` (Base's `mul_prod`), except that
+without `dims` a multidimensional array is multiplied in linear order. The keywords are those of
+[`accumulate`](@ref).
+
+# Examples
+Simple cumulative product of elements in a vector:
+```julia
+import AcceleratedKernels as AK
+using oneAPI
+
+v = oneArray(rand(Int32(1):Int32(100), 100_000))
+p = AK.cumprod(v)
+```
+
+Row-wise cumulative product of a matrix:
+```julia
+m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
+p = AK.cumprod(m, dims=1)
+```
+"""
+cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)
+
+_plan(::typeof(cumsum), src::AbstractArray; kwargs...) = _plan(accumulate, Base.add_sum, src; kwargs...)
+_plan(::typeof(cumprod), src::AbstractArray; kwargs...) = _plan(accumulate, Base.mul_prod, src; kwargs...)

@@ -406,3 +406,5 @@ function _mapreduce_whole_run(f::F, op::OP, src, backend, alg, ::Type{A}; init, 
         )
     end
 end
+
+include("shorthands.jl")
