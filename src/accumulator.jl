@@ -1,9 +1,3 @@
-# `f`, required to return a `Bool` (Base's `_bool`), for `count` and the predicates
-struct _BoolValued{F} <: Function
-    f::F
-end
-@inline (c::_BoolValued)(x) = c.f(x)::Bool
-
 # The reduction contract's machinery (see `mapreducedim!`): the accumulator type, the value that
 # seeds partial results, and how a finished partial becomes an output value.
 
@@ -196,14 +190,3 @@ struct _Fold end
 # `init` of a pass that stores bare partial results, for a later pass or for the host
 struct _NoFinish end
 @inline _finish(op, ::_NoFinish, dst, i, partial) = partial
-
-
-# Reductions whose every output reduces a single element, a partial result of the accumulator
-# type `A`: `dst` and `src` have the same length.
-function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
-                               launch...) where {F, OP, A}
-    _foreachindex(eachindex(dst), backend; launch...) do i
-        x = Base.mapreduce_first(f, op, src[i])
-        dst[i] = _finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
-    end
-end

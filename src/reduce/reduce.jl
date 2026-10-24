@@ -1,5 +1,4 @@
 # Backend implementations
-include("utilities.jl")
 include("tuning.jl")
 
 const MapReduceSource = Union{AbstractArray, Base.Broadcast.Broadcasted}

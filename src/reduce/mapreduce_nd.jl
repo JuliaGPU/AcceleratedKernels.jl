@@ -429,6 +429,16 @@ function mapreduce_nd!(
     return dst
 end
 
+# Reductions whose every output reduces a single element, a partial result of the accumulator
+# type `A`: `dst` and `src` have the same length.
+function _mapreduce_nd_single!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
+                               launch...) where {F, OP, A}
+    _foreachindex(eachindex(dst), backend; launch...) do i
+        x = Base.mapreduce_first(f, op, src[i])
+        dst[i] = _finish(op, init, dst, i, A === Union{} ? x : convert(A, x))
+    end
+end
+
 # Launch the kernels of a strided reduction of shape `shape` (see `_mapreduce_nd_shape`).
 #
 # This and the other GPU launches of a reduction are called through `Base.inferencebarrier`.
@@ -1098,8 +1108,6 @@ end
         iout = next_iout
     end
 end
-
-@inline _unval(::Val{V}) where {V} = V
 
 # Stride-1 by-block reduction using one aligned 128-bit load per thread iteration.
 # The host launcher verifies the pointer, row alignment, and UInt32 index bound.

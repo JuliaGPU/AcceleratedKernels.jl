@@ -94,6 +94,13 @@ function _check_predicate(a::CPUThreads.Partitioned, backend)
 end
 
 
+# `f`, required to return a `Bool` (Base's `_bool`), for `count` and the predicates
+struct _BoolValued{F} <: Function
+    f::F
+end
+@inline (c::_BoolValued)(x) = c.f(x)::Bool
+
+
 @kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v), first_index)
     temp = @localmem Int8 (1,)
     i = @index(Global, Linear)
