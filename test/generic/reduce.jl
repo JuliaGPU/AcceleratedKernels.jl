@@ -1276,6 +1276,8 @@ end
         # (without a neutral element)
         @test Array(AK.reduce((a, b) -> max(a, b), lazy; dims, alg)) == maximum(h; dims)
         @test Array(AK.mapreduce(*, +, da, db; dims, alg)) == sum(h; dims)
+        @test Array(AK.mapreduce(*, +, lazy, lazy; dims, alg)) == sum(h .* h; dims)
+        @test AK.mapreduce(*, +, lazy, lazy; alg) == sum(h .* h)
         # Folding into the destination's values, and overwriting them
         hR = rand(Int32(-9):Int32(9), size(sum(h; dims)))
         R = array_from_host(hR)

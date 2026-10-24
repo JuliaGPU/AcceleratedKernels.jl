@@ -132,7 +132,7 @@ function mapreduce(
     f, src = _mapreduce_fuse(f, src, srcs)
     s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
     bufs = _buffers(s.plan, workspace, src)
-    return _mapreduce_run(f, op, _mapreduce_source(src), s, init, bufs; commutative)
+    return _mapreduce_run(f, op, _mapreduce_source(src, s.plan.backend), s, init, bufs; commutative)
 end
 
 function _plan(
@@ -161,9 +161,9 @@ end
 # Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
 # Julia 1.12, so earlier versions materialize it when the reduction runs (after the plan and the
 # workspace checks, which see the original arrays); the plan treats it as a dense array.
-_mapreduce_source(src) = src
-_mapreduce_source(src::Base.Broadcast.Broadcasted) =
-    VERSION < v"1.12-" ? _materialize_source(src) : src
+_mapreduce_source(src, backend) = src
+_mapreduce_source(src::Base.Broadcast.Broadcasted, backend) =
+    VERSION < v"1.12-" ? _materialize_source(src, backend) : src
 
 # The seed of the partial results (`_reduce_seed`), where an accumulator type exists
 _mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
@@ -316,7 +316,8 @@ end
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
 function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
     bufs = _buffers(s.plan, workspace, R, src)
-    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
+    backend = s.plan.backend
+    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, _unval(s.A);
                   init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
