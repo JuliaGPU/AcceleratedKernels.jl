@@ -10,11 +10,11 @@ struct Scratch{T, N}
 end
 scratch(::Type{T}, dims::Integer...) where {T} = Scratch{T, length(dims)}(Int.(dims))
 scratch(::Type{T}, dims::Tuple) where {T} = Scratch{T, length(dims)}(Int.(dims))
-Base.show(io::IO, b::Scratch{T}) where {T} = print(io, (T, b.dims))
 
 # The public form of the sizes: `(eltype, dims)` pairs
 size_pairs(sizes::NamedTuple) = Base.map(size_pairs, sizes)
 size_pairs(b::Scratch{T}) where {T} = (T, b.dims)
+Base.show(io::IO, b::Scratch) = show(io, size_pairs(b))
 
 
 """
@@ -122,8 +122,6 @@ end
 allocate_scratch(backend, sizes::NamedTuple) = Base.map(s -> allocate_scratch(backend, s), sizes)
 allocate_scratch(backend, b::Scratch{T}) where {T} = KernelAbstractions.allocate(backend, T, b.dims)
 
-_describe(sizes::NamedTuple) = isempty(sizes) ? "no buffers" : "the buffers $sizes"
-
 # The buffers of the plan: the workspace's, checked against the plan and the operation's arrays,
 # or new ones
 scratch_buffers(p::Plan, ::Nothing, arrays...) = allocate_scratch(p.backend, p.sizes)
@@ -134,21 +132,22 @@ function scratch_buffers(p::Plan, ws::Workspace, arrays...)
         "the workspace was made for $(ws.alg) $(ws.nested), but this call resolves to " *
         "$(p.alg) $(p.nested)"))
     ws.sizes == p.sizes || throw(ArgumentError(
-        "the workspace holds $(_describe(ws.sizes)), but this call needs $(_describe(p.sizes))"))
+        "the workspace holds the buffers $(size_pairs(ws.sizes)), but this call needs " *
+        "$(size_pairs(p.sizes))"))
     for b in leaves(ws.buffers), a in arrays
         mayalias(b, a) &&
             throw(ArgumentError("the workspace must not alias the operation's arrays"))
     end
     return ws.buffers
 end
+scratch_buffers(p::Plan, ws, arrays...) =
+    throw(ArgumentError("`workspace` must be a `Workspace` from `workspace`, got $(typeof(ws))"))
 
 # Whether the buffer `b` may alias the array or `Broadcasted` source `a`
 mayalias(b, a::AbstractArray) = Base.mightalias(b, a)
 mayalias(b, a::Base.Broadcast.Broadcasted) = Base.any(x -> mayalias(b, x), a.args)
 mayalias(b, a::Base.Broadcast.Extruded) = mayalias(b, a.x)
 mayalias(b, a) = false
-scratch_buffers(p::Plan, ws, arrays...) =
-    throw(ArgumentError("`workspace` must be a `Workspace` from `workspace`, got $(typeof(ws))"))
 
 leaves(buffers::NamedTuple) = Iterators.flatten(Base.map(leaves, values(buffers)))
 leaves(buffer::AbstractArray) = (buffer,)
