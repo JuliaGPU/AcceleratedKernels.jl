@@ -21,12 +21,12 @@ function _merge_sortperm!(
     Base.Order.ord(lt, by, rev, order)      # validate the ordering keywords before touching ix
 
     # Initialise the linear indices that will be sorted by the keys in v
-    _foreachindex(eachindex(ix), backend; block_size) do i
+    _foreachindex(Base.OneTo(length(ix)), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
     # (a range, for instance, has no backend: collected on the host first)
-    keys = copyto!(bufs.keys, _backend_free(v) ? collect(v) : v)
+    keys = _copyto!(bufs.keys, _backend_free(v) ? collect(v) : v, backend)
 
     _merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
 
@@ -57,7 +57,7 @@ function _merge_sortperm_lowmem!(
     ord = Base.Order.ord(lt, by, rev, order)
 
     # Initialise the linear indices that will be sorted by the keys in v
-    _foreachindex(eachindex(ix), backend; block_size) do i
+    _foreachindex(Base.OneTo(length(ix)), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(ix) || layout.len <= 1) && return ix
@@ -99,7 +99,7 @@ function _merge_sortperm_lowmem!(
         end
 
         if isodd(niter)
-            copyto!(ix, p1)
+            _copyto!(ix, p1, backend)
         end
     end
 

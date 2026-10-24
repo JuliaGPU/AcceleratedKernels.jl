@@ -1316,6 +1316,74 @@ end
 end
 
 
+@testset "sort: offset axes" begin
+    # Arrays whose axes do not start at 1; permutations hold their indices, as Base's do
+    Random.seed!(0)
+    threads = AK.CPUThreads.SampleSort(max_tasks=4, min_elems=8)
+    sort_algs = TEST_KERNELS ?
+        [SORT_ALG, AK.MergeSort(block_size=64), AK.RadixSort(), AK.BitonicSort()] :
+        [SORT_ALG, threads]
+    perm_algs = TEST_KERNELS ?
+        [SORT_ALG, AK.MergeSort(block_size=64), AK.MergeSort(block_size=64, lowmem=true)] :
+        [SORT_ALG, threads]
+    pair_algs = TEST_KERNELS ? [SORT_ALG, AK.MergeSort(block_size=64)] : [SORT_ALG, threads]
+
+    h = rand(Int32, 1000)
+    hm = rand(Int32(1):Int32(50), 30, 40)
+    for alg in sort_algs
+        v = offset_from_host(h, (-3,))
+        AK.sort!(v; alg)
+        @test Array(v.parent) == sort(h)
+        with_workspace(AK.sort!, v; rev=true, alg)
+        @test Array(v.parent) == sort(h; rev=true)
+        r = AK.sort(offset_from_host(h, (-3,)); alg)
+        @test axes(r) == axes(v) && Array(r.parent) == sort(h)
+        v = offset_from_host(Int32[5], (-3,))
+        AK.sort!(v; alg)
+        @test Array(v.parent) == [5]
+        for dims in (1, 2)
+            m = offset_from_host(hm, (-1, 3))
+            AK.sort!(m; dims, alg)
+            @test Array(m.parent) == sort(hm; dims)
+        end
+    end
+
+    for alg in perm_algs
+        v = offset_from_host(h, (-3,))
+        for ix in (offset_from_host(zeros(Int, 1000), (7,)), array_from_host(zeros(Int, 1000)))
+            AK.sortperm!(ix, v; alg)
+            @test Array(ix isa OffsetAxes ? ix.parent : ix) == sortperm(h) .- 3
+        end
+        ix = offset_from_host(zeros(Int, 1000), (-3,))
+        with_workspace(AK.sortperm!, ix, v; dims=1, rev=true, alg)
+        @test Array(ix.parent) == sortperm(h; rev=true) .- 3
+        @test Array(AK.sortperm(v; alg)) == sortperm(h) .- 3
+        @test Array(AK.sortperm(offset_from_host(Int32[5], (-3,)); alg)) == [-2]
+        for dims in (1, 2)
+            m = offset_from_host(hm, (-1, 3))
+            ix = offset_from_host(zeros(Int, 30, 40), (-1, 3))
+            AK.sortperm!(ix, m; dims, alg)
+            @test Array(ix.parent) == sortperm(hm; dims)
+            @test Array(AK.sortperm(m; dims, alg)) == sortperm(hm; dims)
+        end
+    end
+
+    for alg in pair_algs
+        k = rand(Int32(1):Int32(50), 1000)
+        keys, values = offset_from_host(k, (-3,)), offset_from_host(Int32.(1:1000), (4,))
+        AK.sort_by_key!(keys, values; alg)
+        @test Array(keys.parent) == sort(k) && Array(values.parent) == sortperm(k)
+        for dims in (1, 2)
+            hv = rand(Int32, 30, 40)
+            keys, values = offset_from_host(hm, (-1, 3)), offset_from_host(hv, (-1, 3))
+            AK.sort_by_key!(keys, values; dims, alg)
+            @test Array(keys.parent) == sort(hm; dims) &&
+                  Array(values.parent) == hv[sortperm(hm; dims)]
+        end
+    end
+end
+
+
 @testset "sort: bits-union elements" begin
     # Merge sort's kernels read such elements through `@Const` (where the backend's arrays can
     # hold them)

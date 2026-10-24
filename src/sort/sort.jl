@@ -124,7 +124,8 @@ function sort!(
     workspace=nothing,
 )
     p, ord = _sort_setup(v; backend, alg, dims, lt, by, rev, order)
-    _sort_impl!(p.alg, v, p.backend, dims, ord, _buffers(p, workspace, v); lt, by, rev, order)
+    _sort_impl!(p.alg, _one_based(v), p.backend, dims, ord, _buffers(p, workspace, v);
+                lt, by, rev, order)
     return v
 end
 
@@ -136,6 +137,7 @@ function _sort_setup(
     order::Base.Order.Ordering=Base.Order.Forward,
 )
     backend = _resolve_backend(backend, v)
+    v = _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord)
     sizes, nested = _sort_plan(a, v, backend, dims, by)
@@ -217,9 +219,10 @@ _plan(::typeof(sort), v::AbstractArray; kwargs...) = _plan(sort!, v; kwargs...)
 Write into `ix` the stable permutation that sorts `v`, so that `v[ix]` is sorted; `ix` is always
 overwritten. The keywords are those of [`sort!`](@ref).
 
-With `dims=:`, `ix` needs as many elements as `v` and receives indices `1:length(v)`. With an
-integer `dims`, `ix` must have the same axes as `v` and receives linear indices into `v`, so that
-`v[ix]` is sorted along `dims`, like `Base.sortperm!(ix, A; dims)`.
+With `dims=:`, `ix` needs as many elements as `v` and receives `v`'s linear indices
+(`1:length(v)`, unless `v` is a vector whose axis starts elsewhere). With an integer `dims`, `ix`
+must have the same axes as `v` and receives linear indices into `v`, so that `v[ix]` is sorted
+along `dims`, like `Base.sortperm!(ix, A; dims)`.
 
 `Auto()` chooses [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort) on the
 host and [`MergeSort`](@ref) on GPUs; `MergeSort(lowmem=true)` avoids copying the keys.
@@ -237,22 +240,14 @@ function sortperm!(
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
 )
-    p, ord = _sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
-    _sortperm_impl!(p.alg, ix, v, p.backend, dims, ord, _buffers(p, workspace, ix, v);
-                    lt, by, rev, order)
-    return ix
+    _check_sortperm_shape(ix, v, dims)
+    _sortperm!(ix, v; backend, alg, dims, lt, by, rev, order, workspace)
 end
 
-_plan(::typeof(sortperm!), ix::AbstractArray, v::AbstractArray; kwargs...) =
-    first(_sortperm_setup(ix, v; kwargs...))
+_plan(::typeof(sortperm!), ix::AbstractArray, v::AbstractArray; dims=Colon(), kwargs...) =
+    (_check_sortperm_shape(ix, v, dims); first(_sortperm_setup(ix, v; dims, kwargs...)))
 
-function _sortperm_setup(
-    ix, v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
-    lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-)
-    backend = _resolve_backend(backend, ix, v)
-    ord = Base.Order.ord(lt, by, rev, order)
+function _check_sortperm_shape(ix, v, dims)
     if dims isa Colon
         length(ix) == length(v) || throw(ArgumentError(
             "index array must have as many elements as the input, $(length(ix)) != $(length(v))"))
@@ -260,6 +255,38 @@ function _sortperm_setup(
         axes(ix) == axes(v) || throw(ArgumentError(
             "index array must have the same axes as the input, $(axes(ix)) != $(axes(v))"))
     end
+    nothing
+end
+
+# `sortperm!` without the check of `ix`'s shape
+function _sortperm!(ix, v; backend=nothing, alg::Algorithm=Auto(),
+                    dims::Union{Colon, Integer}=Colon(), lt=isless, by=identity,
+                    rev::Union{Nothing, Bool}=nothing,
+                    order::Base.Order.Ordering=Base.Order.Forward, workspace=nothing)
+    p, ord = _sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
+    bufs = _buffers(p, workspace, ix, v)
+    ix_one_based = _one_based(ix)
+    _sortperm_impl!(p.alg, ix_one_based, _one_based(v), p.backend, dims, ord, bufs;
+                    lt, by, rev, order)
+    # The kernels sort `v`'s linear indices counted from 1
+    firstindex(v) == 1 || _shift_indices!(ix_one_based, firstindex(v) - 1, p.backend)
+    return ix
+end
+
+function _shift_indices!(ix, shift, backend)
+    _foreachindex(Base.OneTo(length(ix)), backend) do i
+        @inbounds ix[i] += shift
+    end
+end
+
+function _sortperm_setup(
+    ix, v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
+    lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+    order::Base.Order.Ordering=Base.Order.Forward,
+)
+    backend = _resolve_backend(backend, ix, v)
+    ix, v = _one_based(ix), _one_based(v)
+    ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord; perm=true)
     return _Plan(backend, a, _sortperm_sizes(a, ix, v, dims)), ord
 end
@@ -302,12 +329,13 @@ end
 """
     sortperm(v::AbstractArray; kwargs...)
 
-Out-of-place [`sortperm!`](@ref): return an `Int` array shaped like `v` holding the permutation,
-with the same keywords.
+Out-of-place [`sortperm!`](@ref): return an `Int` array of `v`'s size, with axes starting at 1,
+holding the permutation, with the same keywords.
 """
 function sortperm(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
     backend = _resolve_backend(backend, v)
-    return sortperm!(_similar(backend, v, Int), v; backend, kwargs...)
+    # (the result's axes start at 1, also where `v`'s do not)
+    return _sortperm!(_similar(backend, v, Int), v; backend, kwargs...)
 end
 
 # `ix` is only needed for its element type and shape, which `v` gives here
@@ -369,7 +397,7 @@ function sort_by_key!(
     workspace=nothing,
 )
     p, ord = _sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
-    _sort_by_key_impl!(p.alg, keys, values, p.backend, dims, ord,
+    _sort_by_key_impl!(p.alg, _one_based(keys), _one_based(values), p.backend, dims, ord,
                        _buffers(p, workspace, keys, values); lt, by, rev, order)
     return keys, values
 end
@@ -391,6 +419,7 @@ function _sort_by_key_setup(
         axes(keys) == axes(values) || throw(ArgumentError(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
+    keys, values = _one_based(keys), _one_based(values)
     a = _resolve_sort(alg, backend, keys, dims, ord; pairs=true)
     return _Plan(backend, a, _sort_by_key_sizes(a, keys, values, dims)), ord
 end
