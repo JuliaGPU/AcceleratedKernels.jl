@@ -266,9 +266,8 @@ end
 
     @test_throws ArgumentError AK.reduce(+, array_from_host(rand(Int32, 3, 4)); alg=REDUCE_ALG, init=Int32(0), dims=[1.0, 2.0])
 
-    # Tiled strided GPU path: contiguous kept dimensions, one strided reduce
-    # dimension, and dst_size == reduce_size. The 3D case also exercises a
-    # partial output tile.
+    # Contiguous outputs, each reducing as many elements a stride apart as there are outputs; the
+    # 3-d case's outputs do not fill whole tiles
     for (shape, dims) in (((512, 512), 2), ((20, 13, 260), 3))
         vh = rand(Int32(1):Int32(3), shape...)
         v = array_from_host(vh)
@@ -277,12 +276,10 @@ end
     end
 
     if TEST_KERNELS
-        # Aligned stride-1 reductions use 128-bit loads for 4- and 8-byte elements.
+        # Columns of 4- and 8-byte elements, read with vector loads (see "reduce: launch paths")
         for T in valid_backend_eltypes(BACKEND, (Float32, Int32, UInt32, Float64, Int64, UInt64))
             vh = T <: AbstractFloat ? rand(T, 1024, 1024) : rand(T(1):T(100), 1024, 1024)
             v = array_from_host(vh)
-            @test AK.vector_width(v, 0, (1024,), (1,), 1024, 256) ==
-                16 ÷ sizeof(T)
             r = Array(AK.reduce(+, v; alg=REDUCE_ALG, init=zero(T), dims=1))
             @test T <: AbstractFloat ? r ≈ sum(vh; dims=1) : r == sum(vh; dims=1)
 
@@ -292,7 +289,7 @@ end
             @test T <: AbstractFloat ? rw ≈ sum(wh; dims=1) : rw == sum(wh; dims=1)
         end
 
-        # Apply the map lane-wise and preserve non-additive neutral elements.
+        # ... with a mapping function, and with neutral elements other than zero
         fh = rand(Float32, 256, 1024)
         fv = array_from_host(fh)
         @test Array(AK.mapreduce(abs2, +, fv; alg=REDUCE_ALG, init=0.0f0, dims=1)) ≈
@@ -305,7 +302,7 @@ end
         @test Array(AK.reduce(max, mv; alg=REDUCE_ALG, init=typemin(Int32), neutral=typemin(Int32), dims=1)) ==
             maximum(mh; dims=1)
 
-        # Exercise scalar tails in both by-block dispatch branches.
+        # Columns whose length is not a multiple of the vector width, with many and few of them
         ph = rand(Float32, 1028, 2048)
         p = array_from_host(ph)
         for rows in (1026, 1025)
@@ -323,28 +320,19 @@ end
         @test Array(AK.reduce(+, @view(q[1:1027, :]); alg=REDUCE_ALG, init=Int64(0), dims=1)) ==
             sum(@view(qh[1:1027, :]); dims=1)
 
-        # Misaligned rows and offsets fall back to scalar loads.
+        # Columns at offsets that are not multiples of the vector width, which take scalar loads
         rh = rand(Float32, 1027, 2048)
         r = array_from_host(rh)
-        @test AK.vector_width(r, 0, (1027,), (1,), 1024, 256) == 0
         @test Array(AK.reduce(+, @view(r[1:1024, :]); alg=REDUCE_ALG, init=0.0f0, dims=1)) ≈
             sum(@view(rh[1:1024, :]); dims=1)
 
         bh = rand(Int32(1):Int32(100), 260, 1024)
         b = array_from_host(bh)
-        @test AK.vector_width(b, 2, (260,), (1,), 258, 256) == 0
         @test Array(AK.reduce(+, @view(b[3:end, :]); alg=REDUCE_ALG, init=Int32(0), dims=1)) ==
             Base.reduce(+, @view(bh[3:end, :]); init=Int32(0), dims=1)
     end
 
     if !TEST_KERNELS
-        storage = Vector{UInt8}(undef, 64)
-        GC.@preserve storage begin
-            offset = Int(mod(-UInt(pointer(storage)), 16)) + 4
-            misaligned = unsafe_wrap(Array, Ptr{Float32}(pointer(storage) + offset), 4)
-            @test AK.vector_width(misaligned, 0, (4,), (1,), 4, 256) == 0
-        end
-
         # The CPU fallback should not require strided storage.
         vh = reshape(1:12, 1, 3, 4)
         @test Array(AK.reduce(+, vh; alg=REDUCE_ALG, backend=BACKEND, init=0, dims=(1,2))) ==
@@ -1074,31 +1062,15 @@ end
             @test Array(AK.reduce(+, m; init=Int32(0), dims, alg)) == sum(Array(m); dims)
         end
     end
-    # The column reduction in one pass, which only more outputs than a test affords choose
-    if TEST_KERNELS
-        h = rand(Int32(1):Int32(100), 64, 1000)
-        R = array_from_host(fill(Int32(1), 64))
-        AK.launch_shape!(
-            Val(:columns), 1, identity, +, R, array_from_host(h), BACKEND, 256, 256;
-            init=AK.FoldInto(), seed=Int32(0), bufs=(;), base_offset=0, reduce_strides=(64,),
-            reduce_sizes=(1000,), outer_strides=(1,), outer_sizes=(64,), dst_size=64,
-            reduce_size=1000, dense_buffer=true, items_per_thread=4)
-        @test Array(R) == vec(sum(h; dims=2)) .+ 1
-    end
 end
 
 
-@testset "segment reductions" begin
+@testset "reduce: runs of consecutive elements" begin
     # Outputs that each reduce a run of consecutive elements, read by groups of threads: runs of
     # several lengths (with few outputs, taking more threads per run), and a dimension of size 1
     # among the kept ones
     Random.seed!(0)
     alg = REDUCE_ALG
-    if TEST_KERNELS
-        segs = AK.merge_dims((512, 1000), (1, 512), (1,))
-        @test AK.reduce_shape(1000, 512, segs, 256, AK.reduce_tuning(BACKEND, Int32),
-                              Int32)[1] === :by_lanes
-    end
     for (sz, dims) in (((16, 3000), 1), ((512, 1000), 1), ((513, 47), 1), ((4096, 33), 1),
                        ((64, 1, 300), 1), ((4, 8, 3000), (1, 2)))
         h = rand(Int32(-9):Int32(9), sz)
@@ -1143,7 +1115,7 @@ end
 end
 
 
-@testset "column reductions" begin
+@testset "reduce: strided slices" begin
     # Few contiguous outputs, each reducing a long strided row, take the column reduction in two
     # passes (with enough elements for every backend's threshold): a tile of 8 outputs, and two
     # tiles of 32 outputs the second of which is partial
@@ -1153,11 +1125,6 @@ end
         h = rand(Int8(-9):Int8(9), m, n)
         a = array_from_host(h)
         s = sum(Int.(h); dims=2)
-        if TEST_KERNELS
-            segs = AK.merge_dims((m, n), (1, m), (2,))
-            @test AK.reduce_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int), Int)[1] ===
-                  :columns
-        end
         # `init` applied once, folding into `R`, into an `R` narrower than the accumulator
         R = array_from_host(fill(Int16(1), m))
         AK.mapreducedim!(identity, +, R, a; acctype=Int32, alg)
@@ -1177,20 +1144,17 @@ end
         v = view(p, 2:m + 1, 4:n + 3)
         @test Array(AK.sum(v; dims=2, alg)) == sum(Int.(Array(p)[2:m + 1, 4:n + 3]); dims=2)
     end
-    # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
-    shape_of(x, dims, A) = AK.reduce_shape(
-        length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
-        AK.merge_dims(size(x), AK.source_layout(x).strides, dims),
-        AK.resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
     # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
-    # launch enough blocks, and one thread per output where a row of outputs fills the device
-    for (m, n, A, shape) in ((4096, 1024, Int32, :tiled_strided), (8192, 300, Int32, :columns),
-                             (8192, 300, Int64, :by_thread))
+    # launch enough blocks (the columns kernel in one pass), and one thread per output where a row
+    # of outputs fills the device
+    for (m, n, A) in ((4096, 1024, Int32), (8192, 300, Int32), (8192, 300, Int64))
         h = rand(A(-9):A(9), m, n)
         a = array_from_host(h)
-        TEST_KERNELS && @test shape_of(a, (2,), A) === shape
         r = AK.reduce(+, a; dims=2, init=zero(A), alg)
         @test eltype(r) === A && Array(r) == sum(h; dims=2)
+        R = array_from_host(ones(A, m))
+        AK.mapreducedim!(identity, +, R, a; alg)
+        @test Array(R) == vec(sum(h; dims=2)) .+ 1
     end
     # Runs of contiguous outputs at the offsets of other kept dimensions: the middle dimension of
     # 3-d and 4-d arrays, and a view at an offset whose kept dimensions are not adjacent in memory
@@ -1199,7 +1163,6 @@ end
                     (array_from_host(rand(Int32(-9):Int32(9), 40, 30_000, 3, 2)), nothing),
                     (view(array_from_host(h), 3:42, :, 1:2:7), h[3:42, :, 1:2:7]))
         ha = something(ha, Array(a))
-        TEST_KERNELS && @test shape_of(a, (2,), Int32) === :columns
         @test Array(AK.reduce(+, a; dims=2, init=Int32(0), alg)) == sum(ha; dims=2)
     end
 end
@@ -1610,6 +1573,17 @@ function affine_compose(p::T, q::T) where {T <: Union{UInt32, UInt64}}
 end
 affine_rand(::Type{T}) where {T} = rand(T) | one(T)
 
+# Reductions along `dims` in element order whose launch shapes, when commutative, are every
+# shape (see "reduce: launch paths"): one thread per output (for those taking one, and short runs
+# of consecutive elements), the columns kernel (in one pass or two, for columns and tiles of
+# strided slices), and a block per output, or several (for long runs, few outputs, and the
+# other shapes); also non-adjacent dimensions
+const ORDERED_CASES = (
+    ((3, 2000), 1), ((2000, 3), 1), ((2000, 3), 2), ((40, 5, 30), 1), ((40, 5, 30), 2),
+    ((40, 5, 30), 3), ((40, 5, 30), (1, 3)), ((9, 4, 3000), (2, 3)), ((8, 300_000), 2),
+    ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1), ((300_000, 2), 1),
+    ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1), ((1, 5000, 2), 2), ((40, 3000, 30), 2))
+
 @testset "non-commutative reductions" begin
     Random.seed!(0)
 
@@ -1656,28 +1630,8 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
               foldl(matmul2, xh)
     end
 
-    # Along `dims`, the launch shape of every commutative one in order: one thread per output
-    # (for those taking one, and short runs of consecutive elements), the columns kernel (in one
-    # pass or two, for columns and tiles of strided slices), and a block per output, or several
-    # (for long runs, few outputs, and the other shapes); also non-adjacent dimensions. With and
-    # without a neutral element.
-    shapes = Set{Pair{Symbol, Symbol}}()
-    cases = (((3, 2000), 1), ((2000, 3), 1), ((2000, 3), 2), ((40, 5, 30), 1), ((40, 5, 30), 2),
-             ((40, 5, 30), 3), ((40, 5, 30), (1, 3)), ((9, 4, 3000), (2, 3)), ((8, 300_000), 2),
-             ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1),
-             ((300_000, 2), 1), ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1),
-             ((1, 5000, 2), 2), ((40, 3000, 30), 2))
-    for (sz, dims) in cases
-        if TEST_KERNELS
-            segs = AK.merge_dims(sz, AK.dense_strides(sz), AK.reduced_dims(dims, length(sz)))
-            dst_size = prod(d in dims ? 1 : sz[d] for d in eachindex(sz))
-            len = prod(sz) ÷ dst_size
-            block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, Mat2, dims).block_size
-            shape, groups = AK.reduce_shape(dst_size, len, segs, block_size,
-                                            AK.reduce_tuning(BACKEND, Mat2), Mat2)
-            push!(shapes,
-                  shape => AK.ordered_shape(shape, groups, dst_size, len, block_size)[1])
-        end
+    # Along `dims`, the inputs of `ORDERED_CASES`; with and without a neutral element
+    for (sz, dims) in ORDERED_CASES
         xh = [randmat2() for _ in CartesianIndices(sz)]
         x = array_from_host(xh)
         ref = reduce(matmul2, xh; dims, init=I2)
@@ -1695,22 +1649,6 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
             AK.mapreducedim!(identity, matmul2, R, x; commutative=false, neutral,
                              overwrite=true, alg)
             @test Array(R) == ref
-        end
-    end
-    if TEST_KERNELS
-        @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
-        # (with the default settings, every shape is taken; tunings can rule some out)
-        t = AK.reduce_tuning(BACKEND, Mat2)
-        if AK.resolve_reduce(REDUCE_ALG, BACKEND, Mat2, 1).block_size == 256 &&
-           t.columns_min_elements <= 1 << 18
-            required = Set((:by_thread => :by_thread,
-                            :columns => :columns_ordered, :tiled_strided => :columns_ordered,
-                            :by_block => :ordered, :by_block_each => :ordered,
-                            :multigroup => :ordered))
-            t.segments_short_runs && push!(required, :by_lanes => :by_thread)
-            # (the (512, 40) case has 256 bytes per lane)
-            t.segments_lane_bytes >= 256 && push!(required, :by_lanes => :ordered)
-            @test shapes ⊇ required
         end
     end
     # ... square tiles in blocks too small for the columns kernel
@@ -1734,4 +1672,82 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
         @test Array(AK.reduce(affine_compose, array_from_host(hm); dims=1, commutative=false,
                               alg=REDUCE_ALG)) == reduce(affine_compose, hm; dims=1, init=T(1))
     end
+end
+
+
+# Correct results do not show which kernel ran: the inputs that the tests above give to reach
+# each launch shape and vector-load path reach them with this backend's tuning
+if TEST_KERNELS
+@testset "reduce: launch paths" begin
+    # The launch shape of a reduction of `x` along `dims` with accumulator type `A`, and its
+    # parameter (the blocks per output of `:columns` and `:multigroup`)
+    function launch_shape(x, dims, A; commutative=true)
+        rdims = AK.reduced_dims(dims, ndims(x))
+        len = prod(size(x, d) for d in rdims)
+        dst_size = length(x) ÷ len
+        block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, A, rdims).block_size
+        segs = AK.merge_dims(size(x), AK.source_layout(x).strides, rdims)
+        shape = AK.reduce_shape(dst_size, len, segs, block_size, AK.reduce_tuning(BACKEND, A), A)
+        return commutative ? shape : AK.ordered_shape(shape..., dst_size, len, block_size)
+    end
+    # The width of the vector loads of the reduction of `x` along `dims` (0 for scalar loads)
+    function vector_width(x, dims)
+        rdims = AK.reduced_dims(dims, ndims(x))
+        layout = AK.strided_layout(x)
+        len = prod(size(x, d) for d in rdims)
+        block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, eltype(x), rdims).block_size
+        AK.with_segments(AK.merge_dims(size(x), layout.strides, rdims)) do rstrides, _, ostrides, _
+            AK.vector_width(layout.buffer, layout.offset, ostrides, rstrides, len, block_size)
+        end
+    end
+
+    # "reduce: runs of consecutive elements"
+    @test launch_shape(Array{Int32}(undef, 512, 1000), 1, Int32)[1] === :by_lanes
+    # "reduce: strided slices", in two passes and in one
+    for sz in ((8, 600_000), (40, 110_000))
+        shape, groups = launch_shape(Array{Int8}(undef, sz), 2, Int)
+        @test shape === :columns && groups > 1
+    end
+    @test launch_shape(Array{Int32}(undef, 4096, 1024), 2, Int32)[1] === :tiled_strided
+    @test launch_shape(Array{Int32}(undef, 8192, 300), 2, Int32) === (:columns, 1)
+    @test launch_shape(Array{Int64}(undef, 8192, 300), 2, Int64)[1] === :by_thread
+    for x in (Array{Int32}(undef, 96, 7000, 10), Array{Int32}(undef, 40, 30_000, 3, 2),
+              view(Array{Int32}(undef, 50, 30_000, 7), 3:42, :, 1:2:7))
+        @test launch_shape(x, 2, Int32)[1] === :columns
+    end
+
+    # "non-commutative reductions": every shape in order, and every shape of the commutative
+    # reductions with the default settings (tunings can rule some out)
+    shapes = Set(launch_shape(Array{Mat2}(undef, sz), dims, Mat2)[1] =>
+                 launch_shape(Array{Mat2}(undef, sz), dims, Mat2; commutative=false)[1]
+                 for (sz, dims) in ORDERED_CASES)
+    @test Set(last.(shapes)) == Set((:by_thread, :columns_ordered, :ordered))
+    t = AK.reduce_tuning(BACKEND, Mat2)
+    if AK.resolve_reduce(REDUCE_ALG, BACKEND, Mat2, 1).block_size == 256 &&
+       t.columns_min_elements <= 1 << 18
+        required = Set((:by_thread => :by_thread,
+                        :columns => :columns_ordered, :tiled_strided => :columns_ordered,
+                        :by_block => :ordered, :by_block_each => :ordered,
+                        :multigroup => :ordered))
+        t.segments_short_runs && push!(required, :by_lanes => :by_thread)
+        # (the (512, 40) case has 256 bytes per lane)
+        t.segments_lane_bytes >= 256 && push!(required, :by_lanes => :ordered)
+        @test shapes ⊇ required
+    end
+
+    # "reduce_nd": columns of aligned 4- and 8-byte elements take vector loads, those at other
+    # offsets scalar ones
+    for T in valid_backend_eltypes(BACKEND, (Float32, Int32, UInt32, Float64, Int64, UInt64))
+        @test vector_width(array_from_host(zeros(T, 1024, 1024)), 1) == 16 ÷ sizeof(T)
+    end
+    @test vector_width(view(array_from_host(zeros(Float32, 1027, 2048)), 1:1024, :), 1) == 0
+    @test vector_width(view(array_from_host(zeros(Int32, 260, 1024)), 3:260, :), 1) == 0
+    # ... and so do buffers that are not 16-byte aligned
+    storage = Vector{UInt8}(undef, 64)
+    GC.@preserve storage begin
+        offset = Int(mod(-UInt(pointer(storage)), 16)) + 4
+        misaligned = unsafe_wrap(Array, Ptr{Float32}(pointer(storage) + offset), 4)
+        @test vector_width(misaligned, 1) == 0
+    end
+end
 end
