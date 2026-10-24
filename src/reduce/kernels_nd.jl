@@ -41,30 +41,6 @@ end
     off
 end
 
-# `ByThread` for sources without a dense buffer: one thread per output, iterating over the
-# Cartesian indices of its slice as `mapreduce_nd_threads!` does on the host.
-@kernel inbounds=true cpu=false unsafe_indices=true function by_thread_cartesian_kernel!(
-    src, dst,
-    f, op, seed, init,
-    Rother, Rreduce, output_size,
-)
-    mapf, accop = seeded_ops(f, op, seed)
-    N       = @groupsize()[1]
-    iblock  = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
-    tid     = ithread + iblock * N
-
-    if tid < output_size
-        Iother = Rother[tid + 0x1]
-        res = seed
-        for Ireduce in Rreduce
-            J = max(Iother, Ireduce)
-            res = accop(res, mapf(src[J]))
-        end
-        dst[Iother] = finish(op, init, dst, Iother, res)
-    end
-end
-
 # `Tiled`: each block reduces `rows` contiguous outputs, whose elements are
 # `reduce_stride` apart, with `N ÷ rows` lanes each, so that a warp's loads of one step are
 # consecutive elements.

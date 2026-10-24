@@ -55,7 +55,7 @@ function mapreduce_nd!(
     dst_size = length(dst)
 
     if alg isa CPUThreads.Partitioned
-        mapreduce_nd_threads!(f, op, dst, src; init, seed, launch_kw...)
+        mapreduce_slices!(f, op, dst, src, HOST_BACKEND; init, seed, launch_kw...)
         return dst
     end
     shape = launch.shape
@@ -116,13 +116,7 @@ function launch!(::ByThread, f::F, op::OP, dst, src, buffer, backend, alg, bufs,
             ndrange=(block_size * blocks,),
         )
     else
-        # (iterating over the Cartesian indices of each output's elements saves decoding every
-        # linear index)
-        by_thread_cartesian_kernel!(backend, block_size)(
-            src, dst, f, op, seed, init,
-            CartesianIndices(dst), slice_indices(src, dst), dst_size,
-            ndrange=(block_size * blocks,),
-        )
+        mapreduce_slices!(f, op, dst, src, backend; init, seed, block_size)
     end
 end
 
@@ -248,18 +242,15 @@ end
 end
 
 
-# CPU path
-
-# Reduce `src` into `dst` on Julia threads, one output after the other in each task
-function mapreduce_nd_threads!(
-    f::F, op::OP, dst, src;
-    init, seed, max_tasks, min_elems,
-) where {F, OP}
+# Reduce `src` into `dst` with a thread per output, which reduces its slice in turn: on Julia
+# threads, or on the GPU for sources without a dense buffer (iterating over the Cartesian indices
+# of each output's elements saves decoding every linear index)
+function mapreduce_slices!(f::F, op::OP, dst, src, backend; init, seed, launch...) where {F, OP}
     Rother  = CartesianIndices(dst)
     Rreduce = slice_indices(src, dst)
     mapf, accop = seeded_ops(f, op, seed)
 
-    foreachindex_on(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
+    foreachindex_on(eachindex(dst), backend; launch...) do idst
         @inbounds begin
             Iother = Rother[idst]
             res = seed
