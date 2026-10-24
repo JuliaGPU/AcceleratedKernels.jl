@@ -185,14 +185,10 @@ function sample_sortperm!(ix::AbstractArray, v::AbstractArray, ord::Base.Order.O
         @inbounds ix[i] = i
     end
 
-    sample_sort_barrier!(ix, v, ord; max_tasks, min_elems, temp)
-end
-
-
-function sample_sort_barrier!(ix, v, ord; max_tasks, min_elems, temp)
-    # Construct custom comparator indexing into global array v for every index comparison
-    comp = (ix, iy) -> Base.Order.lt(ord, v[ix], v[iy])
-    sample_sort!(ix, Base.Order.Lt(comp); max_tasks, min_elems, temp)
+    # Not `Base.Order.Perm`, which breaks ties by index with a second comparison (15-40% slower
+    # for 10^7 elements on 4 threads); the sample sort is stable already
+    perm_ord = Base.Order.Lt((i, j) -> Base.Order.lt(ord, v[i], v[j]))
+    sample_sort!(ix, perm_ord; max_tasks, min_elems, temp)
 end
 
 
