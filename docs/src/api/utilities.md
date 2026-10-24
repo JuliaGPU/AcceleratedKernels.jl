@@ -1,5 +1,0 @@
-### Utilities
-
-```@docs
-AcceleratedKernels.TypeWrap
-```
