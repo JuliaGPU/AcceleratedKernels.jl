@@ -433,20 +433,20 @@ end
 # it and the sizes derived from it are checked: on 32-bit hosts, they could overflow.
 radix_blocks(layout, tile) = Base.checked_mul(slice_count(layout), cld(layout.len, tile))
 
-# The scratch of `radix_sort!`, and the algorithms of the operations it calls: the output of
-# every other pass, the digit histograms of every block, and the histograms' scan and the key
-# range reduction
-function radix_scratch(a, v::AbstractArray{T}, backend, dims) where T
+# The plan of `radix_sort!`: the output of every other pass, the digit histograms of every
+# block, and the plans of the histograms' scan and the key range reduction
+function radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return (;), (;)
+    (isempty(v) || layout.len <= 1) && return Plan(backend, a, (;))
     c = radix_config(T, layout.len, backend, a.block_size, a.items_per_thread, a.chunk_size)
-    c.one_block && return (;), (;)
+    c.one_block && return Plan(backend, a, (;))
     hist_len = Base.checked_mul(Int(RADIX_DIGITS), radix_blocks(layout, a.block_size * c.items))
     scan = scan_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                       inclusive=false).plan
     key_range = first(radix_key_range_setup(v, backend)).plan
-    return (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
-            key_range=key_range.sizes), (; scan=scan.alg, key_range=key_range.alg)
+    return Plan(backend, a, (; scan=scan.alg, key_range=key_range.alg),
+                (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
+                 key_range=key_range.sizes))
 end
 
 
@@ -454,7 +454,7 @@ end
     radix_sort!(v, backend, bufs; rev, block_size, items_per_thread, chunk_size, dims)
 
 In-place GPU radix sort of `v`, or of its slices along `dims`, for supported 32- and 64-bit
-integers and floats, with the scratch buffers of `radix_scratch`.
+integers and floats, with the scratch buffers of `radix_plan`.
 """
 function radix_sort!(
     v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;

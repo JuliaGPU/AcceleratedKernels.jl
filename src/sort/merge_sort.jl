@@ -129,7 +129,7 @@ end
 
 
 # GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
-# `sort_sizes(::MergeSort, ...)`.
+# `sort_plan(::MergeSort, ...)`.
 function merge_sort!(
     v::AbstractArray, backend::Backend, bufs::NamedTuple, ord::Base.Order.Ordering, by;
     block_size::Int, dims::Union{Colon, Integer},
