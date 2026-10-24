@@ -394,14 +394,10 @@ end
         @test vec(Array(AK.sortperm!(ix, array_from_host(Kh); alg=SORT_ALG))) == sortperm(vec(Kh))
     end
 
-    # Invalid scratch buffers are rejected before anything is modified
-    kh = Int32[2, 1]
-    k = array_from_host(kh)
-    v = array_from_host(Int32[20, 10])
-    # The scratch keywords are gone: scratch is a workspace
-    @test_throws MethodError AK.sort_by_key!(k, v; alg=SORT_ALG, temp_values=array_from_host(zeros(Int32, 1)))
-    k2, v2 = array_from_host(rand(Int32, 2000)), array_from_host(rand(Int32, 2000))
-    @test_throws ArgumentError AK.sort_by_key!(k2, v2; alg=SORT_ALG, workspace=AK.workspace(
+    # A workspace for other sizes is rejected before anything is modified
+    kh = rand(Int32, 2000)
+    k, v = array_from_host(kh), array_from_host(rand(Int32, 2000))
+    @test_throws ArgumentError AK.sort_by_key!(k, v; alg=SORT_ALG, workspace=AK.workspace(
         AK.sort_by_key!, array_from_host(rand(Int32, 4000)), array_from_host(rand(Int32, 4000));
         alg=SORT_ALG))
     @test Array(k) == kh

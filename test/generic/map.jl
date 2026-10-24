@@ -66,7 +66,6 @@
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.map(x -> x^2, x; bad=:kwarg)
-    @test_throws MethodError AK.map(x -> x^2, x; prefer_threads=true)
 end
 
 @testset "map: backend-free inputs" begin

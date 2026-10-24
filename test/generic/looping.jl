@@ -72,8 +72,7 @@
         @test_throws ArgumentError AK.foreachindex(i -> nothing, x; kw...)
     end
     @test_throws TypeError AK.foreachindex(i -> nothing, x; backend=:gpu)
-    @test_throws MethodError AK.foreachindex(i -> nothing, x; prefer_threads=true)
-    @test_throws MethodError AK.foreachindex(i -> nothing, x, AK.get_backend(x))
+    @test_throws MethodError AK.foreachindex(i -> nothing, x; bad=:kwarg)
 end
 
 

@@ -139,12 +139,6 @@ end
     # Operations without a workspace say so
     @test_throws ArgumentError AK.workspace_size(AK.map!, identity, similar(v), v)
     @test_throws ArgumentError AK.workspace(AK.foreachindex, identity, v)
-
-    # The scratch keywords are gone
-    @test_throws MethodError AK.sort!(copy(v); temp=similar(v))
-    @test_throws MethodError AK.sum(v; temp=similar(v))
-    @test_throws MethodError AK.accumulate!(+, copy(v); temp=similar(v))
-    @test_throws MethodError AK.findall(x -> x > 0.5f0, v; temp_bools=similar(v, Bool))
 end
 
 

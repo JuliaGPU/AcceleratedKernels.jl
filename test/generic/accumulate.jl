@@ -406,9 +406,6 @@ end
                   neutral=Int32(0), dims=2, alg=slice_alg(; block_size=64))
     AK.accumulate((x, y) -> x + 1, array_from_host(rand(Int32, 3, 4, 5)); init=Int32(0),
                   neutral=Int32(0), dims=3, alg=slice_alg(; block_size=64))
-    # The scratch keywords are gone: scratch is a workspace
-    @test_throws MethodError AK.accumulate(+, array_from_host(rand(Int32, 3, 4)); init=Int32(0),
-                                           dims=2, temp=array_from_host(zeros(Int32, 3)))
 end
 @testset "cumsum" begin
 

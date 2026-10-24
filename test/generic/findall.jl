@@ -201,6 +201,7 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
                                               workspace=AK.workspace(AK.findall, bools[1:1]; alg))
 
         @test_throws ArgumentError AK.findall(v; alg=OtherFindallAlgorithm())
+        @test_throws MethodError AK.findall(bools; alg, bad=:kwarg)
         if TEST_KERNELS
             @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(block_size=192))
             @test_throws ArgumentError AK.findall(bools; alg=AK.ScanScatter(items_per_thread=0))

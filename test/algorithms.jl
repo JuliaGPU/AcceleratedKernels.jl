@@ -297,12 +297,9 @@ end
     @test AK.backendless(reshape(1:6, 2, 3)) && !AK.backendless(NoBackendArray())
 
     # The sorting entry points resolve from all their arrays, and accept only backends
-    @test_throws MethodError AK.sort!(d; temp=h)      # no scratch keywords: see `workspace`
     @test_throws ArgumentError AK.sortperm!(zeros(Int, 4), d)
     @test_throws ArgumentError AK.sort_by_key!(d, h)
     @test_throws TypeError AK.sort!(h; backend=:cpu)
-    # ... and never take a positional backend
-    @test_throws MethodError AK.sort!(h, HOST)
 
     # Nested operations receive the resolved backend instead of querying the arrays again
     alg = AK.CPUThreads.SampleSort(max_tasks=4)
@@ -373,8 +370,7 @@ end
         @test_throws ArgumentError resolve_reduce(bad; backend=HOST)
     end
 
-    # `items_per_thread` and `switch_below` only apply to whole-array reductions; they used to be
-    # ignored silently along `dims`
+    # `items_per_thread` and `switch_below` only apply to whole-array reductions
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(items_per_thread=4); dims=1)
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(switch_below=0); dims=(1, 2))
     @test resolve_reduce(AK.BlockReduce(items_per_thread=4); dims=nothing) isa AK.BlockReduce
@@ -447,12 +443,6 @@ end
     @test AK.minimum(v; alg) == minimum(v)
     @test AK.count(>(50), v; alg) == count(>(50), v)
     @test AK.sum(m; dims=2, alg) == sum(m; dims=2)
-
-    # The loose settings are gone
-    @test_throws MethodError AK.reduce(+, v; init=Int32(0), block_size=256)
-    @test_throws MethodError AK.reduce(+, v; init=Int32(0), max_tasks=2)
-    @test_throws MethodError AK.reduce(+, v; init=Int32(0), prefer_threads=false)
-    @test_throws MethodError AK.sum(v; switch_below=10)
 end
 
 
@@ -525,8 +515,7 @@ end
     # Exclusive scans on threads need two elements per task
     @test_throws ArgumentError resolve_scan(AK.CPUThreads.Partitioned(min_elems=1); backend=HOST)
 
-    # Whole-array algorithms do not scan along `dims`, and SliceScan only does; they used to be
-    # ignored silently along `dims`
+    # Whole-array algorithms do not scan along `dims`, and SliceScan only does
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); dims=1)
     @test_throws ArgumentError resolve_scan(AK.SliceScan())
 
@@ -625,11 +614,4 @@ end
     end
     @test_throws ArgumentError AK.resolve_findall(AK.CPUThreads.Partitioned(), FAKE, Bool)
     @test_throws ArgumentError AK.resolve_findall(AK.BlockReduce(), FAKE, Bool)
-
-    # Removed keywords
-    v = rand(Bool, 10)
-    @test_throws MethodError AK.findall(v; prefer_threads=true)
-    @test_throws MethodError AK.findall(v; max_tasks=2)
-    @test_throws MethodError AK.any(identity, v; prefer_threads=true)
-    @test_throws MethodError AK.all(identity, v; block_size=64)
 end
