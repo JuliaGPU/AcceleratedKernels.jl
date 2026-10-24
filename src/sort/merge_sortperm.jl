@@ -1,7 +1,7 @@
-# GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
+# GPU merge sort permutation: sorts a copy of the keys, `by.(v)`, carrying the indices along.
 function merge_sortperm!(
     ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
-    ord::Base.Order.Ordering; block_size::Int, dims::Union{Colon, Integer},
+    ord::Base.Order.Ordering, by; block_size::Int, dims::Union{Colon, Integer},
 )
     layout = slice_layout(v, dims)
 
@@ -10,10 +10,15 @@ function merge_sortperm!(
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
-    # (a range, for instance, has no backend: collected on the host first)
-    keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
-
-    merge_sort_by_key!(keys, ix, backend, bufs, ord; block_size, dims)
+    if by === identity
+        # (a range, for instance, has no backend: collected on the host first)
+        keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
+        merge_sort_by_key!(keys, ix, backend, bufs, ord; block_size, dims)
+    else
+        # Evaluated once instead of in every comparison; `ord` is `By(by, ord.order)`
+        keys = map!(by, bufs.keys, v; backend, block_size)
+        merge_sort_by_key!(keys, ix, backend, bufs, ord.order; block_size, dims)
+    end
 
     ix
 end

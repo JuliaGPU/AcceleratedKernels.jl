@@ -216,7 +216,7 @@ function sortperm_unchecked!(ix, v; backend=nothing, alg::Algorithm=Auto(),
     p = s.plan
     bufs = scratch_buffers(p, workspace, ix, v)
     ix_one_based = one_based(ix)
-    sortperm_run!(p.alg, ix_one_based, one_based(v), p.backend, dims, s.ord, bufs)
+    sortperm_run!(p.alg, ix_one_based, one_based(v), p.backend, dims, s.ord, by, bufs)
     # The kernels sort `v`'s linear indices counted from 1
     firstindex(v) == 1 || shift_indices!(ix_one_based, firstindex(v) - 1, p.backend)
     return ix
@@ -237,32 +237,33 @@ function sortperm_setup(
     ix, v = one_based(ix), one_based(v)
     ord = sort_ordering(lt, by, rev, order)
     a = resolve_sort(alg, backend, v, dims, ord; perm=true)
-    return (; plan=Plan(backend, a, sortperm_scratch(a, ix, v, dims)), ord)
+    return (; plan=Plan(backend, a, sortperm_scratch(a, ix, v, dims, by)), ord)
 end
 
 # The scratch of `sortperm!` with each algorithm
-function sortperm_scratch(a::MergeSort, ix, v, dims)
+function sortperm_scratch(a::MergeSort, ix, v, dims, by)
     layout = slice_layout(v, dims)
     (isempty(v) || layout.len <= 1) && return (;)
     a.lowmem && return layout.len > 2 * a.block_size ? (; temp=scratch(eltype(ix), size(ix))) : (;)
-    # The keys are sorted in a copy, carrying the indices along
-    return (; keys=scratch(eltype(v), size(v)),
-            merge_by_key_scratch(a, layout, size(v), eltype(v), size(ix), eltype(ix))...)
+    # The keys `by.(v)` are sorted in a copy, carrying the indices along
+    K = Base.promote_op(by, eltype(v))
+    return (; keys=scratch(K, size(v)),
+            merge_by_key_scratch(a, layout, size(v), K, size(ix), eltype(ix))...)
 end
-sortperm_scratch(a::CPUThreads.SampleSort, ix, v, dims) =
+sortperm_scratch(a::CPUThreads.SampleSort, ix, v, dims, by) =
     dims isa Colon ? sample_sort_scratch(a, eltype(ix), length(ix)) : (;)
 
-function sortperm_run!(a::MergeSort, ix, v, backend, dims, ord, bufs)
+function sortperm_run!(a::MergeSort, ix, v, backend, dims, ord, by, bufs)
     if a.lowmem
         merge_sortperm_lowmem!(ix, v, backend, bufs, ord; block_size=a.block_size, dims)
     else
         # Copies keys alongside indices, so comparisons never read global memory; the low-memory
         # path does two global loads per comparison, O(n log²n) global traffic at large n.
-        merge_sortperm!(ix, v, backend, bufs, ord; block_size=a.block_size, dims)
+        merge_sortperm!(ix, v, backend, bufs, ord, by; block_size=a.block_size, dims)
     end
 end
 
-function sortperm_run!(a::CPUThreads.SampleSort, ix, v, backend, dims, ord, bufs)
+function sortperm_run!(a::CPUThreads.SampleSort, ix, v, backend, dims, ord, by, bufs)
     if dims isa Colon
         sample_sortperm!(vec(ix), vec(v), ord; max_tasks=a.max_tasks, min_elems=a.min_elems,
                          temp=bufs.temp)

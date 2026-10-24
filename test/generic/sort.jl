@@ -460,6 +460,14 @@ if TEST_KERNELS
     ixh = Array(ix)
     vh = Array(v)
     @test issorted(vh[ixh])
+
+    # Keys `by.(v)` of another type than `v`, with ties, and of an array without a backend
+    vh = rand(Int32(1):Int32(100), 10_000)
+    by = x -> Float32(x % 7)
+    @test Array(with_workspace(AK.sortperm, array_from_host(vh); by, alg=AK.MergeSort())) ==
+          sortperm(vh; by)
+    @test Array(AK.sortperm(1:1000; backend=BACKEND, by=x -> x % 10, alg=AK.MergeSort())) ==
+          sortperm(1:1000; by=x -> x % 10)
 end
 
 end
