@@ -160,10 +160,8 @@ check_fields(a::MergeSort) = check_positive(a, :block_size)
 
 function check_fields(a::RadixSort)
     # Bounded, so that the local-memory footprints computed from them cannot overflow
-    check_pow2(a, :block_size)
+    check_block_size(a)
     check_positive(a, :items_per_thread)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "RadixSort: `block_size` must be at most 1024, got $(a.block_size)"))
     a.items_per_thread === nothing || a.items_per_thread <= 64 || throw(ArgumentError(
         "RadixSort: `items_per_thread` must be at most 64, got $(a.items_per_thread)"))
     check_pow2(a, :chunk_size)

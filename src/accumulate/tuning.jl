@@ -121,9 +121,7 @@ function select_scan(backend, dims)
 end
 
 function check_fields(a::Union{ScanPrefixes, SliceScan})
-    check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "$(algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
+    check_block_size(a)
     check_positive(a, :items_per_thread)
     nothing
 end
@@ -153,12 +151,8 @@ function check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
     _check_scan_eltype(a, T)
     dims === nothing || throw(ArgumentError(
         "$(algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
-    # Keep the kernels' index arithmetic far from overflow
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "$(algname(a)): `block_size * items_per_thread` must be at most $(typemax(Int32))"))
     # ScanPrefixes scans its tiles' totals in tiles too, which a tile of one element never shrinks
-    a.block_size * a.items_per_thread < 2 && throw(ArgumentError(
-        "ScanPrefixes: `block_size * items_per_thread` must be at least 2"))
+    check_tile(a; min=2)
     nothing
 end
 
@@ -168,8 +162,7 @@ function check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
     _check_scan_eltype(a, T)
     dims === nothing && throw(ArgumentError(
         "SliceScan scans along `dims`; scan whole arrays with `ScanPrefixes` or `Auto()`"))
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "SliceScan: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+    check_tile(a)
     nothing
 end
 

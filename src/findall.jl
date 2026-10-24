@@ -48,9 +48,7 @@ function resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
 end
 
 function check_fields(a::ScanScatter)
-    check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "ScanScatter: `block_size` must be at most 1024, got $(a.block_size)"))
+    check_block_size(a)
     check_positive(a, :items_per_thread)
     nothing
 end
@@ -65,8 +63,7 @@ fill_defaults(a::Algorithm, t::FindallTuning, T) =
 function check_findall(a::ScanScatter, backend)
     check_fields(a)
     require_kernels(a, backend)
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "ScanScatter: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+    check_tile(a)
     nothing
 end
 

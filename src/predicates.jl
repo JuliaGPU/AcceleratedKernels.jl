@@ -67,9 +67,7 @@ function select_predicate(backend, t::PredicateTuning)
 end
 
 function check_fields(a::ConcurrentWrite)
-    check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "ConcurrentWrite: `block_size` must be at most 1024, got $(a.block_size)"))
+    check_block_size(a)
     nothing
 end
 

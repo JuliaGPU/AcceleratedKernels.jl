@@ -113,9 +113,7 @@ end
 select_reduce(backend) = runs_threads(backend) ? CPUThreads.Partitioned() : BlockReduce()
 
 function check_fields(a::BlockReduce)
-    check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "BlockReduce: `block_size` must be at most 1024, got $(a.block_size)"))
+    check_block_size(a)
     check_positive(a, :items_per_thread)
     a.switch_below === nothing || a.switch_below >= 0 || throw(ArgumentError(
         "BlockReduce: `switch_below` must be non-negative, got $(a.switch_below)"))
@@ -138,13 +136,8 @@ function check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
         "BlockReduce: the accumulator type $T is not a bits type; pass an `init` of the type " *
         "to accumulate in, or make `f` and `op` inferable"))
     if iswhole(dims)
-        # Each pass reduces tiles of `block_size * items_per_thread` elements to one value: a tile
-        # of one element never shrinks the input, and the bound keeps the kernels' index
-        # arithmetic far from overflow
-        tile = widemul(a.block_size, a.items_per_thread)
-        2 <= tile <= typemax(Int32) || throw(ArgumentError(
-            "BlockReduce: `block_size * items_per_thread` must be between 2 and $(typemax(Int32)), " *
-            "got $(a.block_size) * $(a.items_per_thread)"))
+        # Each pass reduces a tile to one value, so a tile of one element never shrinks the input
+        check_tile(a; min=2)
     end
     nothing
 end

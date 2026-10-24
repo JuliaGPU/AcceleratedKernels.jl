@@ -170,6 +170,24 @@ function check_pow2(a, field)
     nothing
 end
 
+# The block size of an algorithm whose kernels need a power of two
+function check_block_size(a)
+    check_pow2(a, :block_size)
+    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
+        "$(algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
+    nothing
+end
+
+# The tiles of `block_size * items_per_thread` elements of a kernel algorithm: at least `min`
+# elements, and few enough to keep the kernels' index arithmetic far from overflow
+function check_tile(a; min=1)
+    tile = widemul(a.block_size, a.items_per_thread)
+    min <= tile <= typemax(Int32) || throw(ArgumentError(
+        "$(algname(a)): `block_size * items_per_thread` must be between $min and " *
+        "$(typemax(Int32)), got $(a.block_size) * $(a.items_per_thread)"))
+    nothing
+end
+
 function check_threads(a)
     check_positive(a, :max_tasks)
     check_positive(a, :min_elems)
