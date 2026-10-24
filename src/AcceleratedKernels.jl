@@ -7,7 +7,24 @@
 module AcceleratedKernels
 
 
-# No functions exported by default, to allow having the same names as Base without conflicts
+# Nothing is exported, so that the functions can have Base's names without conflicts. The API is
+# marked `public` instead, on Julia versions that know the keyword.
+@static if VERSION >= v"1.11.0-DEV.469"
+    eval(Meta.parse("""
+        public foreachindex, foraxes, map!, map,
+               sort!, sort, sortperm!, sortperm, sort_by_key!,
+               reduce, mapreduce, mapreducedim!, sum, prod, minimum, maximum, count,
+               accumulate!, accumulate, cumsum, cumprod,
+               searchsortedfirst!, searchsortedlast!, findall, reverse!, reverse, any, all,
+               workspace, workspace_size, Workspace,
+               Algorithm, Auto, CPUThreads,
+               SortAlgorithm, MergeSort, RadixSort, BitonicSort,
+               ReduceAlgorithm, BlockReduce, ScanAlgorithm, ScanPrefixes, SliceScan,
+               FindallAlgorithm, ScanScatter, PredicateAlgorithm, ConcurrentWrite, ViaReduce,
+               TaskPartitioner, task_partition, itask_partition,
+               get_backend, synchronize
+        """))
+end
 
 
 # Internal dependencies

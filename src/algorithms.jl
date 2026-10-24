@@ -90,6 +90,10 @@ module CPUThreads
 
 import ..AcceleratedKernels: Algorithm, SortAlgorithm
 
+@static if VERSION >= v"1.11.0-DEV.469"
+    eval(Meta.parse("public SampleSort, Partitioned"))
+end
+
 """
     CPUThreads.SampleSort(; max_tasks=nothing, min_elems=nothing)
 
