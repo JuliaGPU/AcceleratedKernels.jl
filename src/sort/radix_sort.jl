@@ -247,7 +247,8 @@ end
 
 
 
-# Sorts of slices that fit one block, one block per slice.
+# Sorts of slices that fit one block, one block per slice, two elements per thread: the slices
+# are at most `2 * block_size` long, as for the merge sort's tiles.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function radix_sort_block_kernel!(
     data, rev::Bool, ::Val{NPASS}, ::Val{CH}, layout,
@@ -339,6 +340,7 @@ end
             if p < n
                 d = s_digit[p + 1]
                 chunk_start = (p ÷ CH) * CH
+                # (fixed-trip, as in the chunked scatter)
                 cnt = UInt32(0)
                 for r in 0:CH - 1
                     q = chunk_start + r
@@ -450,12 +452,8 @@ function radix_plan(a, v::AbstractArray{T}, backend, dims) where T
 end
 
 
-"""
-    radix_sort!(v, backend, bufs; rev, block_size, items_per_thread, chunk_size, dims)
-
-In-place GPU radix sort of `v`, or of its slices along `dims`, for supported 32- and 64-bit
-integers and floats, with the scratch buffers of `radix_plan`.
-"""
+# GPU radix sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
+# `radix_plan`
 function radix_sort!(
     v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;
     rev::Bool, block_size::Int, items_per_thread::Int, chunk_size::Int, dims::Union{Colon, Integer},
@@ -492,7 +490,6 @@ function radix_sort!(
     scatter! = chunked ?
         radix_scatter_chunked_kernel!(backend, block_size) :
         radix_scatter_kernel!(backend, block_size)
-    # the chunked scatter also takes the chunk size
     scatter_args = chunked ? (Val(items), Val(chunk_size)) : (Val(items),)
 
     passes_run = 0

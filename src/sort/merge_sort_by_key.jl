@@ -161,7 +161,6 @@ end
 end
 
 
-# GPU merge sort of `keys` (or of each slice along `dims`), permuting `values` alike.
 # GPU merge sort of `keys` (or of each slice along `dims`) carrying `values` along, in place, with
 # the scratch buffers of `merge_by_key_scratch`.
 function merge_sort_by_key!(

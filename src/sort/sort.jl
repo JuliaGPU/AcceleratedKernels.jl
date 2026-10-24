@@ -27,11 +27,11 @@ dimension independently.
 `alg` is [`Auto()`](@ref Auto) by default, which chooses an algorithm for the backend and device,
 the element type, the ordering, and the length of the array or slices: on the host,
 [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort); on GPUs,
-[`MergeSort`](@ref), or [`BitonicSort`](@ref) for short inputs or [`RadixSort`](@ref) for long
-ones where the device's tuning enables them and they give the same result. `Auto(stable=false)`
-also allows the unstable `BitonicSort` for elements that compare equal without being identical
-(e.g. floats). An explicit algorithm, with any of its settings, is used as given or rejected with
-an `ArgumentError`.
+[`MergeSort`](@ref). A device's tuning can make it choose [`BitonicSort`](@ref) for short inputs
+or [`RadixSort`](@ref) for long ones where they give the same result, which no backend does yet;
+`Auto(stable=false)` then also allows the unstable `BitonicSort` for elements that compare equal
+without being identical (e.g. floats). An explicit algorithm, with any of its settings, is used as
+given or rejected with an `ArgumentError`.
 
 `backend` is derived from `v`; pass it only for arrays that do not determine their backend.
 
@@ -257,8 +257,6 @@ function sortperm_run!(a::MergeSort, ix, v, backend, dims, ord, by, bufs)
     if a.lowmem
         merge_sortperm_lowmem!(ix, v, backend, bufs, ord; block_size=a.block_size, dims)
     else
-        # Copies keys alongside indices, so comparisons never read global memory; the low-memory
-        # path does two global loads per comparison, O(n log²n) global traffic at large n.
         merge_sortperm!(ix, v, backend, bufs, ord, by; block_size=a.block_size, dims)
     end
 end

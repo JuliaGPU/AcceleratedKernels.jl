@@ -1,4 +1,4 @@
-# Taken from julia.Base to ensure consistent results with the Base CPU version
+# Copied from Base, so that the results match `Base.searchsortedfirst` and `searchsortedlast`
 # License is MIT: https://julialang.org/license
 function searchsorted_first(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     hi = hi + T(1)
@@ -34,12 +34,10 @@ function searchsorted_last(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T
 end
 
 
-# NOTE: for many index calculations in this library, computation using zero-indexing leads to
-# fewer operations (also code is transpiled to CUDA / ROCm / oneAPI / Metal code which do zero
-# indexing). Internal calculations will be done using zero indexing except when actually
-# accessing memory. As with C, the lower bound is inclusive, the upper bound exclusive.
-#
-# If you use these functions, you'll have to offset the returned indices too.
+# C++'s `std::lower_bound` and `std::upper_bound` with zero-based positions, for the merge sort
+# kernels, whose index arithmetic is zero-based: the first position in `[left, right)` whose
+# element is not less than `value` (`lower_bound0`) or is greater than `value` (`upper_bound0`)
+# under the less-than `comp`, or `right` if there is none.
 Base.@propagate_inbounds function lower_bound0(arr, value, left=0, right=length(arr), comp=(<))
     right <= left && return left
     comp(arr[right], value) && return right
