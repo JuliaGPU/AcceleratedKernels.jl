@@ -69,6 +69,9 @@ struct TaskPartitioner
 end
 
 
+# The number of tasks of a `TaskPartitioner(num_elems, max_tasks, min_elems)`
+task_count(num_elems, max_tasks, min_elems) = max(1, min(max_tasks, num_elems ÷ min_elems))
+
 function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     # Simple correctness checks
     @argcheck num_elems >= 0
@@ -76,9 +79,8 @@ function TaskPartitioner(num_elems, max_tasks=Threads.nthreads(), min_elems=1)
     @argcheck min_elems > 0
 
     # Number of tasks needed to have at least `min_elems` per task
-    num_tasks = min(max_tasks, num_elems ÷ min_elems)
-    if num_tasks <= 1
-        num_tasks = 1
+    num_tasks = task_count(num_elems, max_tasks, min_elems)
+    if num_tasks == 1
         return TaskPartitioner(num_elems, max_tasks, min_elems, num_tasks, Int[], Task[])
     end
 
@@ -167,33 +169,7 @@ task_partition(tp) do irange
 end
 ```
 """
-function task_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1)
-    num_elems >= 0 || throw(ArgumentError("num_elems must be >= 0"))
-    max_tasks > 0 || throw(ArgumentError("max_tasks must be > 0"))
-    min_elems > 0 || throw(ArgumentError("min_elems must be > 0"))
-
-    if min(max_tasks, num_elems ÷ min_elems) <= 1
-        f(1:num_elems)
-    else
-        # Compiler should decide if this should be inlined; threading adds quite a bit of code, it
-        # is faster (as seen in Cthulhu) to keep it in a separate self-contained function
-        tp = TaskPartitioner(num_elems, max_tasks, min_elems)
-        task_partition(f, tp)
-    end
-    nothing
-end
-
-
-function task_partition(f, tp::TaskPartitioner)
-    # A single task has no `tasks` entry
-    tp.num_tasks == 1 && return (f(1:tp.num_elems); nothing)
-    for i in 1:tp.num_tasks
-        tp.tasks[i] = Threads.@spawn f(@inbounds(tp[i]))
-    end
-    @inbounds for i in 1:tp.num_tasks
-        wait(tp.tasks[i])
-    end
-end
+task_partition(f, args...) = itask_partition((_, irange) -> f(irange), args...)
 
 
 
@@ -245,7 +221,7 @@ function itask_partition(f, num_elems, max_tasks=Threads.nthreads(), min_elems=1
     max_tasks > 0 || throw(ArgumentError("max_tasks must be > 0"))
     min_elems > 0 || throw(ArgumentError("min_elems must be > 0"))
 
-    if min(max_tasks, num_elems ÷ min_elems) <= 1
+    if task_count(num_elems, max_tasks, min_elems) == 1
         f(1, 1:num_elems)
     else
         # Compiler should decide if this should be inlined; threading adds quite a bit of code, it
@@ -258,6 +234,7 @@ end
 
 
 function itask_partition(f, tp::TaskPartitioner)
+    # A single task has no `tasks` entry
     tp.num_tasks == 1 && return (f(1, 1:tp.num_elems); nothing)
     for i in 1:tp.num_tasks
         tp.tasks[i] = Threads.@spawn f(i, @inbounds(tp[i]))

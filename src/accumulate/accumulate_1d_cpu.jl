@@ -17,15 +17,14 @@ function accumulate_1d_cpu!(
     seed = _scan_first_seed(v, init, neutral)
     _, op = seeded_ops(PartialInputs(), op, neutral)
 
-    # First accumulate chunks independently
-    tp = TaskPartitioner(length(v), max_tasks, min_elems)
-    if tp.num_tasks == 1
+    if task_count(length(v), max_tasks, min_elems) == 1
         _accumulate_1d_cpu_section!(op, v; seed, neutral, inclusive)
         return v
     end
 
     # Scan each task's section with the requested inclusivity, seeding only the first one with
     # `seed`, and save each section's total
+    tp = TaskPartitioner(length(v), max_tasks, min_elems)
     shared = Vector{typeof(neutral)}(undef, tp.num_tasks)
     itask_partition(tp) do itask, irange
         shared[itask] = _accumulate_1d_cpu_section!(

@@ -174,12 +174,6 @@ function findall_cpu(
 ) where I
     input_indices = eachindex(bools)
     tp = TaskPartitioner(length(bools), alg.max_tasks, alg.min_elems)
-    if tp.num_tasks == 1
-        out = similar(bools, I, Base.count(bools))
-        findall_section!(out, bools, input_indices, output_indices, Base.OneTo(length(bools)), 0)
-        return out
-    end
-
     task_counts = bufs.counts
     itask_partition(tp) do itask, positions
         task_counts[itask] = Base.count(
@@ -312,8 +306,7 @@ function findall_setup(v, items, predicate::Bool, backend, alg)
         scan = scan_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
         (; counts=scratch(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
     else
-        num_tasks = TaskPartitioner(n, a.max_tasks, a.min_elems).num_tasks
-        (; counts=scratch(Int, num_tasks)), (;)
+        (; counts=scratch(Int, task_count(n, a.max_tasks, a.min_elems))), (;)
     end
     return (; plan=Plan(backend, a, nested, merge(mask, counts)))
 end

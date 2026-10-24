@@ -8,10 +8,10 @@ function mapreduce_1d_cpu(
     min_elems::Int,
 ) where {F, OP}
     f, op_lanes = seeded_ops(f, op, neutral)
-    tp = TaskPartitioner(length(src), max_tasks, min_elems)
-    if src isa Base.Broadcast.Broadcasted || tp.num_tasks == 1
+    if src isa Base.Broadcast.Broadcasted || task_count(length(src), max_tasks, min_elems) == 1
         return finish(op, init, nothing, 0, Base.mapreduce(f, op_lanes, src; init=neutral))
     end
+    tp = TaskPartitioner(length(src), max_tasks, min_elems)
 
     # Each task reduces an independent chunk of the array
     shared = Vector{typeof(neutral)}(undef, tp.num_tasks)
