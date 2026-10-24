@@ -30,12 +30,11 @@ function accumulate_1d_cpu!(
         )
     end
 
-    # Now accumulate the totals of each task; the number of tasks is small enough (even for
-    # 144-thread HPC nodes) that there is no need to do decoupled lookbacks
+    # Scan the tasks' totals serially: there are few tasks, even on 144-thread HPC nodes
     serial_scan!(op, shared; start=seed, seed, inclusive=true)
 
-    # Now prepend the running total of all previous tasks to each element, except in the first
-    # task. An exclusive section starts from `seed`, which may be an unset `Optional` that cannot
+    # Combine each element after the first task's with the total of the tasks before it, on the
+    # left. An exclusive section starts from `seed`, which may be an unset `Optional` that cannot
     # be stored: its first element is the running total itself.
     itask_partition(tp) do itask, irange
         @inbounds begin

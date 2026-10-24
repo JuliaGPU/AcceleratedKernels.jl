@@ -154,7 +154,8 @@ function prefixes_length(n, alg::ScanPrefixes)
     return len
 end
 
-# ScanPrefixes algorithm
+# Scan `v` in linear order with `ScanPrefixes`, from the elements `load(src[i])`; `prefixes`
+# holds the `prefixes_length` tile totals
 function accumulate_1d_gpu!(
     op, v::AbstractArray, backend, alg::ScanPrefixes;
     src=v,

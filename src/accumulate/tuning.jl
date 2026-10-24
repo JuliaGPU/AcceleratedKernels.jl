@@ -5,11 +5,12 @@
     ScanPrefixes(; block_size=nothing, items_per_thread=nothing)
 
 GPU scan of a whole array in tiles of `block_size * items_per_thread` elements (`block_size` a
-power of two up to 1024): the blocks reduce their tile, the tiles' totals are scanned the same
-way, and each block then scans its tile from the total of the tiles before it (or, depending on
-the device, the blocks scan their tile, and then add the total of the tiles before it). No block
-waits for another, so it runs on every backend. The default `items_per_thread` is at most 8, fewer for wide
-element types, to keep the tile in local memory.
+power of two up to 1024): each block reduces its tile, the tiles' totals are scanned the same
+way, and each block then scans its tile from the total of the tiles before it. On devices whose
+[`ScanTuning`](@ref) says so (CPUs), the blocks instead scan their tile first and then add the
+total of the tiles before it. No block waits for another, so it runs on every backend. The
+default `items_per_thread` is the largest, up to 8, whose tile fits in the tuning's local-memory
+budget.
 """
 Base.@kwdef struct ScanPrefixes <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -19,13 +20,12 @@ end
 """
     SliceScan(; block_size=nothing, items_per_thread=nothing)
 
-GPU scan of each slice along `dims`, the algorithm for scans along `dims`. Which threads scan a
-slice depends on the layout: one thread per slice for short slices, and where neighbouring
-threads then load neighbouring elements (when the dimensions before `dims` hold several
-elements); otherwise a block per slice, scanning tiles of `block_size * items_per_thread` consecutive
-elements of it (`block_size` a power of two up to 1024, smaller for short slices). When that
-leaves too few threads to fill the device, each slice is split into chunks, which takes two more
-passes: one over the source, to reduce each chunk, and a scan of the chunks' totals.
+GPU scan of each slice along `dims`. Short slices, and slices whose neighbours are next to them in
+memory (when the dimensions before `dims` hold several elements), are scanned by one thread
+each; other slices by one block each, in tiles of `block_size * items_per_thread` consecutive
+elements (`block_size` a power of two up to 1024, smaller for short slices). When that leaves too
+few threads to fill the device, each slice is split into chunks, which takes two more passes: one
+over the source to reduce each chunk, and a scan of the chunks' totals.
 """
 Base.@kwdef struct SliceScan <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -127,8 +127,9 @@ function check_fields(a::Union{ScanPrefixes, SliceScan})
     nothing
 end
 
-# The largest number of items per thread whose tile fits the tuning's local-memory budget. Types
-# without a definite size and block sizes that `check_scan` rejects get a placeholder.
+# The largest number of items per thread whose tile fits the tuning's local-memory budget, next
+# to the block's `block_size` per-thread totals (hence the `- 1`). Types without a definite size
+# and block sizes that `check_scan` rejects get a placeholder.
 function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
     clamp(t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1,

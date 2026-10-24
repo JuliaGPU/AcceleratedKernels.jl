@@ -67,9 +67,7 @@ end
 # an `(n_inner, nchunks, n_outer)` array, scanned along its second dimension by the same means.
 # Reducing first, rather than scanning each chunk and adding the carries afterwards, reads the
 # source twice but writes it once, and leaves the source intact until the last pass, so a scan
-# in place needs no other scratch. Every pass reads the elements as `load(src[i])`, so a scan
-# out of place needs no copy either. Chunks and carries keep the elements' order, so `op` need
-# not be commutative.
+# in place needs no other scratch.
 
 # The extents `(n_inner, len, n_outer)` of an array of size `sz` scanned along `dims`
 # (the scans index arrays linearly, so these are the extents of a column-major array of that size,

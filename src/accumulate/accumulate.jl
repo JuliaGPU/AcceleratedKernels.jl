@@ -35,29 +35,30 @@ With `dims=nothing` the array is scanned in linear order, whatever its number of
 an integer `dims`, each slice along that dimension is scanned independently. A `dims` beyond the
 array's dimensions makes every slice one element long.
 
-The contract, which is AcceleratedKernels' own (see [Differences from Base](@ref)):
+This contract is AcceleratedKernels' own (see [Differences from Base](@ref)).
 
-- **Algebra.** `op` must be associative, as elements are combined in parallel; it does not need
-  to be commutative, as every combination keeps the elements in order (matrix products are
-  fine). Non-associative operators such as `-` are not supported.
-- **Inclusive scans** (the default): with running values `y`, `y[1] = Base.reduce_first(op,
-  src[1])` without `init`, and `op(init, src[1])` with it; then `y[k] = op(y[k-1], src[k])`, and
-  `dst[k] = y[k]`. `init` is applied once per slice.
-- **Exclusive scans** (`inclusive=false`): `y[1]` is `init`, or the neutral element of `op`
-  without it (an `ArgumentError` when none is known); then `y[k] = op(y[k-1], src[k-1])`.
-- **Neutral element.** `neutral` (a two-sided identity of `op`) seeds partial results; it
-  defaults to `GPUArraysCore.neutral_element(op, T)` where that is defined. For other operators,
-  partial results start from their first element instead, so inclusive scans need no neutral
-  element.
-- **Running-value type.** The running values have one type, and are converted to `eltype(dst)`
-  only when stored: `acctype` when it is given, else the type the fold of `op` settles on,
-  starting from `eltype(dst)` (joined with `init`'s type) and the elements, as for
-  [`mapreducedim!`](@ref) (e.g. `Int` for `add_sum` over `Int8`). So with the usual operators and
-  no `acctype`, a scan does not run in a type narrower than its destination: `Float32`s scanned into a `Float64`
-  array are summed in `Float64`. Where the running type differs from `eltype(dst)`, the scan runs in a scratch array
-  of that type. An `acctype` that cannot hold the running values at all is an `ArgumentError`;
-  whether their values fit is the caller's obligation. [`accumulate`](@ref) allocates the fold
-  type from `init`'s type and the elements.
+`op` must be associative, as elements are combined in parallel; it need not be commutative, as
+every combination keeps the elements in order (matrix products are fine). Non-associative
+operators such as `-` are not supported.
+
+An inclusive scan (the default) computes the running values `y[1] = Base.reduce_first(op,
+src[1])`, or `op(init, src[1])` with `init`, then `y[k] = op(y[k-1], src[k])`, and stores
+`dst[k] = y[k]`; `init` is applied once per slice. An exclusive scan (`inclusive=false`) starts
+from `y[1] = init`, or from the neutral element of `op` without it (an `ArgumentError` when none
+is known), and continues with `y[k] = op(y[k-1], src[k-1])`.
+
+Partial results start from `neutral`, a two-sided identity of `op`. It defaults to
+`GPUArraysCore.neutral_element(op, T)` where that is defined; for other operators, partial
+results start from their first element instead, so inclusive scans need no neutral element.
+
+The running values have one type, the accumulator type, and are converted to `eltype(dst)` only
+when stored. It is `acctype` when that is given; otherwise the type the fold of `op` settles on,
+starting from `eltype(dst)` (joined with `init`'s type) and the elements, as for
+[`mapreducedim!`](@ref): `Int` for `add_sum` over `Int8`, and `Float64` for `Float32`s scanned
+into a `Float64` array. Where it differs from `eltype(dst)`, the scan runs in a scratch array of
+that type. An `acctype` that cannot hold the running values at all is an `ArgumentError`;
+whether their values fit is the caller's obligation. [`accumulate`](@ref) allocates the fold
+type from `init`'s type and the elements.
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and on GPUs [`ScanPrefixes`](@ref) for
@@ -137,7 +138,6 @@ function scan_setup(
     A = scan_acctype(op, D, T, init, inclusive, scan_calls_op(sz, dims, init, inclusive),
                      acctype)
     seed = reduce_seed(op, A, neutral)
-    # The kernels' tiles hold partial results: `Optional`s, when `op` has no known neutral element
     a = resolve_scan(alg, backend, A, dims, typeof(seed))
     if !inclusive && init isa NoInit && seed isa Optional && !isset(seed)
         throw(ArgumentError(
@@ -340,7 +340,7 @@ v = ROCArray(rand(Int32(1):Int32(100), 100_000))
 s = AK.cumsum(v)
 ```
 
-Row-wise cumulative sum of a matrix:
+Cumulative sum down each column of a matrix:
 ```julia
 m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
 s = AK.cumsum(m, dims=1)
@@ -366,7 +366,7 @@ v = oneArray(rand(Int32(1):Int32(100), 100_000))
 p = AK.cumprod(v)
 ```
 
-Row-wise cumulative product of a matrix:
+Cumulative product down each column of a matrix:
 ```julia
 m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
 p = AK.cumprod(m, dims=1)

@@ -17,11 +17,10 @@
 end
 
 
-# The sub-group width of the scans of values of type `T` in blocks of `block_size` threads on
-# `backend`, as a `Val` for the kernels: the backend's, where the tuning asks for sub-groups and
-# they are consecutive threads (from KernelAbstractions 0.10), shuffle `T`, and fit a block
-# between one and as many times as their width (the sub-group totals are scanned by a
-# sub-group); else 0, to scan in local memory.
+# The sub-group width `W` for a block scan of `T` in blocks of `block_size` threads, as a `Val`,
+# or `Val(0)` for the local-memory scan. Sub-groups must be enabled by the scan tuning, linear
+# (from KernelAbstractions 0.10), able to shuffle `T`, and `W ≤ block_size ≤ W²`, as one
+# sub-group scans the sub-groups' totals.
 @static if isdefined(KernelAbstractions, :KernelInterface)
     function scan_subgroup_width(backend, ::Type{T}, block_size) where {T}
         scan_tuning(backend, T).subgroups || return Val(0)
@@ -67,7 +66,7 @@ end
 
 # The scan in local memory
 @inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
-    # Up-sweep. Use index-sized counters for block sizes of 256 or more.
+    # Up-sweep
     offset = one(ithread)
     d = block_size >> 0x1
     while d > 0x0
