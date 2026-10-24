@@ -30,10 +30,10 @@ end
 # Run the local strides of levels `first_level:last_level`. A tile holds part of one long slice
 # (`SPAN == CAP`) or `CAP ÷ SPAN` short slices. Unused entries are never read.
 @kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile_kernel!(
-    vec, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
+    v, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
 ) where {CAP, SPAN}
     @uniform BS = Int(@groupsize()[1])
-    tile = @localmem eltype(vec) (CAP,)
+    tile = @localmem eltype(v) (CAP,)
 
     iblock = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
@@ -50,7 +50,7 @@ end
         s = SPAN == CAP ? islice : islice + (pos >> spanlog)
         off = SPAN == CAP ? pos : pos & (SPAN - 1)
         if off < len && s < nslices
-            tile[pos + 1] = slice(vec, layout, s)[base + off + 1]
+            tile[pos + 1] = slice(v, layout, s)[base + off + 1]
         end
         pos += BS
     end
@@ -80,7 +80,7 @@ end
         s = SPAN == CAP ? islice : islice + (pos >> spanlog)
         off = SPAN == CAP ? pos : pos & (SPAN - 1)
         if off < len && s < nslices
-            slice(vec, layout, s)[base + off + 1] = tile[pos + 1]
+            slice(v, layout, s)[base + off + 1] = tile[pos + 1]
         end
         pos += BS
     end
@@ -89,10 +89,10 @@ end
 
 # One global step at stride `2^jlog >= CAP`, one thread per comparator
 @kernel cpu=false inbounds=true function bitonic_pass_kernel!(
-    vec, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
+    v, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
 )
     islice, p = slice_block(layout, Int(@index(Global, Linear)) - 1, pairs_per_slice)
-    elems = slice(vec, layout, islice)
+    elems = slice(v, layout, islice)
     i, partner = bitonic_pair(p, kklog, jlog)
     partner < layout.len && compare_exchange!(elems, ord, i, partner)
 end

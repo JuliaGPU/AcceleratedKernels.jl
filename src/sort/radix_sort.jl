@@ -3,11 +3,11 @@
 # fallback for backends without shared-memory atomics.
 #
 # The kernels sort the slices of a slices.jl layout, a whole-array sort being one flat slice. Each
-# slice is split into `bps` blocks, and the digit histograms are laid out slice-major:
-# `hist[(slice * 256 + digit) * bps + block]`. An exclusive scan of all of them then gives every
-# (slice, digit, block) its position in the concatenation of the sorted slices, from which the
-# scatter subtracts the slice's start. The subtraction wraps, so positions within a slice are
-# right as long as the slice fits in a UInt32.
+# slice is split into `blocks_per_slice` blocks, and the digit histograms are laid out
+# slice-major: `hist[(slice * 256 + digit) * blocks_per_slice + block]`. An exclusive scan of all
+# of them then gives every (slice, digit, block) its position in the concatenation of the sorted
+# slices, from which the scatter subtracts the slice's start. The subtraction wraps, so positions
+# within a slice are right as long as the slice fits in a UInt32.
 
 import Atomix
 
@@ -42,14 +42,14 @@ end
 
 # Histogram without atomics.
 @kernel inbounds=true cpu=false unsafe_indices=true function radix_histogram_kernel!(
-    hist, @Const(v), shift::UInt32, rev::Bool, ::Val, layout, bps::Int,
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val, layout, blocks_per_slice::Int,
 )
     @uniform NI = Int(@groupsize()[1])
     s_digit = @localmem UInt32 (NI,)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    islice, iblk = slice_block(layout, iblock, bps)
+    islice, iblk = slice_block(layout, iblock, blocks_per_slice)
     src = slice(v, layout, islice)
     len = layout.len
 
@@ -57,14 +57,14 @@ end
     s_digit[ithread + 1] = UInt32(i < len ? radix_digit(src[i + 1], shift, rev) : 0xffffffff)
     @synchronize()
 
-    base = islice * Int(RADIX_DIGITS) * bps + iblk
+    base = islice * Int(RADIX_DIGITS) * blocks_per_slice + iblk
     bucket = ithread
     while bucket < Int(RADIX_DIGITS)
         cnt = UInt32(0)
         for jj in 1:NI
             cnt += UInt32(s_digit[jj] == UInt32(bucket))
         end
-        hist[base + bucket * bps + 1] = cnt
+        hist[base + bucket * blocks_per_slice + 1] = cnt
         bucket += NI
     end
 end
@@ -73,14 +73,14 @@ end
 # Histogram with shared-memory atomics.
 
 @kernel inbounds=true cpu=false unsafe_indices=true function radix_histogram_atomic_kernel!(
-    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS}, layout, bps::Int,
+    hist, @Const(v), shift::UInt32, rev::Bool, ::Val{ITEMS}, layout, blocks_per_slice::Int,
 ) where ITEMS
     @uniform NI = Int(@groupsize()[1])
     s_hist = @localmem UInt32 (Int(RADIX_DIGITS),)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    islice, iblk = slice_block(layout, iblock, bps)
+    islice, iblk = slice_block(layout, iblock, blocks_per_slice)
     src = slice(v, layout, islice)
     len = layout.len
     j = ithread
@@ -101,10 +101,10 @@ end
     end
     @synchronize()
 
-    base = islice * Int(RADIX_DIGITS) * bps + iblk
+    base = islice * Int(RADIX_DIGITS) * blocks_per_slice + iblk
     bucket = ithread
     while bucket < Int(RADIX_DIGITS)
-        hist[base + bucket * bps + 1] = s_hist[bucket + 1]
+        hist[base + bucket * blocks_per_slice + 1] = s_hist[bucket + 1]
         bucket += NI
     end
 end
@@ -112,16 +112,17 @@ end
 
 # Stable scatter without atomics.
 @kernel inbounds=true cpu=false unsafe_indices=true function radix_scatter_kernel!(
-    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val, layout, bps::Int,
+    v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val, layout,
+    blocks_per_slice::Int,
 )
     @uniform NI  = Int(@groupsize()[1])
-    s_elem  = @localmem eltype(v_in) (NI,)
-    s_digit = @localmem UInt32       (NI,)
-    s_gbase = @localmem UInt32       (Int(RADIX_DIGITS),)
+    s_elem         = @localmem eltype(v_in) (NI,)
+    s_digit        = @localmem UInt32       (NI,)
+    s_digit_offset = @localmem UInt32       (Int(RADIX_DIGITS),)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    islice, iblk = slice_block(layout, iblock, bps)
+    islice, iblk = slice_block(layout, iblock, blocks_per_slice)
     src = slice(v_in, layout, islice)
     dst = slice(v_out, layout, islice)
     len = layout.len
@@ -130,11 +131,11 @@ end
     if i < len
         s_elem[ithread + 1] = src[i + 1]
     end
-    base = islice * Int(RADIX_DIGITS) * bps + iblk
+    base = islice * Int(RADIX_DIGITS) * blocks_per_slice + iblk
     start = (islice * len) % UInt32
     j = ithread
     while j < Int(RADIX_DIGITS)
-        s_gbase[j + 1] = hist[base + j * bps + 1] - start
+        s_digit_offset[j + 1] = hist[base + j * blocks_per_slice + 1] - start
         j += NI
     end
     @synchronize()
@@ -148,7 +149,7 @@ end
         for jj in UInt32(1):UInt32(ithread)
             cnt += UInt32(s_digit[jj] == my_digit)
         end
-        gpos = Int(s_gbase[my_digit + 1]) + Int(cnt)
+        gpos = Int(s_digit_offset[my_digit + 1]) + Int(cnt)
         dst[gpos + 1] = s_elem[ithread + 1]
     end
 end
@@ -158,19 +159,19 @@ end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function radix_scatter_chunked_kernel!(
     v_out, @Const(v_in), @Const(hist), shift::UInt32, rev::Bool, ::Val{ITEMS}, ::Val{CH},
-    layout, bps::Int,
+    layout, blocks_per_slice::Int,
 ) where {ITEMS, CH}
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * ITEMS
     @uniform NCH  = (Int(@groupsize()[1]) * ITEMS) ÷ CH
-    s_elem  = @localmem eltype(v_in) (TILE,)
-    s_digit = @localmem UInt32       (TILE,)
-    s_gbase = @localmem UInt32       (Int(RADIX_DIGITS),)
-    s_chist = @localmem UInt32       (Int(RADIX_DIGITS) * NCH,)
+    s_elem         = @localmem eltype(v_in) (TILE,)
+    s_digit        = @localmem UInt32       (TILE,)
+    s_digit_offset = @localmem UInt32       (Int(RADIX_DIGITS),)
+    s_chunk_counts = @localmem UInt32       (Int(RADIX_DIGITS) * NCH,)
 
     iblock  = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
-    islice, iblk = slice_block(layout, iblock, bps)
+    islice, iblk = slice_block(layout, iblock, blocks_per_slice)
     src = slice(v_in, layout, islice)
     dst = slice(v_out, layout, islice)
     len = layout.len
@@ -187,16 +188,16 @@ end
         end
         m += 1
     end
-    base = islice * Int(RADIX_DIGITS) * bps + iblk
+    base = islice * Int(RADIX_DIGITS) * blocks_per_slice + iblk
     start = (islice * len) % UInt32
     j = ithread
     while j < Int(RADIX_DIGITS)
-        s_gbase[j + 1] = hist[base + j * bps + 1] - start
+        s_digit_offset[j + 1] = hist[base + j * blocks_per_slice + 1] - start
         j += NI
     end
     j = ithread
     while j < Int(RADIX_DIGITS) * NCH
-        s_chist[j + 1] = UInt32(0)
+        s_chunk_counts[j + 1] = UInt32(0)
         j += NI
     end
     @synchronize()
@@ -206,7 +207,7 @@ end
         p = ithread + m * NI
         d = s_digit[p + 1]
         if d != 0xffffffff
-            Atomix.@atomic s_chist[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] += UInt32(1)
+            Atomix.@atomic s_chunk_counts[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] += UInt32(1)
         end
         m += 1
     end
@@ -216,8 +217,8 @@ end
     while d < Int(RADIX_DIGITS)
         acc = UInt32(0)
         for c in 0:NCH-1
-            cnt = s_chist[c * Int(RADIX_DIGITS) + d + 1]
-            s_chist[c * Int(RADIX_DIGITS) + d + 1] = acc
+            cnt = s_chunk_counts[c * Int(RADIX_DIGITS) + d + 1]
+            s_chunk_counts[c * Int(RADIX_DIGITS) + d + 1] = acc
             acc += cnt
         end
         d += NI
@@ -236,8 +237,8 @@ end
                 q = chunk_start + r
                 cnt += UInt32((q < p) & (s_digit[q + 1] == d))
             end
-            rank = s_chist[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] + cnt
-            gpos = Int(s_gbase[Int(d) + 1]) + Int(rank)
+            rank = s_chunk_counts[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] + cnt
+            gpos = Int(s_digit_offset[Int(d) + 1]) + Int(rank)
             dst[gpos + 1] = s_elem[p + 1]
         end
         m += 1
@@ -254,11 +255,11 @@ end
     @uniform NI   = Int(@groupsize()[1])
     @uniform TILE = Int(@groupsize()[1]) * 2
     @uniform NCH  = (Int(@groupsize()[1]) * 2) ÷ CH
-    s_a     = @localmem eltype(data) (TILE,)
-    s_b     = @localmem eltype(data) (TILE,)
-    s_digit = @localmem UInt32    (TILE,)
-    s_chist = @localmem UInt32    (Int(RADIX_DIGITS) * NCH,)
-    s_loff  = @localmem UInt32    (Int(RADIX_DIGITS),)
+    s_a            = @localmem eltype(data) (TILE,)
+    s_b            = @localmem eltype(data) (TILE,)
+    s_digit        = @localmem UInt32       (TILE,)
+    s_chunk_counts = @localmem UInt32       (Int(RADIX_DIGITS) * NCH,)
+    s_digit_offset = @localmem UInt32       (Int(RADIX_DIGITS),)
 
     it = Int(@index(Local, Linear)) - 1
     v  = slice(data, layout, Int(@index(Group, Linear)) - 1)
@@ -282,12 +283,12 @@ end
 
         j = it
         while j < Int(RADIX_DIGITS) * NCH
-            s_chist[j + 1] = UInt32(0)
+            s_chunk_counts[j + 1] = UInt32(0)
             j += NI
         end
         j = it
         while j < Int(RADIX_DIGITS)
-            s_loff[j + 1] = UInt32(0)
+            s_digit_offset[j + 1] = UInt32(0)
             j += NI
         end
         @synchronize()
@@ -298,7 +299,8 @@ end
             if p < n
                 d = radix_digit(src[p + 1], sh, rev)
                 s_digit[p + 1] = d
-                Atomix.@atomic s_chist[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] += UInt32(1)
+                Atomix.@atomic s_chunk_counts[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] +=
+                    UInt32(1)
             end
             m += 1
         end
@@ -309,12 +311,12 @@ end
             acc = UInt32(0)
             c = 0
             while c < NCH
-                cnt = s_chist[c * Int(RADIX_DIGITS) + d + 1]
-                s_chist[c * Int(RADIX_DIGITS) + d + 1] = acc
+                cnt = s_chunk_counts[c * Int(RADIX_DIGITS) + d + 1]
+                s_chunk_counts[c * Int(RADIX_DIGITS) + d + 1] = acc
                 acc += cnt
                 c += 1
             end
-            s_loff[d + 1] = acc
+            s_digit_offset[d + 1] = acc
             d += NI
         end
         @synchronize()
@@ -323,8 +325,8 @@ end
             run = UInt32(0)
             dd = 0
             while dd < Int(RADIX_DIGITS)
-                t = s_loff[dd + 1]
-                s_loff[dd + 1] = run
+                t = s_digit_offset[dd + 1]
+                s_digit_offset[dd + 1] = run
                 run += t
                 dd += 1
             end
@@ -342,8 +344,8 @@ end
                     q = chunk_start + r
                     cnt += UInt32((q < p) & (s_digit[q + 1] == d))
                 end
-                rank = s_chist[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] + cnt
-                dst[Int(s_loff[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
+                rank = s_chunk_counts[(p ÷ CH) * Int(RADIX_DIGITS) + Int(d) + 1] + cnt
+                dst[Int(s_digit_offset[Int(d) + 1]) + Int(rank) + 1] = src[p + 1]
             end
             m += 1
         end
@@ -401,10 +403,10 @@ function radix_key_range_setup(v::AbstractArray{T}, backend::Backend) where T
 end
 
 # Return the extrema of the transformed sort keys, with the scratch of `radix_key_range_setup`
-function radix_key_range(v::AbstractArray{T}, backend::Backend, descending::Bool, bufs) where T
+function radix_key_range(v::AbstractArray{T}, backend::Backend, rev::Bool, bufs) where T
     s, ident = radix_key_range_setup(v, backend)
     min_k, max_k = mapreduce_run(RadixKeyPair(), RadixKeyExtrema(), v, s, ident, bufs)
-    if descending
+    if rev
         UInt64(~max_k), UInt64(~min_k)
     else
         UInt64(min_k), UInt64(max_k)
@@ -417,14 +419,14 @@ end
 # whether one block sorts each slice in local memory
 function radix_config(::Type{T}, len, backend, block_size, items_per_thread, chunk_size) where T
     has_atomics = KernelAbstractions.supports_atomics(backend)
-    use_fast    = has_atomics && block_size % chunk_size == 0 &&
+    chunked     = has_atomics && block_size % chunk_size == 0 &&
                   radix_chunked_localmem(T, block_size, items_per_thread, chunk_size) <=
                   LOCAL_MEMORY_BUDGET
-    items       = use_fast ? items_per_thread : 1
-    one_block   = use_fast &&
+    items       = chunked ? items_per_thread : 1
+    one_block   = chunked &&
                   radix_block_localmem(T, block_size, chunk_size) <= LOCAL_MEMORY_BUDGET &&
                   len <= 2 * block_size
-    return (; has_atomics, use_fast, items, one_block)
+    return (; has_atomics, chunked, items, one_block)
 end
 
 # The number of blocks of the radix passes. Tiny slices make it exceed the number of elements, so
@@ -449,14 +451,14 @@ end
 
 
 """
-    radix_sort!(v, backend, bufs; descending, block_size, items_per_thread, chunk_size, dims)
+    radix_sort!(v, backend, bufs; rev, block_size, items_per_thread, chunk_size, dims)
 
 In-place GPU radix sort of `v`, or of its slices along `dims`, for supported 32- and 64-bit
 integers and floats, with the scratch buffers of `radix_scratch`.
 """
 function radix_sort!(
     v::AbstractArray{T}, backend::Backend, bufs::NamedTuple;
-    descending::Bool=false,
+    rev::Bool=false,
     block_size::Int=256,
     items_per_thread::Int=2,
     chunk_size::Int=32,
@@ -466,20 +468,20 @@ function radix_sort!(
     len = layout.len
     (isempty(v) || len <= 1) && return v
 
-    (; has_atomics, use_fast, items, one_block) =
+    (; has_atomics, chunked, items, one_block) =
         radix_config(T, len, backend, block_size, items_per_thread, chunk_size)
 
     n_passes = sizeof(T) * 8 ÷ Int(RADIX_BITS)
 
     if one_block
         radix_sort_block_kernel!(backend, block_size)(
-            v, descending, Val(n_passes), Val(chunk_size), layout;
+            v, rev, Val(n_passes), Val(chunk_size), layout;
             ndrange=Base.checked_mul(block_size, slice_count(layout)))
         KernelAbstractions.synchronize(backend)
         return v
     end
 
-    bps = cld(len, block_size * items)
+    blocks_per_slice = cld(len, block_size * items)
     num_blocks = radix_blocks(layout, block_size * items)
     hist = bufs.hist
     p1 = v
@@ -487,19 +489,18 @@ function radix_sort!(
 
     ndrange = (Base.checked_mul(block_size, num_blocks),)
 
-    min_key, max_key = radix_key_range(p1, backend, descending, bufs.key_range)
+    min_key, max_key = radix_key_range(p1, backend, rev, bufs.key_range)
 
-    vitems = Val(items)
-    hist_kern! = has_atomics ?
+    histogram! = has_atomics ?
         radix_histogram_atomic_kernel!(backend, block_size) :
         radix_histogram_kernel!(backend, block_size)
-    scat_kern! = use_fast ?
+    scatter! = chunked ?
         radix_scatter_chunked_kernel!(backend, block_size) :
         radix_scatter_kernel!(backend, block_size)
     # the chunked scatter also takes the chunk size
-    scat_args = use_fast ? (vitems, Val(chunk_size)) : (vitems,)
+    scatter_args = chunked ? (Val(items), Val(chunk_size)) : (Val(items),)
 
-    n_actual = 0
+    passes_run = 0
 
     for pass in 0:n_passes - 1
         shift = UInt64(pass) * UInt64(RADIX_BITS)
@@ -507,15 +508,15 @@ function radix_sort!(
         (min_key >> shift) == (max_key >> shift) && continue
 
         shift32 = UInt32(shift)
-        hist_kern!(hist, p1, shift32, descending, vitems, layout, bps; ndrange)
+        histogram!(hist, p1, shift32, rev, Val(items), layout, blocks_per_slice; ndrange)
         accumulate_nested!(+, hist, bufs.scan; backend, init=UInt32(0), inclusive=false)
-        scat_kern!(p2, p1, hist, shift32, descending, scat_args..., layout, bps; ndrange)
+        scatter!(p2, p1, hist, shift32, rev, scatter_args..., layout, blocks_per_slice; ndrange)
 
         p1, p2 = p2, p1
-        n_actual += 1
+        passes_run += 1
     end
 
-    if isodd(n_actual)
+    if isodd(passes_run)
         copyto_on!(v, p1, backend)
     end
 

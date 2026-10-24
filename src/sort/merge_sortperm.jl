@@ -73,22 +73,22 @@ function merge_sortperm_lowmem!(
 
     # Global level
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
-    half_size_group = block_size * 2
-    if len > half_size_group
+    run_len = block_size * 2
+    if len > run_len
         p1 = ix
         p2 = bufs.temp
 
         kernel! = merge_pass_kernel!(backend, block_size)
 
         niter = 0
-        while len > half_size_group
-            blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
+        while len > run_len
+            blocks = ((len + run_len - 1) ÷ run_len + 1) ÷ 2 * (run_len ÷ block_size)
             kernel!(
-                p1, p2, comp, half_size_group, layout, blocks,
+                p1, p2, comp, run_len, layout, blocks,
                 ndrange=(block_size * blocks * slice_count(layout),),
             )
 
-            half_size_group = half_size_group << 1;
+            run_len = run_len << 1;
             p1, p2 = p2, p1
 
             niter += 1

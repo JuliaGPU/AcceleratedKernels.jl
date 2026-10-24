@@ -108,7 +108,7 @@ function sort_run!(a::MergeSort, v, backend, dims, ord, bufs; lt, by, rev, order
 end
 
 function sort_run!(a::RadixSort, v, backend, dims, ord, bufs; lt, by, rev, order)
-    radix_sort!(v, backend, bufs; descending=ord === Base.Order.Reverse,
+    radix_sort!(v, backend, bufs; rev=ord === Base.Order.Reverse,
                 block_size=a.block_size, items_per_thread=a.items_per_thread,
                 chunk_size=a.chunk_size, dims)
 end

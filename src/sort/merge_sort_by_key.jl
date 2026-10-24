@@ -34,11 +34,11 @@
 
     @synchronize()
 
-    half_size_group = typeof(ithread)(1)
-    size_group = typeof(ithread)(2)
+    run_len = typeof(ithread)(1)
+    pair_len = typeof(ithread)(2)
 
-    while half_size_group <= N
-        gid = ithread ÷ half_size_group
+    while run_len <= N
+        ipair = ithread ÷ run_len
 
         local k1::eltype(keys)
         local k2::eltype(keys)
@@ -47,44 +47,44 @@
         pos1 = typemax(I)
         pos2 = typemax(I)
 
-        i = gid * size_group + half_size_group + iblock * N * 0x2
+        i = ipair * pair_len + run_len + iblock * N * 0x2
         if i < len
-            tid = gid * size_group + ithread % half_size_group
+            tid = ipair * pair_len + ithread % run_len
             k1 = s_keys[tid + 0x1]
             v1 = s_values[tid + 0x1]
 
-            i = (gid + 0x1) * size_group + iblock * N * 0x2
-            n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
-            lo = gid * size_group + half_size_group
+            i = (ipair + 0x1) * pair_len + iblock * N * 0x2
+            n = i < len ? run_len : len - iblock * N * 0x2 - ipair * pair_len - run_len
+            lo = ipair * pair_len + run_len
             hi = lo + n
-            pos1 = ithread % half_size_group + lower_bound0(s_keys, k1, lo, hi, comp) - lo
+            pos1 = ithread % run_len + lower_bound0(s_keys, k1, lo, hi, comp) - lo
         end
 
-        tid = gid * size_group + half_size_group + ithread % half_size_group
+        tid = ipair * pair_len + run_len + ithread % run_len
         i = tid + iblock * N * 0x2
         if i < len
             k2 = s_keys[tid + 0x1]
             v2 = s_values[tid + 0x1]
-            lo = gid * size_group
-            hi = lo + half_size_group
-            pos2 = ithread % half_size_group + upper_bound0(s_keys, k2, lo, hi, comp) - lo
+            lo = ipair * pair_len
+            hi = lo + run_len
+            pos2 = ithread % run_len + upper_bound0(s_keys, k2, lo, hi, comp) - lo
         end
 
         @synchronize()
 
         if pos1 != typemax(I)
-            s_keys[gid * size_group + pos1 + 0x1] = k1
-            s_values[gid * size_group + pos1 + 0x1] = v1
+            s_keys[ipair * pair_len + pos1 + 0x1] = k1
+            s_values[ipair * pair_len + pos1 + 0x1] = v1
         end
         if pos2 != typemax(I)
-            s_keys[gid * size_group + pos2 + 0x1] = k2
-            s_values[gid * size_group + pos2 + 0x1] = v2
+            s_keys[ipair * pair_len + pos2 + 0x1] = k2
+            s_values[ipair * pair_len + pos2 + 0x1] = v2
         end
 
         @synchronize()
 
-        half_size_group = half_size_group << 0x1
-        size_group = size_group << 0x1
+        run_len = run_len << 0x1
+        pair_len = pair_len << 0x1
     end
 
     i = ithread + iblock * N * 0x2
@@ -104,7 +104,7 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function merge_pass_by_key_kernel!(
     @Const(keys_in), keys_out,
     @Const(values_in), values_out,
-    comp, half_size_group, layout, blocks_per_slice,
+    comp, run_len, layout, blocks_per_slice,
 )
 
     N = @groupsize()[1]
@@ -124,12 +124,12 @@ end
     len = layout.len
 
     idx = ithread + iblock * N
-    size_group = half_size_group * 0x2
-    gid = idx ÷ half_size_group
+    pair_len = run_len * 0x2
+    ipair = idx ÷ run_len
 
     # Left half
-    pos_in = gid * size_group + idx % half_size_group
-    lo = gid * size_group + half_size_group
+    pos_in = ipair * pair_len + idx % run_len
+    lo = ipair * pair_len + run_len
 
     if lo >= len
         # Incomplete left half, nothing to swap on the right, simply copy elements to be sorted
@@ -140,7 +140,7 @@ end
         end
     else
 
-        hi = (gid + 0x1) * size_group
+        hi = (ipair + 0x1) * pair_len
         hi > len && (hi = len)
 
         pos_out = pos_in + lower_bound0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
@@ -148,12 +148,12 @@ end
         values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
 
         # Right half
-        pos_in = gid * size_group + half_size_group + idx % half_size_group
+        pos_in = ipair * pair_len + run_len + idx % run_len
 
         if pos_in < len
-            lo = gid * size_group
-            hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + upper_bound0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
+            lo = ipair * pair_len
+            hi = lo + run_len
+            pos_out = pos_in - run_len + upper_bound0(keys_in, keys_in[pos_in + 0x1], lo, hi, comp) - lo
             keys_out[pos_out + 0x1] = keys_in[pos_in + 0x1]
             values_out[pos_out + 0x1] = values_in[pos_in + 0x1]
         end
@@ -200,8 +200,8 @@ function merge_sort_by_key!(
 
     # Global level: merge the sorted tiles of each slice, doubling the run length every pass
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
-    half_size_group = block_size * 2
-    if len > half_size_group
+    run_len = block_size * 2
+    if len > run_len
         pk1 = keys
         pk2 = bufs.temp_keys
 
@@ -211,14 +211,14 @@ function merge_sort_by_key!(
         kernel! = merge_pass_by_key_kernel!(backend, block_size)
 
         niter = 0
-        while len > half_size_group
-            blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
+        while len > run_len
+            blocks = ((len + run_len - 1) ÷ run_len + 1) ÷ 2 * (run_len ÷ block_size)
             kernel!(
-                pk1, pk2, pv1, pv2, comp, half_size_group, layout, blocks,
+                pk1, pk2, pv1, pv2, comp, run_len, layout, blocks,
                 ndrange=(block_size * blocks * slice_count(layout),),
             )
 
-            half_size_group = half_size_group << 1;
+            run_len = run_len << 1;
             pk1, pk2 = pk2, pk1
             pv1, pv2 = pv2, pv1
 
