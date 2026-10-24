@@ -1,18 +1,12 @@
-# The whole-array scan algorithm under test: the kernel algorithm, or the threaded host
-# algorithm. `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for
-# the configuration from both kinds of settings; without settings they give `Auto()`, except in
-# the `--cpu-ka` configuration, whose point is to run AK's kernels on the host backend.
-SCAN_ALGS = TEST_KERNELS ? [AK.ScanPrefixes] : [AK.CPUThreads.Partitioned]
-scan_name(A) = A === AK.CPUThreads.Partitioned ? "threads" : string(nameof(A))
-
-function scan_alg(A=nothing; block_size=nothing, items_per_thread=nothing,
-                  max_tasks=nothing, min_elems=nothing)
-    if A === nothing
-        Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
-            return HOST_KERNELS ? AK.ScanPrefixes() : AK.Auto()
-        A = TEST_KERNELS ? AK.ScanPrefixes : AK.CPUThreads.Partitioned
-    end
-    A === AK.CPUThreads.Partitioned ? A(; max_tasks, min_elems) : A(; block_size, items_per_thread)
+# `scan_alg` and `slice_alg` build a whole-array or `dims` algorithm for the configuration from
+# both kinds of settings; without settings they give `Auto()`, except in the `--cpu-ka`
+# configuration, whose point is to run AK's kernels on the host backend.
+function scan_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing,
+                  min_elems=nothing)
+    Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
+        return HOST_KERNELS ? AK.ScanPrefixes() : AK.Auto()
+    TEST_KERNELS ? AK.ScanPrefixes(; block_size, items_per_thread) :
+                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 end
 
 function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
@@ -21,15 +15,14 @@ function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
     TEST_KERNELS ? AK.SliceScan(; block_size) : AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 end
 
-@testset "accumulate_1d $(scan_name(A))" for A in SCAN_ALGS
-
+@testset "accumulate: whole arrays" begin
     Random.seed!(0)
 
     # Single-block exclusive scan
     for num_elems in 1:256
         x = array_from_host(ones(Int32, num_elems))
         y = copy(x)
-        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A; block_size=128))
+        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(; block_size=128))
         yh = Array(y)
         @test all(yh .== 0:length(yh) - 1)
     end
@@ -38,7 +31,7 @@ end
     for num_elems in 1:256
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; init=0, alg=scan_alg(A; block_size=128))
+        AK.accumulate!(+, y; init=0, alg=scan_alg(; block_size=128))
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -47,7 +40,7 @@ end
         num_elems = rand(1:100_000)
         x = array_from_host(ones(Int32, num_elems))
         y = copy(x)
-        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A))
+        AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg())
         yh = Array(y)
         @test all(yh .== 0:length(yh) - 1)
     end
@@ -61,7 +54,7 @@ end
             xh = rand(Int32(-9):Int32(9), num_elems)
             y = array_from_host(xh)
             AK.accumulate!(+, y; init, inclusive=false,
-                           alg=scan_alg(A; block_size, items_per_thread))
+                           alg=scan_alg(; block_size, items_per_thread))
             @test Array(y) == (cumsum(xh) .- xh) .+ init
         end
     end
@@ -70,7 +63,7 @@ end
     if KernelAbstractions.supports_float64(BACKEND)
         xh = ComplexF64.(1:4097)
         y = array_from_host(xh)
-        AK.accumulate!(+, y; init=0.0 + 0.0im, alg=scan_alg(A))
+        AK.accumulate!(+, y; init=0.0 + 0.0im, alg=scan_alg())
         @test Array(y) == cumsum(xh)
     end
 
@@ -79,7 +72,7 @@ end
         num_elems = rand(1:100_000)
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; init=0, alg=scan_alg(A))
+        AK.accumulate!(+, y; init=0, alg=scan_alg())
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -88,7 +81,7 @@ end
         num_elems = rand(1:100_000)
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = copy(x)
-        AK.accumulate!(+, y; init=0, alg=scan_alg(A; block_size=16))
+        AK.accumulate!(+, y; init=0, alg=scan_alg(; block_size=16))
         @test all(Array(y) .== accumulate(+, Array(x)))
     end
 
@@ -99,7 +92,7 @@ end
         n3 = rand(1:100)
         vh = rand(Float32, n1, n2, n3)
         v = array_from_host(vh)
-        AK.accumulate!(+, v; init=0, alg=scan_alg(A))
+        AK.accumulate!(+, v; init=0, alg=scan_alg())
         @test all(Array(v) .≈ accumulate(+, vh))
     end
 
@@ -109,21 +102,21 @@ end
         x = array_from_host(rand(1:1000, num_elems), Int32)
         y = similar(x)
         init = rand(-1000:1000)
-        AK.accumulate!(+, y, x; init=Int32(init), alg=scan_alg(A))
+        AK.accumulate!(+, y, x; init=Int32(init), alg=scan_alg())
         @test all(Array(y) .== accumulate(+, Array(x); init))
     end
 
     # Exclusive scan
     x = array_from_host(ones(Int32, 10))
     y = copy(x)
-    AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg(A))
+    AK.accumulate!(+, y; init=0, inclusive=false, alg=scan_alg())
     @test all(Array(y) .== 0:9)
 
     # Test init value is respected with exclusive scan too
     x = array_from_host(ones(Int32, 10))
     y = copy(x)
     init = 10
-    AK.accumulate!(+, y; init=Int32(init), inclusive=false, alg=scan_alg(A))
+    AK.accumulate!(+, y; init=Int32(init), inclusive=false, alg=scan_alg())
     @test all(Array(y) .== 10:19)
 
     # Test that undefined kwargs are not accepted
@@ -132,11 +125,11 @@ end
 
     # A workspace, reused
     y = array_from_host(ones(Int32, 1000))
-    with_workspace(AK.accumulate!, +, y; init=Int32(0), inclusive=false, alg=scan_alg(A; block_size=128))
+    with_workspace(AK.accumulate!, +, y; init=Int32(0), inclusive=false, alg=scan_alg(; block_size=128))
     @test Array(y) == 0:999
 
     y = with_workspace(AK.accumulate, +, array_from_host(ones(Int32, 1000));
-                       init=0, inclusive=false, alg=scan_alg(A; block_size=128))
+                       init=0, inclusive=false, alg=scan_alg(; block_size=128))
     @test Array(y) == 0:999
 
     # Small tiles (block_size 16-64, 1 item/thread) maximise the number of carries between blocks
@@ -147,13 +140,13 @@ end
 
         yi = array_from_host(xh)
         AK.accumulate!(+, yi; init=Int32(0), inclusive=true,
-                       alg=scan_alg(A; block_size, items_per_thread=1))
+                       alg=scan_alg(; block_size, items_per_thread=1))
         @test Array(yi) == cumsum(xh)
 
         init = rand(Int32(-50):Int32(50))
         ye = array_from_host(xh)
         AK.accumulate!(+, ye; init, inclusive=false,
-                       alg=scan_alg(A; block_size, items_per_thread=1))
+                       alg=scan_alg(; block_size, items_per_thread=1))
         @test Array(ye) == (cumsum(xh) .- xh) .+ init
     end
 end
@@ -179,7 +172,7 @@ function scan_reference(xh, dims; init, inclusive)
 end
 
 
-@testset "accumulate_1d non-commutative $(scan_name(A))" for A in SCAN_ALGS
+@testset "accumulate: non-commutative" begin
     Random.seed!(0)
 
     # Single and multiple blocks, and more blocks than one block can scan (block_size=16), so that
@@ -195,7 +188,7 @@ end
             init = randmat2()
             y = array_from_host(xh)
             AK.accumulate!(matmul2, y; init, neutral, inclusive,
-                           alg=scan_alg(A; max_tasks=4, block_size, items_per_thread))
+                           alg=scan_alg(; max_tasks=4, block_size, items_per_thread))
             @test Array(y) == scan_reference(xh, 1; init, inclusive)
         end
     end
@@ -510,22 +503,20 @@ end
 
     # Inclusive scans without `init` start from the first element; with it, `init` is applied
     # once, also when the scan spans many blocks
-    for A in SCAN_ALGS
-        alg = scan_alg(A; block_size=32, items_per_thread=1, max_tasks=4)
-        @test Array(AK.accumulate(+, x; alg)) == cumsum(xh)
-        @test Array(AK.accumulate(+, x; init=Int32(5), alg)) == accumulate(+, xh; init=Int32(5))
-        # Exclusive scans start from `init`, else from the neutral element
-        @test Array(AK.accumulate(+, x; inclusive=false, alg)) == cumsum(xh) .- xh
-        @test Array(AK.accumulate(+, x; init=Int32(5), inclusive=false, alg)) ==
-              cumsum(xh) .- xh .+ 5
-        # Operators without a known neutral element
-        @test Array(AK.accumulate((a, b) -> a + b, x; alg)) == cumsum(xh)
-        @test Array(AK.accumulate((a, b) -> max(a, b), x; init=Int32(0), alg)) ==
-              accumulate(max, xh; init=Int32(0))
-        @test Array(AK.accumulate((a, b) -> a + b, x; init=Int32(5), inclusive=false, alg)) ==
-              cumsum(xh) .- xh .+ 5
-        @test_throws ArgumentError AK.accumulate((a, b) -> a + b, x; inclusive=false, alg)
-    end
+    alg = scan_alg(; block_size=32, items_per_thread=1, max_tasks=4)
+    @test Array(AK.accumulate(+, x; alg)) == cumsum(xh)
+    @test Array(AK.accumulate(+, x; init=Int32(5), alg)) == accumulate(+, xh; init=Int32(5))
+    # Exclusive scans start from `init`, else from the neutral element
+    @test Array(AK.accumulate(+, x; inclusive=false, alg)) == cumsum(xh) .- xh
+    @test Array(AK.accumulate(+, x; init=Int32(5), inclusive=false, alg)) ==
+          cumsum(xh) .- xh .+ 5
+    # Operators without a known neutral element
+    @test Array(AK.accumulate((a, b) -> a + b, x; alg)) == cumsum(xh)
+    @test Array(AK.accumulate((a, b) -> max(a, b), x; init=Int32(0), alg)) ==
+          accumulate(max, xh; init=Int32(0))
+    @test Array(AK.accumulate((a, b) -> a + b, x; init=Int32(5), inclusive=false, alg)) ==
+          cumsum(xh) .- xh .+ 5
+    @test_throws ArgumentError AK.accumulate((a, b) -> a + b, x; inclusive=false, alg)
 
     # The same along `dims`
     mh = rand(Int32(-9):Int32(9), 70, 300)
