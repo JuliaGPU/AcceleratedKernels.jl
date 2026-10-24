@@ -1100,7 +1100,7 @@ end
     Random.seed!(0)
     alg = REDUCE_ALG
     if TEST_KERNELS
-        segs = AK._mapreduce_segments((512, 1000), (1, 512), (1,))
+        segs = AK.merge_dims((512, 1000), (1, 512), (1,))
         @test AK.reduce_shape(1000, 512, segs, 256, AK.reduce_tuning(BACKEND, Int32),
                               Int32)[1] === :by_lanes
     end
@@ -1159,7 +1159,7 @@ end
         a = array_from_host(h)
         s = sum(Int.(h); dims=2)
         if TEST_KERNELS
-            segs = AK._mapreduce_segments((m, n), (1, m), (2,))
+            segs = AK.merge_dims((m, n), (1, m), (2,))
             @test AK.reduce_shape(m, n, segs, 256, AK.reduce_tuning(BACKEND, Int), Int)[1] ===
                   :columns
         end
@@ -1185,7 +1185,7 @@ end
     # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
     shape_of(x, dims, A) = AK.reduce_shape(
         length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
-        AK._mapreduce_segments(size(x), AK.source_layout(x)[3], dims),
+        AK.merge_dims(size(x), AK.source_layout(x)[3], dims),
         AK.resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
     # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
     # launch enough blocks, and one thread per output where a row of outputs fills the device
@@ -1684,8 +1684,7 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
              ((1, 5000, 2), 2), ((40, 3000, 30), 2))
     for (sz, dims) in cases
         if TEST_KERNELS
-            segs = AK._mapreduce_segments(sz, AK.dense_strides(sz),
-                                          AK.reduced_dims(dims, length(sz)))
+            segs = AK.merge_dims(sz, AK.dense_strides(sz), AK.reduced_dims(dims, length(sz)))
             dst_size = prod(d in dims ? 1 : sz[d] for d in eachindex(sz))
             len = prod(sz) ÷ dst_size
             block_size = AK.resolve_reduce(REDUCE_ALG, BACKEND, RedMat2, dims).block_size

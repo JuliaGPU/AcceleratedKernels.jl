@@ -20,14 +20,6 @@ function reduced_dims(dims, ndim::Int)
     return Tuple(d for d in Base.unique(dims_buf) if d <= ndim)
 end
 
-function _mapreduce_check_map_axes(src::AbstractArray, srcs::AbstractArray...)
-    src_axes = axes(src)
-    for other in srcs
-        axes(other) == src_axes || throw(DimensionMismatch("all input arrays must have the same axes"))
-    end
-    return nothing
-end
-
 include("mapreduce_1d_cpu.jl")
 include("mapreduce_ordered.jl")
 include("mapreduce_1d_gpu.jl")
@@ -169,7 +161,8 @@ fuse_sources(f::F, src, ::Tuple{}) where {F} = (f, one_based(src))
 function fuse_sources(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
-    _mapreduce_check_map_axes(src, srcs...)
+    Base.all(a -> axes(a) == axes(src), srcs) ||
+        throw(DimensionMismatch("all input arrays must have the same axes"))
     bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, one_based(src),
                                                                Base.map(one_based, srcs)...))
     return identity, bc

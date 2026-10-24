@@ -35,13 +35,8 @@ function merge_dims(src_sizes::NTuple{N, Int}, src_strides::NTuple{N, Int},
     return (rstrides, rsizes, nr), (ostrides, osizes, no)
 end
 
-# The reduced and kept dimensions of a strided source, as `(strides, sizes, count)` of their
-# merged segments (see `merge_dims`)
-_mapreduce_segments(src_sizes, src_strides, rdims) =
-    merge_dims(Tuple(src_sizes), Tuple(src_strides), rdims)
-
 # Call `g(reduce_strides, reduce_sizes, outer_strides, outer_sizes)` with the segments of
-# `_mapreduce_segments` as tuples of their lengths, which the kernels specialize on. The common
+# `merge_dims` as tuples of their lengths, which the kernels specialize on. The common
 # layouts (one reduced segment and at most one kept one) take no dynamic dispatch.
 @inline function with_segments(g::G, segs) where {G}
     (rstrides, rsizes, nr), (ostrides, osizes, no) = segs
@@ -65,7 +60,7 @@ function linear_source(src::AbstractArray, rdims)
     layout = strided_layout(src)
     isnothing(layout) && return src
     buffer, base_offset, src_strides = layout
-    (rstrides, _, nr), _ = _mapreduce_segments(size(src), src_strides, rdims)
+    (rstrides, _, nr), _ = merge_dims(size(src), src_strides, rdims)
     nr == 1 && rstrides[1] == 1 || return nothing
     return base_offset == 0 && buffer === src ? src :
            view(buffer, base_offset + 1:base_offset + length(src))

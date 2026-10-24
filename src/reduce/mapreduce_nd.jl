@@ -98,7 +98,7 @@ function mapreduce_nd!(
     layout = strided_layout(src)
     buffer, base_offset, src_strides =
         isnothing(layout) ? linear_layout(src) : layout
-    segs = _mapreduce_segments(src_sizes, src_strides, rdims)
+    segs = merge_dims(src_sizes, src_strides, rdims)
     reduce_size = len
     shape, reduce_groups = reduce_shape(dst_size, reduce_size, segs, block_size, tuning, A)
     commutative || ((shape, reduce_groups) = ordered_shape(shape, reduce_groups, dst_size,
