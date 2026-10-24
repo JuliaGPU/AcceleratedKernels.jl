@@ -24,7 +24,7 @@ it follows per-device tuning values: for sorting, `BitonicSort` for short arrays
 `RadixSort` for long whole arrays of the element types it supports, and `MergeSort` otherwise,
 subject to `Auto`'s requirements (`stable=true` by default); for reductions, `BlockReduce`; for
 scans, `ScanPrefixes` for whole arrays and `SliceScan` along `dims`; for `findall`,
-`ScanScatter`; for `any`/`all`, `ConcurrentWrite` (`ViaReduce` on oneAPI).
+`ScanScatter`; for `any`/`all`, `ConcurrentWrite` (`ViaReduce` on oneAPI and Metal).
 
 Algorithms carry their settings as fields, and a field left at `nothing` takes the device's
 tuned value:

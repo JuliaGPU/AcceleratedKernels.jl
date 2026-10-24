@@ -9,6 +9,8 @@ import AcceleratedKernels as AK
 # tiles than with 32 KiB ones.
 AK.scan_tuning(::MetalBackend, ::Type) = AK.ScanTuning(local_mem_bytes=16 * 1024)
 
+# `ConcurrentWrite` launches a thread per element, which Metal's grid cannot hold for 2^32
+# elements or more (#156)
 AK.predicate_tuning(::MetalBackend, ::Type) = AK.PredicateTuning(prefer_concurrent_write=false)
 
 # Reductions in blocks of 64 threads: on an M1, summing a 512×1000 matrix along either dimension

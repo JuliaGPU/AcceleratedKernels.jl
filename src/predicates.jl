@@ -3,7 +3,9 @@
 
 GPU `any`/`all` in which every thread whose element decides the result stores the same value to
 one global flag. It is the fastest predicate algorithm, but some older Intel GPUs have been reported
-to hang when many threads write one location, so `Auto` picks [`ViaReduce`](@ref) on oneAPI.
+to hang when many threads write one location, and it launches a thread per element, which Metal's
+grid cannot hold for 2^32 elements or more, so `Auto` picks [`ViaReduce`](@ref) on oneAPI and
+Metal.
 """
 Base.@kwdef struct ConcurrentWrite <: PredicateAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -133,7 +135,7 @@ reduction.
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and [`ConcurrentWrite`](@ref) on GPUs
-([`ViaReduce`](@ref) on oneAPI). `backend` is derived from `v`; pass it for inputs that do not
+([`ViaReduce`](@ref) on oneAPI and Metal). `backend` is derived from `v`; pass it for inputs that do not
 determine it, such as index ranges. `workspace` takes
 the scratch memory of a [`workspace`](@ref) made for the same call.
 
