@@ -73,9 +73,7 @@ end
 
 
 # The element of `indices` at the ordinal `position` (1-based, whatever the axes)
-@inline ordinal_index(indices::AbstractUnitRange, position) =
-    first(indices) + position - 1
-@inline ordinal_index(indices::LinearIndices{1}, position) =
+@inline ordinal_index(indices::Union{AbstractUnitRange, LinearIndices{1}}, position) =
     first(indices) + position - 1
 @inline ordinal_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
 
@@ -136,7 +134,10 @@ end
 end
 
 
-function findall_gpu(
+# Stream compaction: the elements of `output_indices`, of type `I`, at the positions where
+# `bools` is `true`. On GPUs, the result is an array like `like` (the searched array, rather than
+# a mask of it in scratch memory), so that it shares properties such as the storage mode.
+function compact(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg::ScanScatter;
     bufs, like,
 ) where I
@@ -166,10 +167,10 @@ function findall_gpu(
 end
 
 
-function findall_cpu(
+function compact(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend,
     alg::CPUThreads.Partitioned;
-    bufs,
+    bufs, like,
 ) where I
     input_indices = eachindex(bools)
     tp = TaskPartitioner(length(bools), alg.max_tasks, alg.min_elems)
@@ -198,20 +199,6 @@ function compact_serial!(out, bools, input_indices, output_indices, positions, p
         end
     end
     out
-end
-
-
-# The result is an array like `like` (the searched array, rather than a mask of it in scratch
-# memory), so that it shares properties such as a GPU array's storage mode
-function findall_impl(
-    bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg; bufs,
-    like=bools,
-) where I
-    if alg isa ScanScatter
-        findall_gpu(bools, I, output_indices, backend, alg; bufs, like)
-    else
-        findall_cpu(bools, I, output_indices, backend, alg; bufs)
-    end
 end
 
 
@@ -317,5 +304,5 @@ function findall_run(pred, v, items, s, bufs)
     else
         v
     end
-    findall_impl(bools, eltype(items), items, backend, a; bufs, like=v)
+    compact(bools, eltype(items), items, backend, a; bufs, like=v)
 end
