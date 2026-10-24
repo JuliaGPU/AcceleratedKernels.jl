@@ -7,7 +7,7 @@ AK.scan_tuning(::ScanResolveTestBackend, ::Type) = SCAN_RESOLVE_TUNING[]
 
 # A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
 struct ScanNoKernelsTestBackend <: KernelAbstractions.Backend end
-AK._runs_kernels(::ScanNoKernelsTestBackend) = false
+AK.runs_kernels(::ScanNoKernelsTestBackend) = false
 
 const SRB = ScanResolveTestBackend()
 

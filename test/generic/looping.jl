@@ -3,7 +3,7 @@
     Random.seed!(0)
 
     # CPU
-    if AK._runs_threads(BACKEND)
+    if AK.runs_threads(BACKEND)
         x = zeros(Int, 1000)
         AK.foreachindex(x) do i
             x[i] = i

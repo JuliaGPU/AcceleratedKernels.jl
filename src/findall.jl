@@ -42,30 +42,30 @@ Resolve `alg` for `findall` over elements of type `T` on `backend`: `ScanScatter
 function _resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
     _checkdomain(alg)
     t = findall_tuning(backend, T)
-    a = alg isa Auto ? (_runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
+    a = alg isa Auto ? (runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
     a = _fill(a, t, T)
     _check_findall(a, backend)
     return a
 end
 
 function _checkdomain(a::ScanScatter)
-    _check_pow2(a, :block_size)
+    check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "ScanScatter: `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+    check_positive(a, :items_per_thread)
     nothing
 end
 
 _fill(a::ScanScatter, t::FindallTuning, T) =
     ScanScatter(something(a.block_size, t.block_size),
                 something(a.items_per_thread, t.items_per_thread))
-_fill(a::CPUThreads.Partitioned, t::FindallTuning, T) = _fill_threads(a, t)
+_fill(a::CPUThreads.Partitioned, t::FindallTuning, T) = fill_threads(a, t)
 _fill(a::Algorithm, t::FindallTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a findall algorithm"))
+    throw(ArgumentError("$(algname(a)) is not a findall algorithm"))
 
 function _check_findall(a::ScanScatter, backend)
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
         "ScanScatter: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
     nothing
@@ -73,7 +73,7 @@ end
 
 function _check_findall(a::CPUThreads.Partitioned, backend)
     _checkdomain(a)
-    _require_threads(a, backend)
+    require_threads(a, backend)
 end
 
 
@@ -148,7 +148,7 @@ function findall_gpu(
     block_size = alg.block_size
     items_per_thread = alg.items_per_thread
 
-    isempty(bools) && return _similar(backend, like, I, (0,))
+    isempty(bools) && return similar_on(backend, like, I, (0,))
 
     elems_per_block = block_size * items_per_thread
     num_blocks = cld(length(bools), elems_per_block)
@@ -162,7 +162,7 @@ function findall_gpu(
     _accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
-    out = _similar(backend, like, I, (n,))
+    out = similar_on(backend, like, I, (n,))
     if n > 0
         kernel!(out, bools, block_counts, input_indices, output_indices, items;
                 ndrange=num_blocks * block_size)
@@ -311,7 +311,7 @@ plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), ba
 function _findall_setup(v, items, predicate::Bool, backend, alg)
     length(items) == length(v) || throw(DimensionMismatch(
         "`items` must have the length of the array, $(length(v)), got $(length(items))"))
-    backend = _resolve_backend(backend, v, items)
+    backend = resolve_backend(backend, v, items)
     a = _resolve_findall(alg, backend, eltype(v))
     n = length(v)
     mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)

@@ -112,7 +112,7 @@ function searchsortedfirst!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = _resolve_backend(backend, ix, v, xs)
+    backend = resolve_backend(backend, ix, v, xs)
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
     ord = Base.Order.ord(lt, by, rev, order)
@@ -151,7 +151,7 @@ function searchsortedlast!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = _resolve_backend(backend, ix, v, xs)
+    backend = resolve_backend(backend, ix, v, xs)
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
     ord = Base.Order.ord(lt, by, rev, order)

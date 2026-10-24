@@ -8,7 +8,7 @@ AK.reduce_tuning(::ReduceResolveTestBackend, ::Type) = REDUCE_RESOLVE_TUNING[]
 
 # A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
 struct ReduceNoKernelsTestBackend <: KernelAbstractions.Backend end
-AK._runs_kernels(::ReduceNoKernelsTestBackend) = false
+AK.runs_kernels(::ReduceNoKernelsTestBackend) = false
 
 const RRB = ReduceResolveTestBackend()
 
@@ -103,7 +103,7 @@ end
     # Capabilities: the threaded algorithm only on the host, kernels only where they run
     @test_throws ArgumentError resolve_reduce(AK.CPUThreads.Partitioned())
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=ReduceNoKernelsTestBackend())
-    if AK._runs_kernels(host)
+    if AK.runs_kernels(host)
         @test resolve_reduce(AK.BlockReduce(); backend=host) === AK.BlockReduce(256, 16, 0)
     else
         @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); backend=host)

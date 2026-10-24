@@ -117,15 +117,15 @@ function _resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
 end
 
 function _select_scan(backend, dims)
-    _runs_threads(backend) && return CPUThreads.Partitioned()
+    runs_threads(backend) && return CPUThreads.Partitioned()
     return dims === nothing ? ScanPrefixes() : SliceScan()
 end
 
 function _checkdomain(a::Union{ScanPrefixes, SliceScan})
-    _check_pow2(a, :block_size)
+    check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "$(_algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+        "$(algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
+    check_positive(a, :items_per_thread)
     nothing
 end
 
@@ -144,19 +144,19 @@ function _fill(a::A, t::ScanTuning,
                                                        a.items_per_thread
     return A(block_size, items_per_thread)
 end
-_fill(a::CPUThreads.Partitioned, t::ScanTuning, T) = _fill_threads(a, t)
+_fill(a::CPUThreads.Partitioned, t::ScanTuning, T) = fill_threads(a, t)
 _fill(a::Algorithm, t::ScanTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a scan algorithm"))
+    throw(ArgumentError("$(algname(a)) is not a scan algorithm"))
 
 function _check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     _check_scan_eltype(a, T)
     dims === nothing || throw(ArgumentError(
-        "$(_algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
+        "$(algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
     # Keep the kernels' index arithmetic far from overflow
     widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "$(_algname(a)): `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+        "$(algname(a)): `block_size * items_per_thread` must be at most $(typemax(Int32))"))
     # ScanPrefixes scans its tiles' totals in tiles too, which a tile of one element never shrinks
     a.block_size * a.items_per_thread < 2 && throw(ArgumentError(
         "ScanPrefixes: `block_size * items_per_thread` must be at least 2"))
@@ -165,7 +165,7 @@ end
 
 function _check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     _check_scan_eltype(a, T)
     dims === nothing && throw(ArgumentError(
         "SliceScan scans along `dims`; scan whole arrays with `ScanPrefixes` or `Auto()`"))
@@ -176,7 +176,7 @@ end
 
 function _check_scan(a::CPUThreads.Partitioned, backend, T, dims)
     _checkdomain(a)
-    _require_threads(a, backend)
+    require_threads(a, backend)
     # Each task's part must hold two elements for the exclusive scan's carries
     a.min_elems >= 2 || throw(ArgumentError(
         "CPUThreads.Partitioned: scans need `min_elems` of at least 2, got $(a.min_elems)"))
@@ -184,4 +184,4 @@ function _check_scan(a::CPUThreads.Partitioned, backend, T, dims)
 end
 
 _check_scan_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
-    "$(_algname(a)): the element type $T is not a bits type, which the kernels need"))
+    "$(algname(a)): the element type $T is not a bits type, which the kernels need"))

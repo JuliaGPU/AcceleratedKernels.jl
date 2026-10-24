@@ -138,7 +138,7 @@ end
 
 end
 
-if AK._runs_threads(BACKEND)
+if AK.runs_threads(BACKEND)
 @testset "sample_sort" begin
     Random.seed!(0)
 
@@ -280,7 +280,7 @@ end
         @test_throws ArgumentError AK.sort!(copy(v); alg=AK.MergeSort(lowmem=true))
     end
 
-    if AK._runs_threads(BACKEND)
+    if AK.runs_threads(BACKEND)
         v_h = rand(Int32, 10_000)
         v_default = array_from_host(v_h)
         v_sample = array_from_host(v_h)
@@ -299,7 +299,7 @@ end
     end
 
     # AK's kernels need a backend that runs them (on the host, KernelAbstractions 0.10)
-    if !AK._runs_kernels(BACKEND)
+    if !AK.runs_kernels(BACKEND)
         for alg in (AK.MergeSort(), AK.RadixSort(), AK.BitonicSort())
             @test_throws ArgumentError AK.sort!(array_from_host(rand(Int32, 16)); alg)
         end
@@ -365,7 +365,7 @@ end
     AK.sort_by_key!(k, v; alg=SORT_ALG)
     @test Array(k) == sort(kh)
     @test Array(v) == sortperm(kh)
-    if AK._runs_threads(BACKEND)
+    if AK.runs_threads(BACKEND)
         k = array_from_host(kh)
         v = array_from_host(Int32.(1:50_000))
         AK.sort_by_key!(k, v; alg=AK.CPUThreads.SampleSort(max_tasks=4))
@@ -465,7 +465,7 @@ end
 end
 
 
-if AK._runs_threads(BACKEND)
+if AK.runs_threads(BACKEND)
 @testset "sample_sortperm" begin
     Random.seed!(0)
 

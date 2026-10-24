@@ -131,7 +131,7 @@ end
 
 function _select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                       perm, pairs) where {T}
-    _runs_threads(backend) && return CPUThreads.SampleSort()
+    runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
     if (!a.stable || _ties_invisible(T, ord)) && layout.len <= t.bitonic_max_len
         return BitonicSort()
@@ -157,25 +157,25 @@ _rs_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.Reverse
 
 # Domain checks of explicitly set fields, before any arithmetic uses them
 
-_checkdomain(a::MergeSort) = _check_positive(a, :block_size)
+_checkdomain(a::MergeSort) = check_positive(a, :block_size)
 
 function _checkdomain(a::RadixSort)
     # Bounded, so that the local-memory footprints computed from them cannot overflow
-    _check_pow2(a, :block_size)
-    _check_positive(a, :items_per_thread)
+    check_pow2(a, :block_size)
+    check_positive(a, :items_per_thread)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "RadixSort: `block_size` must be at most 1024, got $(a.block_size)"))
     a.items_per_thread === nothing || a.items_per_thread <= 64 || throw(ArgumentError(
         "RadixSort: `items_per_thread` must be at most 64, got $(a.items_per_thread)"))
-    _check_pow2(a, :chunk_size)
+    check_pow2(a, :chunk_size)
     a.chunk_size === nothing || a.chunk_size <= 1024 || throw(ArgumentError(
         "RadixSort: `chunk_size` must be at most 1024, got $(a.chunk_size)"))
     nothing
 end
 
 function _checkdomain(a::BitonicSort)
-    _check_pow2(a, :block_size)
-    _check_pow2(a, :items_per_thread)
+    check_pow2(a, :block_size)
+    check_pow2(a, :items_per_thread)
     if a.block_size !== nothing && a.items_per_thread !== nothing
         a.block_size <= typemax(Int) ÷ a.items_per_thread || throw(ArgumentError(
             "BitonicSort: `block_size * items_per_thread` overflows " *
@@ -184,7 +184,7 @@ function _checkdomain(a::BitonicSort)
     nothing
 end
 
-_checkdomain(a::CPUThreads.SampleSort) = _check_threads(a)
+_checkdomain(a::CPUThreads.SampleSort) = check_threads(a)
 
 
 # Fill unset fields from the tuning
@@ -198,16 +198,16 @@ _fill(a::RadixSort, t::SortTuning, T) =
 _fill(a::BitonicSort, t::SortTuning, T) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
-_fill(a::CPUThreads.SampleSort, t::SortTuning, T) = _fill_threads(a, t)
+_fill(a::CPUThreads.SampleSort, t::SortTuning, T) = fill_threads(a, t)
 _fill(a::Algorithm, t::SortTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a sorting algorithm"))
+    throw(ArgumentError("$(algname(a)) is not a sorting algorithm"))
 
 
 # Check a complete algorithm against the backend, the operation and the arguments
 
 function _check(a::MergeSort, backend, T, layout, ord; perm, pairs)
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     !a.lowmem || (perm && !pairs) || throw(ArgumentError(
         "MergeSort(lowmem=true) is only supported by sortperm!, not by $(_sort_opname(perm, pairs))"))
     nothing
@@ -215,7 +215,7 @@ end
 
 function _check(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) where {T}
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "RadixSort does not support $(_sort_opname(perm, pairs))"))
     _rs_supported(T) || throw(ArgumentError(
@@ -233,7 +233,7 @@ end
 
 function _check(a::BitonicSort, backend, T, layout, ord; perm, pairs)
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "BitonicSort is unstable and does not support $(_sort_opname(perm, pairs))"))
     nothing
@@ -241,5 +241,5 @@ end
 
 function _check(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
     _checkdomain(a)
-    _require_threads(a, backend)
+    require_threads(a, backend)
 end

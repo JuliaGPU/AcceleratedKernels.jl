@@ -78,7 +78,7 @@ function _sort_setup(
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
 )
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     v = _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord)
@@ -137,10 +137,10 @@ Out-of-place [`sort!`](@ref): sort a copy of `v`, with the same keywords.
 """
 function sort(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, workspace=nothing,
               kwargs...)
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     # The workspace must not alias the input either
     workspace === nothing || scratch_buffers(plan(sort!, v; backend, kwargs...), workspace, v)
-    return sort!(_copy(backend, v); backend, workspace, kwargs...)
+    return sort!(copy_on(backend, v); backend, workspace, kwargs...)
 end
 
 plan(::typeof(sort), v::AbstractArray; kwargs...) = plan(sort!, v; kwargs...)
@@ -226,7 +226,7 @@ function _sortperm_setup(
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
 )
-    backend = _resolve_backend(backend, ix, v)
+    backend = resolve_backend(backend, ix, v)
     ix, v = _one_based(ix), _one_based(v)
     ord = Base.Order.ord(lt, by, rev, order)
     a = _resolve_sort(alg, backend, v, dims, ord; perm=true)
@@ -275,9 +275,9 @@ Out-of-place [`sortperm!`](@ref): return an `Int` array of `v`'s size, with axes
 holding the permutation, with the same keywords.
 """
 function sortperm(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     # (the result's axes start at 1, also where `v`'s do not)
-    return _sortperm!(_similar(backend, v, Int), v; backend, kwargs...)
+    return _sortperm!(similar_on(backend, v, Int), v; backend, kwargs...)
 end
 
 # `ix` is only needed for its element type and shape, which `v` gives here
@@ -291,7 +291,7 @@ end
 _IndexShape(v::AbstractArray{T, N}) where {T, N} = _IndexShape{N, typeof(v)}(v)
 Base.size(ix::_IndexShape) = size(ix.v)
 Base.axes(ix::_IndexShape) = axes(ix.v)
-_backend_vote(::_IndexShape) = nothing
+backend_vote(::_IndexShape) = nothing
 
 
 """
@@ -352,7 +352,7 @@ function _sort_by_key_setup(
     lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
 )
-    backend = _resolve_backend(backend, keys, values)
+    backend = resolve_backend(backend, keys, values)
     ord = Base.Order.ord(lt, by, rev, order)
     if dims isa Colon
         length(keys) == length(values) || throw(ArgumentError(

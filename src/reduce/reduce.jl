@@ -175,7 +175,7 @@ _mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
 # plan), accumulator type and partial-result seed, and for reductions along `dims` the result
 function _mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
                           alg) where {F, OP}
-    backend = _resolve_backend(backend, src)
+    backend = resolve_backend(backend, src)
     M = _mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
     A = _acctype(op, init isa _NoInit ? Union{} : typeof(init), M, acctype)
@@ -330,7 +330,7 @@ plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSour
 
 function _mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwrite, acctype,
                              alg) where {F, OP}
-    backend = _resolve_backend(backend, R, src)
+    backend = resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
         sR, sA = size(R, d), _srcsize(src, d)

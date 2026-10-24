@@ -87,7 +87,7 @@ AK.accumulate!(+, v; alg=AK.ScanPrefixes(block_size=512))
 """
 function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                      workspace=nothing, kwargs...)
-    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
+    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
                           kwargs...)
     w = _one_based(v)
     _accumulate_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
@@ -102,20 +102,20 @@ function accumulate!(
 )
     _check_scan_destination(dst, src)
     s = _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
-                          _resolve_backend(backend, dst, src); kwargs...)
+                          resolve_backend(backend, dst, src); kwargs...)
     _accumulate_run!(op, _one_based(dst), _one_based(src), s,
                      scratch_buffers(s.plan, workspace, dst, src))
     return dst
 end
 
 plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
-    _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
+    _accumulate_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
                       kwargs...).plan
 function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
                backend=nothing, kwargs...)
     _check_scan_destination(dst, src)
     _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
-                      _resolve_backend(backend, dst, src); kwargs...).plan
+                      resolve_backend(backend, dst, src); kwargs...).plan
 end
 
 function _check_scan_destination(dst, src)
@@ -303,17 +303,17 @@ given) and the elements, e.g. an `Int` array for `accumulate(+, Int8[1, 2]; init
 function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                     init=_NoInit(), dims=nothing, inclusive::Bool=true, acctype=nothing,
                     kwargs...)
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
     # (the result's axes start at 1, which `accumulate!` then requires of the source too)
-    accumulate!(op, _similar(backend, v, D), _one_based(v); backend, init, dims, inclusive,
+    accumulate!(op, similar_on(backend, v, D), _one_based(v); backend, init, dims, inclusive,
                 acctype, kwargs...)
 end
 
 function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),
                dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
-    _accumulate_setup(op, D, eltype(v), size(v), _resolve_backend(backend, v); init, dims,
+    _accumulate_setup(op, D, eltype(v), size(v), resolve_backend(backend, v); init, dims,
                       inclusive, acctype, kwargs...).plan
 end
 

@@ -63,12 +63,12 @@ function _resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {
 end
 
 function _select_predicate(backend, t::PredicateTuning)
-    _runs_threads(backend) && return CPUThreads.Partitioned()
+    runs_threads(backend) && return CPUThreads.Partitioned()
     return t.prefer_concurrent_write ? ConcurrentWrite() : ViaReduce()
 end
 
 function _checkdomain(a::ConcurrentWrite)
-    _check_pow2(a, :block_size)
+    check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "ConcurrentWrite: `block_size` must be at most 1024, got $(a.block_size)"))
     nothing
@@ -79,18 +79,18 @@ _fill(a::ConcurrentWrite, t::PredicateTuning, backend) =
 # The nested reduction reduces `Bool`s along the whole array
 _fill(a::ViaReduce, t::PredicateTuning, backend) =
     ViaReduce(_resolve_reduce(a.reduce, backend, Bool, :))
-_fill(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = _fill_threads(a, t)
+_fill(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = fill_threads(a, t)
 _fill(a::Algorithm, t::PredicateTuning, backend) =
-    throw(ArgumentError("$(_algname(a)) is not an algorithm for `any` and `all`"))
+    throw(ArgumentError("$(algname(a)) is not an algorithm for `any` and `all`"))
 
 function _check_predicate(a::ConcurrentWrite, backend)
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
 end
 _check_predicate(a::ViaReduce, backend) = nothing       # its reduction was resolved by `_fill`
 function _check_predicate(a::CPUThreads.Partitioned, backend)
     _checkdomain(a)
-    _require_threads(a, backend)
+    require_threads(a, backend)
 end
 
 
@@ -189,7 +189,7 @@ end
 # or the scratch of the reduction
 function _predicate_plan(pred, op, v, backend, alg)
     _check_bool_result(pred, v)
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     a = _resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
         (; flag=scratch(Int8, 1))

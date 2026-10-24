@@ -43,7 +43,7 @@ function map!(
     min_elems::Int=1,
 )
     srcs = (src, srcs...)
-    backend = _resolve_backend(backend, dst, srcs...)
+    backend = resolve_backend(backend, dst, srcs...)
     for s in srcs
         length(s) == length(dst) || throw(ArgumentError(
             "destination and sources must have the same length, $(length(dst)) != $(length(s))"))
@@ -77,6 +77,6 @@ and `eltype` of `src` (if `f` changes the `eltype`, allocate `dst` separately an
 """
 function map(f, src::AbstractArray, srcs::AbstractArray...;
              backend::Union{Nothing, Backend}=nothing, kwargs...)
-    backend = _resolve_backend(backend, src, srcs...)
-    return map!(f, _similar(backend, src), src, srcs...; backend, kwargs...)
+    backend = resolve_backend(backend, src, srcs...)
+    return map!(f, similar_on(backend, src), src, srcs...; backend, kwargs...)
 end

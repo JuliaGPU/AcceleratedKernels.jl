@@ -42,7 +42,7 @@ struct Workspace{B <: Backend, A, N <: NamedTuple, S <: NamedTuple, T <: NamedTu
 end
 
 function Base.show(io::IO, ws::Workspace)
-    print(io, "Workspace(", _backend_name(ws.backend), ", ", _algname(ws.alg), ", ",
+    print(io, "Workspace(", backend_name(ws.backend), ", ", algname(ws.alg), ", ",
           Base.format_bytes(nbytes(ws.sizes)), ")")
 end
 

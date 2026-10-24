@@ -15,7 +15,7 @@ KernelAbstractions.get_backend(::ResolveTestArray) = ResolveTestBackend()
 
 # A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
 struct NoKernelsTestBackend <: KernelAbstractions.Backend end
-AK._runs_kernels(::NoKernelsTestBackend) = false
+AK.runs_kernels(::NoKernelsTestBackend) = false
 
 # An algorithm that is not a sorting algorithm
 struct NotASortTestAlgorithm <: AK.Algorithm end
@@ -210,7 +210,7 @@ end
     # Kernel algorithms need a backend that runs AK's kernels
     for alg in (AK.MergeSort(), AK.RadixSort(), AK.BitonicSort())
         @test rejects(alg; backend=NoKernelsTestBackend())
-        @test rejects(alg; backend=host) == !AK._runs_kernels(host)
+        @test rejects(alg; backend=host) == !AK.runs_kernels(host)
     end
 
     # Domain checks run before anything else, whatever the input length
@@ -252,7 +252,7 @@ end
             @test resolve(AK.Auto(; stable), v; backend=BACKEND) isa AK.SortAlgorithm
             @test resolve(AK.Auto(; stable), v; backend=BACKEND, perm=true) isa AK.SortAlgorithm
         end
-        if AK._runs_kernels(BACKEND)
+        if AK.runs_kernels(BACKEND)
             for alg in (AK.MergeSort(), AK.BitonicSort(), AK.RadixSort())
                 alg isa AK.RadixSort && !AK._rs_supported(T) && continue
                 @test resolve(alg, zeros(T, 16); backend=BACKEND) isa typeof(alg)
@@ -268,45 +268,45 @@ end
     host = AK.HOST_BACKEND
 
     # Every array votes, destination first; backend-free leaves do not
-    @test AK._resolve_backend(nothing, d) === RB
-    @test AK._resolve_backend(nothing, d, 1:4, CartesianIndices((2, 2)), LinearIndices(h),
+    @test AK.resolve_backend(nothing, d) === RB
+    @test AK.resolve_backend(nothing, d, 1:4, CartesianIndices((2, 2)), LinearIndices(h),
                               1.0, Ref(2), (3, 1:2), nothing) === RB
-    @test AK._resolve_backend(nothing, 1:4, d) === RB
-    @test AK._resolve_backend(nothing, h, 1:4) == host
+    @test AK.resolve_backend(nothing, 1:4, d) === RB
+    @test AK.resolve_backend(nothing, h, 1:4) == host
     # ... nor do Base's views, reshapes and permutations of them, while those of arrays vote
-    @test AK._resolve_backend(nothing, d, reshape(1:6, 2, 3), view(1:10, 2:4),
+    @test AK.resolve_backend(nothing, d, reshape(1:6, 2, 3), view(1:10, 2:4),
                               PermutedDimsArray(reshape(1:6, 2, 3), (2, 1))) === RB
-    @test AK._resolve_backend(nothing, view(d, 1:2)) === RB
-    @test AK._resolve_backend(nothing, reshape(1:6, 2, 3)) == host
+    @test AK.resolve_backend(nothing, view(d, 1:2)) === RB
+    @test AK.resolve_backend(nothing, reshape(1:6, 2, 3)) == host
 
     # All votes must agree, including the non-destination inputs
-    @test_throws ArgumentError AK._resolve_backend(nothing, d, h)
-    @test_throws ArgumentError AK._resolve_backend(nothing, h, d)
-    @test_throws ArgumentError AK._resolve_backend(nothing, h, (1, d))
+    @test_throws ArgumentError AK.resolve_backend(nothing, d, h)
+    @test_throws ArgumentError AK.resolve_backend(nothing, h, d)
+    @test_throws ArgumentError AK.resolve_backend(nothing, h, (1, d))
     # ... unless the backend is explicit
-    @test AK._resolve_backend(RB, h) === RB
-    @test AK._resolve_backend(host, d, h) == host
+    @test AK.resolve_backend(RB, h) === RB
+    @test AK.resolve_backend(host, d, h) == host
 
     # Broadcasted trees are walked
     bc = Base.Broadcast.broadcasted(+, d, Base.Broadcast.broadcasted(*, 2, 1:4))
-    @test AK._resolve_backend(nothing, bc) === RB
-    @test_throws ArgumentError AK._resolve_backend(nothing, h, bc)
+    @test AK.resolve_backend(nothing, bc) === RB
+    @test_throws ArgumentError AK.resolve_backend(nothing, h, bc)
     # ... including the arrays of a preprocessed one
     pbc = Base.Broadcast.preprocess(nothing,
         Base.Broadcast.instantiate(Base.Broadcast.broadcasted(identity, d)))
-    @test AK._resolve_backend(nothing, pbc) === RB
-    @test_throws ArgumentError AK._resolve_backend(nothing, h, pbc)
+    @test AK.resolve_backend(nothing, pbc) === RB
+    @test_throws ArgumentError AK.resolve_backend(nothing, h, pbc)
 
     # Nothing votes: the host backend
-    @test AK._resolve_backend(nothing) == host
-    @test AK._resolve_backend(nothing, 1:10, 2.0) == host
+    @test AK.resolve_backend(nothing) == host
+    @test AK.resolve_backend(nothing, 1:10, 2.0) == host
 
     # Array types without `get_backend` keep raising KernelAbstractions' error
-    @test_throws ArgumentError AK._resolve_backend(nothing, NoBackendTestArray())
-    @test AK._resolve_backend(RB, NoBackendTestArray()) === RB
+    @test_throws ArgumentError AK.resolve_backend(nothing, NoBackendTestArray())
+    @test AK.resolve_backend(RB, NoBackendTestArray()) === RB
     # ... and allocating operations, given the backend, do not ask for it either
     @test AK.sortperm(NoBackendTestArray(); backend=host) == [1, 2, 3]
-    @test AK._backend_free(reshape(1:6, 2, 3)) && !AK._backend_free(NoBackendTestArray())
+    @test AK.backendless(reshape(1:6, 2, 3)) && !AK.backendless(NoBackendTestArray())
 
     # The sorting entry points resolve from all their arrays, and accept only backends
     @test_throws MethodError AK.sort!(d; temp=h)      # no scratch keywords: see `workspace`

@@ -111,13 +111,13 @@ function _resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) wher
     return a
 end
 
-_select_reduce(backend) = _runs_threads(backend) ? CPUThreads.Partitioned() : BlockReduce()
+_select_reduce(backend) = runs_threads(backend) ? CPUThreads.Partitioned() : BlockReduce()
 
 function _checkdomain(a::BlockReduce)
-    _check_pow2(a, :block_size)
+    check_pow2(a, :block_size)
     a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
         "BlockReduce: `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+    check_positive(a, :items_per_thread)
     a.switch_below === nothing || a.switch_below >= 0 || throw(ArgumentError(
         "BlockReduce: `switch_below` must be non-negative, got $(a.switch_below)"))
     nothing
@@ -127,13 +127,13 @@ _fill(a::BlockReduce, t::ReduceTuning, T) =
     BlockReduce(something(a.block_size, t.block_size),
                 something(a.items_per_thread, t.items_per_thread, _reduce_items_per_thread(T)),
                 something(a.switch_below, t.switch_below))
-_fill(a::CPUThreads.Partitioned, t::ReduceTuning, T) = _fill_threads(a, t)
+_fill(a::CPUThreads.Partitioned, t::ReduceTuning, T) = fill_threads(a, t)
 _fill(a::Algorithm, t::ReduceTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a reduction algorithm"))
+    throw(ArgumentError("$(algname(a)) is not a reduction algorithm"))
 
 function _check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
     _checkdomain(a)
-    _require_kernels(a, backend)
+    require_kernels(a, backend)
     # `Union{}`: no accumulator type, which only an empty reduction gets past
     T === Union{} || isbitstype(T) || throw(ArgumentError(
         "BlockReduce: the accumulator type $T is not a bits type; pass an `init` of the type " *
@@ -152,5 +152,5 @@ end
 
 function _check_reduce(a::CPUThreads.Partitioned, backend, T, dims)
     _checkdomain(a)
-    _require_threads(a, backend)
+    require_threads(a, backend)
 end

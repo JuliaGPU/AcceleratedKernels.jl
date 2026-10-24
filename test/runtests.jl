@@ -148,7 +148,7 @@ end
 # cpu-ka only when --cpu-ka flag passed: AK's kernels on the host backend, which runs them on
 # KernelAbstractions 0.10 (on PoCL) but not on 0.9
 if args.custom["cpu-ka"] !== nothing
-    AK._runs_kernels(AK.HOST_BACKEND) ||
+    AK.runs_kernels(AK.HOST_BACKEND) ||
         error("--cpu-ka needs KernelAbstractions 0.10, whose host backend runs AK's kernels")
     push!(backends, "cpu-ka" => quote
         global BACKEND = get_backend([])

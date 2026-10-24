@@ -55,7 +55,7 @@ end
 function _foreachindex(f, indices, backend::Backend;
                        block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
     _check_launch(; block_size, max_tasks, min_elems)
-    if _runs_threads(backend)
+    if runs_threads(backend)
         _forindices_threads(f, indices; max_tasks, min_elems)
     else
         _forindices_gpu(f, indices, backend; block_size)
@@ -161,7 +161,7 @@ function foreachindex(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, itr)
+    backend = resolve_backend(backend, itr)
     _foreachindex(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
 end
 
@@ -219,7 +219,7 @@ function foraxes(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, itr)
+    backend = resolve_backend(backend, itr)
     indices = isnothing(dims) ? eachindex(itr) : axes(itr, dims)
     _foreachindex(f, indices, backend; block_size, max_tasks, min_elems)
 end

@@ -64,7 +64,7 @@ Capabilities are correctness facts about a backend, checked for `Auto` and expli
 alike; tunings cannot change them.
 
 ```@docs
-AcceleratedKernels._runs_threads
-AcceleratedKernels._runs_kernels
-AcceleratedKernels._resolve_backend
+AcceleratedKernels.runs_threads
+AcceleratedKernels.runs_kernels
+AcceleratedKernels.resolve_backend
 ```

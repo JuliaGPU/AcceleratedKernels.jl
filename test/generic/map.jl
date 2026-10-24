@@ -21,7 +21,7 @@
     end
     @test Array(y) == map(i -> i > 0.5 ? i : 0, Array(x))
 
-    if AK._runs_threads(BACKEND) # host arrays
+    if AK.runs_threads(BACKEND) # host arrays
         x = rand(Float32, 1000)
         y = AK.map(x; max_tasks=4, min_elems=500) do i
             i > 0.5 ? i : 0

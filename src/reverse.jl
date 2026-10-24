@@ -105,7 +105,7 @@ function reverse!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, v)
+    backend = resolve_backend(backend, v)
     launch = (; block_size, max_tasks, min_elems)
     _check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(v, dims)
@@ -160,7 +160,7 @@ function reverse!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, dst, src)
+    backend = resolve_backend(backend, dst, src)
     launch = (; block_size, max_tasks, min_elems)
     _check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(src, dims)
@@ -197,6 +197,6 @@ keywords are those of [`reverse!`](@ref).
 Prefer [`reverse!`](@ref) when you do not need to keep `v`; it avoids the allocation.
 """
 function reverse(v::AbstractArray; backend::Union{Nothing, Backend}=nothing, kwargs...)
-    backend = _resolve_backend(backend, v)
-    return reverse!(_similar(backend, v), v; backend, kwargs...)
+    backend = resolve_backend(backend, v)
+    return reverse!(similar_on(backend, v), v; backend, kwargs...)
 end
