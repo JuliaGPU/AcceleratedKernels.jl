@@ -3,10 +3,6 @@ struct FindallCallable end
 
 struct OtherFindallAlgorithm <: AK.FindallAlgorithm end
 
-FINDALL_ALG = default_alg(AK.ScanScatter())
-findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, min_elems=nothing) =
-    TEST_KERNELS ? AK.ScanScatter(; block_size, items_per_thread) :
-                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 
 
 @testset "findall" begin

@@ -1,8 +1,3 @@
-# `SETTINGS_ALG` is an explicitly set algorithm of the configuration
-SORT_ALG = default_alg(AK.MergeSort())
-SETTINGS_ALG = TEST_KERNELS ? AK.MergeSort(block_size=64) :
-                              AK.CPUThreads.SampleSort(max_tasks=64, min_elems=8)
-
 # The sorting algorithms of the configuration, with the element types and the number of random
 # inputs each sorts. `Auto()` picks among them by the device's tuning, and on the host always the
 # sample sort.
@@ -28,20 +23,21 @@ end
 
 @testset "sort: settings" begin
     Random.seed!(0)
+    alg = sort_alg(block_size=64, max_tasks=64, min_elems=8)
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    with_workspace(AK.sort!, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
+    with_workspace(AK.sort!, v; alg, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    with_workspace(AK.sort!, v; alg=SETTINGS_ALG, lt=(>), rev=true)
+    with_workspace(AK.sort!, v; alg, lt=(>), rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Float32)
-    v = with_workspace(AK.sort, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
+    v = with_workspace(AK.sort, v; alg, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 
     v = array_from_host(rand(1:100_000, 10_000), Int32)
-    v = with_workspace(AK.sort, v; alg=SETTINGS_ALG, lt=(>), by=abs, rev=true)
+    v = with_workspace(AK.sort, v; alg, lt=(>), by=abs, rev=true)
     @test issorted(Array(v))
 end
 
@@ -175,15 +171,16 @@ end
     end
 
     # Testing different settings
+    alg = sort_alg(block_size=64, max_tasks=64, min_elems=8)
     k = array_from_host(1:10_000, Float32)
     v = array_from_host(1:10_000, Int32)
-    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg=SETTINGS_ALG)
+    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg)
     @test issorted(Array(k))
     @test issorted(Array(v))
 
     k = array_from_host(1:10_000, Int32)
     v = array_from_host(1:10_000, Float32)
-    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg=SETTINGS_ALG)
+    with_workspace(AK.sort_by_key!, k, v; lt=(>), by=abs, rev=true, alg)
     @test issorted(Array(k))
     @test issorted(Array(v))
 
@@ -262,7 +259,8 @@ end
 
 @testset "sortperm: settings" begin
     Random.seed!(0)
-    algs = TEST_KERNELS ? [SETTINGS_ALG, AK.MergeSort(lowmem=true, block_size=64)] : [SETTINGS_ALG]
+    algs = TEST_KERNELS ? [sort_alg(block_size=64), AK.MergeSort(lowmem=true, block_size=64)] :
+                         [sort_alg(max_tasks=64, min_elems=8)]
     for alg in algs
         ix = array_from_host(1:10_000, Int32)
         v = array_from_host(1:10_000, Float32)

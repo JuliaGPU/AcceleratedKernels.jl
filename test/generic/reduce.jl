@@ -1,16 +1,3 @@
-REDUCE_ALG = default_alg(AK.BlockReduce())
-reduce_alg(; block_size=nothing, items_per_thread=nothing, switch_below=nothing,
-           max_tasks=nothing, min_elems=nothing) =
-    TEST_KERNELS ? AK.BlockReduce(; block_size, items_per_thread, switch_below) :
-                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
-
-struct Point
-    x::Float32
-    y::Float32
-end
-# Only for backend-agnostic initialisation with KernelAbstractions.zero
-Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
-
 @testset "reduce: whole arrays" begin
     Random.seed!(0)
 

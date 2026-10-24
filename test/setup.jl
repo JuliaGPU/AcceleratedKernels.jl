@@ -16,11 +16,36 @@ end
 with_workspace(op, args...; kwargs...) =
     op(args...; kwargs..., workspace=AK.workspace(op, args...; kwargs...))
 
-# The algorithm of tests that do not choose one: `Auto()`, except where `HOST_KERNELS`, whose point
-# is to run AK's kernels on the host backend, on which `Auto()` picks the threaded algorithms.
-# Each test file also has a function that builds an algorithm of the configuration from the
-# settings of both kinds (`reduce_alg`, ...).
+# The algorithms of tests that do not choose one: `Auto()`, except where `HOST_KERNELS`, whose
+# point is to run AK's kernels on the host backend, on which `Auto()` picks the threaded algorithms
 default_alg(kernel_alg) = HOST_KERNELS ? kernel_alg : AK.Auto()
+const SORT_ALG = default_alg(AK.MergeSort())
+const REDUCE_ALG = default_alg(AK.BlockReduce())
+const FINDALL_ALG = default_alg(AK.ScanScatter())
+
+# Algorithms of the configuration with settings of both kinds, which each ignores the other's;
+# the scans' without settings are the default ones
+sort_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing) =
+    TEST_KERNELS ? AK.MergeSort(; block_size) : AK.CPUThreads.SampleSort(; max_tasks, min_elems)
+reduce_alg(; block_size=nothing, items_per_thread=nothing, switch_below=nothing,
+           max_tasks=nothing, min_elems=nothing) =
+    TEST_KERNELS ? AK.BlockReduce(; block_size, items_per_thread, switch_below) :
+                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
+function scan_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing,
+                  min_elems=nothing)
+    Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
+        return default_alg(AK.ScanPrefixes())
+    TEST_KERNELS ? AK.ScanPrefixes(; block_size, items_per_thread) :
+                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
+end
+function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
+    Base.all(isnothing, (block_size, max_tasks, min_elems)) &&
+        return default_alg(AK.SliceScan())
+    TEST_KERNELS ? AK.SliceScan(; block_size) : AK.CPUThreads.Partitioned(; max_tasks, min_elems)
+end
+findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, min_elems=nothing) =
+    TEST_KERNELS ? AK.ScanScatter(; block_size, items_per_thread) :
+                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
 
 # The element types the backend supports
 valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
@@ -49,6 +74,13 @@ Adapt.adapt_structure(to, x::OffsetAxes) = OffsetAxes(adapt(to, x.parent), x.off
 KernelAbstractions.get_backend(x::OffsetAxes) = get_backend(x.parent)
 
 offset_from_host(h_arr::AbstractArray, offsets) = OffsetAxes(array_from_host(h_arr), offsets)
+
+# A point, whose coordinates the reductions map to a tuple; `zero` for `KernelAbstractions.zeros`
+struct Point
+    x::Float32
+    y::Float32
+end
+Base.zero(::Type{Point}) = Point(0.0f0, 0.0f0)
 
 # A lazy array, without a dense buffer: its elements are computed from two arrays
 struct LazyProduct{T, N, A <: AbstractArray{T, N}} <: AbstractArray{T, N}

@@ -1,19 +1,3 @@
-# Whole-array and `dims` algorithms of the configuration; without settings, the default ones
-function scan_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing,
-                  min_elems=nothing)
-    Base.all(isnothing, (block_size, items_per_thread, max_tasks, min_elems)) &&
-        return default_alg(AK.ScanPrefixes())
-    TEST_KERNELS ? AK.ScanPrefixes(; block_size, items_per_thread) :
-                   AK.CPUThreads.Partitioned(; max_tasks, min_elems)
-end
-
-function slice_alg(; block_size=nothing, max_tasks=nothing, min_elems=nothing)
-    Base.all(isnothing, (block_size, max_tasks, min_elems)) &&
-        return default_alg(AK.SliceScan())
-    TEST_KERNELS ? AK.SliceScan(; block_size) : AK.CPUThreads.Partitioned(; max_tasks, min_elems)
-end
-
-
 @testset "accumulate: whole arrays" begin
     Random.seed!(0)
 
