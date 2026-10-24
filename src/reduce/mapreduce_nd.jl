@@ -49,6 +49,15 @@ const COLUMNS_MIN_OUTPUTS = 8
 # The most threads per block of the columns kernel: its unrolled loads take more registers than
 # the other kernels, and Metal allows it fewer than 1024 threads per block
 const COLUMNS_MAX_THREADS = 256
+# A strided reduction into contiguous outputs takes one thread per output when a row of outputs,
+# which those threads load together at each step, is at least this many bytes, or when the
+# reduction is shorter than COLUMNS_MIN_REDUCE. Measured on an RTX 5080 and an RTX 6000 Ada: one
+# thread per output is as fast as the other kernels from 64 KiB of Float32 or BFloat16 outputs,
+# and 2.3 (Float32) to 4.6 (BFloat16) times slower with 4096 outputs, which fill only 16 blocks.
+# (Devices with a few compute units fill sooner: on a Ryzen 9950X's integrated GPU and a Jetson
+# Xavier, 2048 outputs of 768 elements reduce 1.4 times as fast with one thread each.)
+const BY_THREAD_ROW_BYTES = 64 * 1024
+const COLUMNS_MIN_REDUCE = 32
 
 
 # Host-side canonicalization: split the dimensions into reduced and kept ("outer") segments,
@@ -112,12 +121,9 @@ _segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 #     run of consecutive elements, of a length the
 #     tuning's `segments_*` settings allow             -> :segments (a group of threads per
 #                                                          output, several outputs per block)
-#   - at least COLUMNS_MIN_OUTPUTS contiguous outputs
-#     with a longer strided reduction, of at least
-#     the tuning's `columns_min_elements` in all        -> :columns (blocks of up to 32
-#                                                          consecutive outputs; a second pass
-#                                                          when an output's reduction is split)
-#   - square-like, contiguous output with strided input -> :tiled_strided
+#   - contiguous outputs, each reducing one strided
+#     segment                                          -> :by_thread, :tiled_strided or :columns,
+#                                                          see `_columns_shape`
 #   - dst_size >= reduce_size                          -> :by_thread
 #   - dst_size == 1, or dst_size < GS_DST_CUTOFF
 #     (and dst_size < reduce_size)                     -> :multigroup (split one reduction
@@ -137,6 +143,11 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
     target_blocks = t.target_blocks
     (rstrides, rsizes, nr), (ostrides, _, no) = segs
     single_reduce = nr == 1 && rsizes[1] != 0
+
+    if no == 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1
+        shape = _columns_shape(dst_size, reduce_size, block_size, t, A)
+        shape === nothing || return shape
+    end
 
     # Each output reduces a run of consecutive elements: a group of lanes per output reads it
     # with consecutive loads, and a block holds several outputs, so that it stays busy on short
@@ -161,37 +172,16 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
 
     # by_block override 2: when by_thread would launch too few blocks for a square-like
     # output/reduction shape, split each output reduction across a full block. This
-    # fallback is mostly for layouts that do not satisfy the narrower tiled-strided
-    # pattern below; the common contiguous-output strided case uses tiled_strided.
-    # Avoid applying this to wide-output shapes, where by_thread's cross-output
-    # coalescing is better than a strided block reduction.
+    # fallback is for layouts `_columns_shape` does not take. Avoid applying this to
+    # wide-output shapes, where by_thread's cross-output coalescing is better than a
+    # strided block reduction.
     use_by_block_for_low_occupancy =
         dst_size == reduce_size && reduce_size >= block_size &&
         cld(dst_size, block_size) < target_blocks && single_reduce
 
     use_by_block = use_by_block_for_coalescing || use_by_block_for_low_occupancy
-    use_tiled_strided =
-        dst_size == reduce_size && reduce_size >= block_size &&
-        no == 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1 &&
-        block_size % TILED_STRIDED_ROWS_PER_BLOCK == 0 &&
-        ispow2(block_size ÷ TILED_STRIDED_ROWS_PER_BLOCK)
 
-    # Contiguous outputs with a longer strided reduction, e.g. the row sums of a wide matrix:
-    # :columns, with enough blocks per output to fill the device
-    if no == 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1 &&
-       COLUMNS_MIN_OUTPUTS <= dst_size < reduce_size &&
-       widemul(dst_size, reduce_size) >= t.columns_min_elements &&
-       block_size >= _columns_cols(dst_size)
-        cols = _columns_cols(dst_size)
-        lanes = min(block_size, COLUMNS_MAX_THREADS) ÷ cols
-        groups = clamp(cld(target_blocks, cld(dst_size, cols)), 1,
-                       cld(reduce_size, lanes * MIN_ITEMS_PER_THREAD))
-        return :columns, groups
-    end
-
-    if use_tiled_strided
-        return :tiled_strided, 0
-    elseif dst_size >= reduce_size && !use_by_block
+    if dst_size >= reduce_size && !use_by_block
         return :by_thread, 0
     elseif use_by_block
         return :by_block, 0
@@ -206,6 +196,38 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
     else
         return :by_block, 0
     end
+end
+
+# The launch shape of a strided reduction into contiguous outputs (e.g. `dims=2` of a matrix), or
+# `nothing` for the shapes of `_mapreduce_nd_shape`:
+#   - one thread per output for rows of BY_THREAD_ROW_BYTES of outputs, or short reductions;
+#   - else, with at least as many outputs as elements in each, and too few for tiles of 32 outputs
+#     to launch the tuning's `target_blocks`, the tiled kernel: 8 outputs per block, in one pass;
+#   - else the columns kernel, with tiles of up to 32 outputs, and each output's reduction split
+#     across enough blocks to launch `target_blocks`. A split reduction takes a second pass,
+#     which only reductions of at least the tuning's `columns_min_elements` elements afford.
+# Tiles of 32 outputs that need splitting take longer than the tiled kernel where its 8 outputs
+# per block launch enough blocks, from 1.7 times as long on an RTX 5080 for a 1024×1024 matrix to
+# 2.5 times on an Arc A770; with more outputs, the columns kernel's several loads in flight beat
+# its single one (a 8192×8192 Float32 matrix takes 296 instead of 416 µs on the RTX 5080).
+function _columns_shape(dst_size, reduce_size, block_size, t::ReduceTuning,
+                        ::Type{A}) where {A}
+    if widemul(dst_size, _accsize(A)) >= BY_THREAD_ROW_BYTES || reduce_size < COLUMNS_MIN_REDUCE
+        return :by_thread, 0
+    end
+    threads = min(block_size, COLUMNS_MAX_THREADS)
+    cols = _columns_cols(dst_size)
+    tiles = cld(dst_size, cols)
+    rows = TILED_STRIDED_ROWS_PER_BLOCK
+    if dst_size >= reduce_size && tiles < t.target_blocks &&
+       block_size % rows == 0 && ispow2(block_size ÷ rows) && reduce_size >= block_size ÷ rows
+        return :tiled_strided, 0
+    end
+    dst_size >= COLUMNS_MIN_OUTPUTS && threads >= cols || return nothing
+    lanes = threads ÷ cols
+    groups = clamp(cld(t.target_blocks, tiles), 1, cld(reduce_size, lanes * MIN_ITEMS_PER_THREAD))
+    groups > 1 && widemul(dst_size, reduce_size) < t.columns_min_elements && return nothing
+    return :columns, groups
 end
 
 # The launch shape of a reduction in element order (`commutative=false`), from the shape

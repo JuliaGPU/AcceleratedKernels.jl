@@ -1192,6 +1192,21 @@ end
         v = view(p, 2:m + 1, 4:n + 3)
         @test Array(AK.sum(v; dims=2, alg)) == sum(Int.(Array(p)[2:m + 1, 4:n + 3]); dims=2)
     end
+    # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
+    shape_of(x, dims, A) = AK._mapreduce_nd_shape(
+        length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
+        AK._mapreduce_segments(size(x), AK._mapreduce_layout(x)[3], dims),
+        AK._resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
+    # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
+    # launch enough blocks, and one thread per output where a row of outputs fills the device
+    for (m, n, A, shape) in ((4096, 1024, Int32, :tiled_strided), (8192, 300, Int32, :columns),
+                             (8192, 300, Int64, :by_thread))
+        h = rand(A(-9):A(9), m, n)
+        a = array_from_host(h)
+        TEST_KERNELS && @test shape_of(a, (2,), A) === shape
+        r = AK.reduce(+, a; dims=2, init=zero(A), alg)
+        @test eltype(r) === A && Array(r) == sum(h; dims=2)
+    end
 end
 
 
