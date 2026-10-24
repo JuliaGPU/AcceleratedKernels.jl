@@ -121,8 +121,8 @@ _segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 #     run of consecutive elements, of a length the
 #     tuning's `segments_*` settings allow             -> :segments (a group of threads per
 #                                                          output, several outputs per block)
-#   - contiguous outputs, each reducing one strided
-#     segment                                          -> :by_thread, :tiled_strided or :columns,
+#   - runs of contiguous outputs, each reducing one
+#     strided segment                                  -> :by_thread, :tiled_strided or :columns,
 #                                                          see `_columns_shape`
 #   - dst_size >= reduce_size                          -> :by_thread
 #   - dst_size == 1, or dst_size < GS_DST_CUTOFF
@@ -141,11 +141,11 @@ _segment_tuple(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceTuning,
                              ::Type{A}) where {A}
     target_blocks = t.target_blocks
-    (rstrides, rsizes, nr), (ostrides, _, no) = segs
+    (rstrides, rsizes, nr), (ostrides, osizes, no) = segs
     single_reduce = nr == 1 && rsizes[1] != 0
 
-    if no == 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1
-        shape = _columns_shape(dst_size, reduce_size, block_size, t, A)
+    if no >= 1 && ostrides[1] == 1 && nr == 1 && rstrides[1] > 1
+        shape = _columns_shape(dst_size, reduce_size, osizes[1], block_size, t, A)
         shape === nothing || return shape
     end
 
@@ -198,32 +198,36 @@ function _mapreduce_nd_shape(dst_size, reduce_size, segs, block_size, t::ReduceT
     end
 end
 
-# The launch shape of a strided reduction into contiguous outputs (e.g. `dims=2` of a matrix), or
-# `nothing` for the shapes of `_mapreduce_nd_shape`:
+# The launch shape of a strided reduction into runs of `run` contiguous outputs (e.g. `dims=2` of a
+# matrix, or of a 3-d array, whose third dimension holds the runs), or `nothing` for the shapes of
+# `_mapreduce_nd_shape`:
 #   - one thread per output for rows of BY_THREAD_ROW_BYTES of outputs, or short reductions;
 #   - else, with at least as many outputs as elements in each, and too few for tiles of 32 outputs
-#     to launch the tuning's `target_blocks`, the tiled kernel: 8 outputs per block, in one pass;
-#   - else the columns kernel, with tiles of up to 32 outputs, and each output's reduction split
-#     across enough blocks to launch `target_blocks`. A split reduction takes a second pass,
-#     which only reductions of at least the tuning's `columns_min_elements` elements afford.
+#     to launch the tuning's `target_blocks`, the tiled kernel (of a single run): 8 outputs per
+#     block, in one pass;
+#   - else the columns kernel, with tiles of up to 32 outputs of a run, and each output's
+#     reduction split across enough blocks to launch `target_blocks`. A split reduction takes a
+#     second pass, which only reductions of at least the tuning's `columns_min_elements` elements
+#     afford.
 # Tiles of 32 outputs that need splitting take longer than the tiled kernel where its 8 outputs
 # per block launch enough blocks, from 1.7 times as long on an RTX 5080 for a 1024×1024 matrix to
 # 2.5 times on an Arc A770; with more outputs, the columns kernel's several loads in flight beat
 # its single one (a 8192×8192 Float32 matrix takes 296 instead of 416 µs on the RTX 5080).
-function _columns_shape(dst_size, reduce_size, block_size, t::ReduceTuning,
+function _columns_shape(dst_size, reduce_size, run, block_size, t::ReduceTuning,
                         ::Type{A}) where {A}
     if widemul(dst_size, _accsize(A)) >= BY_THREAD_ROW_BYTES || reduce_size < COLUMNS_MIN_REDUCE
         return :by_thread, 0
     end
     threads = min(block_size, COLUMNS_MAX_THREADS)
-    cols = _columns_cols(dst_size)
-    tiles = cld(dst_size, cols)
+    cols = _columns_cols(run)
+    runs = dst_size ÷ run
+    tiles = runs * cld(run, cols)
     rows = TILED_STRIDED_ROWS_PER_BLOCK
-    if dst_size >= reduce_size && tiles < t.target_blocks &&
+    if runs == 1 && dst_size >= reduce_size && tiles < t.target_blocks &&
        block_size % rows == 0 && ispow2(block_size ÷ rows) && reduce_size >= block_size ÷ rows
         return :tiled_strided, 0
     end
-    dst_size >= COLUMNS_MIN_OUTPUTS && threads >= cols || return nothing
+    run >= COLUMNS_MIN_OUTPUTS && threads >= cols || return nothing
     lanes = threads ÷ cols
     groups = clamp(cld(t.target_blocks, tiles), 1, cld(reduce_size, lanes * MIN_ITEMS_PER_THREAD))
     groups > 1 && widemul(dst_size, reduce_size) < t.columns_min_elements && return nothing
@@ -450,18 +454,23 @@ function _mapreduce_nd_launch!(
     elseif shape === :columns || shape === :columns_ordered
         ordered = shape === :columns_ordered
         groups = reduce_groups
-        blocks = cld(dst_size, _columns_cols(dst_size)) * groups
+        # (runs of `outer_sizes[1]` contiguous outputs, at the other kept dimensions' offsets)
+        run = outer_sizes[1]
+        runs = Base.tail(outer_strides), Base.tail(outer_sizes)
+        cols = _columns_cols(run)
+        blocks = cld(run, cols) * (dst_size ÷ run) * groups
         threads = min(block_size, COLUMNS_MAX_THREADS)
         kernel! = _mapreduce_nd_columns!(backend, threads)
-        cols = Val(_columns_cols(dst_size))
         if groups == 1
             kernel!(buffer, dst, f, op, neutral, init, base_offset, reduce_strides[1], dst_size,
-                    reduce_size, 1, cols, Val(ordered); ndrange=(threads * blocks,))
+                    run, dst_size ÷ run, runs..., reduce_size, 1, Val(cols), Val(ordered);
+                    ndrange=(threads * blocks,))
         else
             # (the partial results of each output's groups, combined by a second pass)
             partial = bufs.partials
             kernel!(buffer, partial, f, op, neutral, _NoFinish(), base_offset,
-                    reduce_strides[1], dst_size, reduce_size, groups, cols, Val(ordered);
+                    reduce_strides[1], dst_size, run, dst_size ÷ run, runs..., reduce_size, groups,
+                    Val(cols), Val(ordered);
                     ndrange=(threads * blocks,))
             pass2_block_size = _pass2_block_size(groups)
             if ordered
@@ -897,8 +906,9 @@ end
 end
 
 # GPU kernel: columns — a long strided reduction into contiguous outputs, e.g. the row sums of
-# a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs with
-# `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
+# a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs of a run of
+# `run` (the outputs at an offset of the other kept dimensions, `run_strides` and `run_sizes`),
+# with `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
 # reduction of each output is split across `groups` blocks. With one group the block stores the
 # outputs; with more, `dst` holds `output_size × groups` partial results for a second pass (and
 # `init` is `_NoFinish()`). The lanes and groups take their elements in turn, or `ordered`, each a
@@ -908,7 +918,7 @@ end
     @Const(src), dst,
     f, op, neutral, init,
     base_offset, reduce_stride,
-    output_size, reduce_size, groups,
+    output_size, run, runs, run_strides, run_sizes, reduce_size, groups,
     ::Val{cols}, ::Val{ordered},
 ) where {cols, ordered}
     @uniform N = @groupsize()[1]
@@ -918,23 +928,30 @@ end
 
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
-    tiles = cld(output_size, cols)
+    run_tiles = cld(run, cols)
+    tiles = run_tiles * runs
 
-    # (unsigned divisions by constants and by the tile count; see the tiled kernel)
+    # (unsigned divisions by constants and by the tile counts; see the tiled kernel. The block
+    # index is divided in 32 bits: the columns kernel takes fewer than 64 Ki outputs (see
+    # `_columns_shape`), in tiles of at least 8, split into groups only to approach
+    # `target_blocks` blocks. 64-bit divisions take it 7% longer on an RTX 6000 Ada)
     col  = Int(unsigned(ithread) % unsigned(cols))
     lane = Int(unsigned(ithread) ÷ unsigned(cols))
-    tile  = Int(unsigned(iblock) % unsigned(tiles))
-    group = Int(unsigned(iblock) ÷ unsigned(tiles))
-    iout = tile * cols + col
+    tile  = Int((iblock % UInt32) % (tiles % UInt32))
+    group = Int((iblock % UInt32) ÷ (tiles % UInt32))
+    irun = isempty(run_sizes) ? 0 : Int((tile % UInt32) ÷ (run_tiles % UInt32))
+    icol = (tile - irun * run_tiles) * cols + col
+    valid = icol < run
+    iout = irun * run + icol
+    sbase = base_offset + _outer_decode(irun, run_strides, run_sizes) + icol
 
     acc = neutral
-    if ordered && iout < output_size
+    if ordered && valid
         # (the group's range of the slice, and the lane's of that, as evenly divided as they can be)
         lo = fld(group * reduce_size, groups)
         len = fld((group + 1) * reduce_size, groups) - lo
         j = lo + fld(lane * len, lanes)
         stop = lo + fld((lane + 1) * len, lanes)
-        sbase = base_offset + iout
         while j + (COLUMNS_ITEMS - 1) < stop
             for k in 0:(COLUMNS_ITEMS - 1)
                 acc = op_lanes(acc, f_lanes(src[sbase + (j + k) * reduce_stride + 0x1]))
@@ -945,8 +962,7 @@ end
             acc = op_lanes(acc, f_lanes(src[sbase + j * reduce_stride + 0x1]))
             j += 1
         end
-    elseif iout < output_size
-        sbase = base_offset + iout
+    elseif valid
         step = groups * lanes
         j = group * lanes + lane
         # (several loads in flight per thread: one at a time leaves the kernel at half the
@@ -989,7 +1005,7 @@ end
         end
     end
 
-    if lane == 0x0 && iout < output_size
+    if lane == 0x0 && valid
         i = iout + group * output_size + 0x1
         dst[i] = _finish(op, init, dst, i, sdata[col + 0x1])
     end

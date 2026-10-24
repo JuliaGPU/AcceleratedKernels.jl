@@ -1207,6 +1207,16 @@ end
         r = AK.reduce(+, a; dims=2, init=zero(A), alg)
         @test eltype(r) === A && Array(r) == sum(h; dims=2)
     end
+    # Runs of contiguous outputs at the offsets of other kept dimensions: the middle dimension of
+    # 3-d and 4-d arrays, and a view at an offset whose kept dimensions are not adjacent in memory
+    h = rand(Int32(-9):Int32(9), 50, 30_000, 7)
+    for (a, ha) in ((array_from_host(rand(Int32(-9):Int32(9), 96, 7000, 10)), nothing),
+                    (array_from_host(rand(Int32(-9):Int32(9), 40, 30_000, 3, 2)), nothing),
+                    (view(array_from_host(h), 3:42, :, 1:2:7), h[3:42, :, 1:2:7]))
+        ha = something(ha, Array(a))
+        TEST_KERNELS && @test shape_of(a, (2,), Int32) === :columns
+        @test Array(AK.reduce(+, a; dims=2, init=Int32(0), alg)) == sum(ha; dims=2)
+    end
 end
 
 
@@ -1631,7 +1641,7 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
              ((40, 5, 30), 3), ((40, 5, 30), (1, 3)), ((9, 4, 3000), (2, 3)), ((8, 300_000), 2),
              ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1),
              ((300_000, 2), 1), ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1),
-             ((1, 5000, 2), 2))
+             ((1, 5000, 2), 2), ((40, 3000, 30), 2))
     for (sz, dims) in cases
         if TEST_KERNELS
             segs = AK._mapreduce_segments(sz, AK._mapreduce_dense_strides(sz),
