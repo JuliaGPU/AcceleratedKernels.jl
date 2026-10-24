@@ -238,6 +238,10 @@ end
 ScanLoad{A}(op::OP) where {A, OP} = ScanLoad{A, OP}(op)
 @inline (e::ScanLoad{A})(x) where {A} = convert(A, Base.reduce_first(e.op, x))
 
+# The value a scan starts from: `init` in the element type, else the seed
+scan_start(v, init, seed) = lift(seed, convert(eltype(v), init))
+scan_start(v, ::NoInit, seed) = seed
+
 # The running-value type of a scan of elements of type `T` into an array of element type `D`
 # (`Union{}` for none): `acctype`, else the accumulator type of a reduction from `D` joined with
 # `init`'s type; an exclusive scan's `init` is a running value too. `combines` says whether `op`

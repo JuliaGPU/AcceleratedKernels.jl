@@ -141,11 +141,6 @@ end
     end
 end
 
-# The value a scan starts from: `init` in the element type, else the seed
-scan_start(v, init, seed) = lift(seed, convert(eltype(v), init))
-scan_start(v, ::NoInit, seed) = seed
-
-
 # The length of the scratch of `ScanPrefixes` for `n` elements: the totals of the tiles, of the
 # tiles of those totals, and so on until a single tile.
 function prefixes_length(n, alg::ScanPrefixes)
