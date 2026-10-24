@@ -27,7 +27,9 @@ end
 
 # `Tiled`: each block reduces `rows` contiguous outputs, whose elements are
 # `reduce_stride` apart, with `N ÷ rows` lanes each, so that a warp's loads of one step are
-# consecutive elements.
+# consecutive elements. This is the columns kernel with one group and one load per thread, but
+# that kernel, with those settings and the whole block, takes 17 to 60% longer on an RTX 5080
+# (1024×1024 to 4096×4096 matrices along `dims=2`).
 @kernel inbounds=true cpu=false unsafe_indices=true function tiled_strided_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -361,6 +363,8 @@ end
 
 # `ByBlocks`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + groups`,
 # ... of `N` elements of output `iout`'s slice into `partial[iout + igroup * output_size + 1]`.
+# It is compiled for each output count (below FEW_OUTPUTS): dividing by a count known only at run
+# time, in 32 or 64 bits, takes 4 to 9% longer for 3 to 16 outputs on an RTX 5080.
 @kernel inbounds=true cpu=false unsafe_indices=true function multigroup_kernel!(
     @Const(src), partial,
     f, op, seed,
