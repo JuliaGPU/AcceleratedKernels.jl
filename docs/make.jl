@@ -9,7 +9,7 @@ makedocs(;
     authors="Andrei-Leonard Nicusan <a.l.nicusan@gmail.com> and contributors",
     sitename="AcceleratedKernels.jl",
     format=Documenter.HTML(;
-        canonical="https://juliagpu.github.io/KernelAbstractions.jl/",
+        canonical="https://juliagpu.github.io/AcceleratedKernels.jl/",
         edit_link="main",
         assets=String[],
         sidebar_sitename=false,
@@ -46,7 +46,7 @@ makedocs(;
         "Roadmap" => "roadmap.md",
         "References" => "references.md",
     ],
-    warnonly=true,
+    checkdocs=:all,
 )
 
 deploydocs(;
