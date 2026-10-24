@@ -269,20 +269,12 @@ function launch_by_block!(
     W = dense_buffer ? vector_width(
         buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
     ) : 0
-    if W == 4
+    if W > 0
         kernel! = by_block_vector_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, seed, init,
             base_offset, outer_strides, outer_sizes,
-            output_size, reduce_size, num_blocks, Val(4),
-            ndrange=(block_size * num_blocks,),
-        )
-    elseif W == 2
-        kernel! = by_block_vector_kernel!(backend, block_size)
-        Base.inferencebarrier(kernel!)(
-            buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes,
-            output_size, reduce_size, num_blocks, Val(2),
+            output_size, reduce_size, num_blocks, Val(W),
             ndrange=(block_size * num_blocks,),
         )
     else

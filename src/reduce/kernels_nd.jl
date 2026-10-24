@@ -369,11 +369,9 @@ end
     base_offset,
     outer_strides, outer_sizes,
     output_size, reduce_size, num_blocks,
-    valW,
-)
+    ::Val{W},
+) where {W}
     @uniform N = @groupsize()[1]
-    @uniform T = eltype(src)
-    @uniform W = unval(valW)
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
 
