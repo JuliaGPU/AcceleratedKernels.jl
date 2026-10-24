@@ -45,6 +45,13 @@
         @test_throws Exception AK.reverse!(
             array_from_host(rand(Float32, 10)),
             array_from_host(rand(Float32, 11)))
+
+        # A source with Cartesian indices
+        h = rand(Float32, 4, 5)
+        src = view(array_from_host(h), 1:3, 2:5)
+        dst = array_from_host(zeros(Float32, 3, 4))
+        AK.reverse!(dst, src)
+        @test Array(dst) == reverse(h[1:3, 2:5])
     end
 
     @testset "reverse allocating" begin

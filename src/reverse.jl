@@ -172,11 +172,13 @@ function reverse!(
     @argcheck length(dst) == length(src)
     length(src) == 0 && return dst
 
-    hi_src = lastindex(src)
+    len = length(src)
+    lo_src = firstindex(src)
     lo_dst = firstindex(dst)
 
-    _foreachindex(eachindex(src), backend; launch...) do i
-        @inbounds dst[lo_dst + (hi_src - i)] = src[i]
+    # (linear indices, also for sources whose `eachindex` is Cartesian)
+    _foreachindex(1:len, backend; launch...) do i
+        @inbounds dst[lo_dst + (len - i)] = src[lo_src + (i - 1)]
     end
 
     dst
