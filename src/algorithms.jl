@@ -250,6 +250,35 @@ _similar(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T} =
 # A copy of `v`, likewise
 _copy(backend, v) = _backend_free(v) ? copyto!(_similar(backend, v), collect(v)) : copy(v)
 
+# `A` with axes starting at 1, as the kernels and threaded loops index it, for an `A` whose axes
+# start elsewhere (an `OffsetArray`, for instance), and likewise the arrays of a `Broadcasted`
+# object. The operations pass these on, and keep `A` for their checks.
+_one_based(A::AbstractArray) = Base.has_offset_axes(A) ? _one_based_view(A) : A
+function _one_based(bc::Base.Broadcast.Broadcasted)
+    Base.has_offset_axes(bc) || return bc
+    args = Base.map(_one_based, bc.args)
+    # (keeping the shape of explicit axes, which may be larger than the arguments')
+    return Base.Broadcast.Broadcasted(bc.f, args, Base.map(ax -> Base.OneTo(length(ax)), axes(bc)))
+end
+_one_based(x) = x
+# (a reshape keeps the linear indexing of an array of several dimensions, which starts at 1, and
+# `OffsetArrays` makes it the parent array; Base does not reshape vectors with offset axes)
+_one_based_view(A::AbstractVector) = @view A[begin:end]
+_one_based_view(A::AbstractArray) = reshape(A, size(A))
+
+# Whether `A` is a view `_one_based` made. Base's `copyto!` and `fill!` index those element by
+# element on the host, which GPU arrays disallow, so `_fill!` fills them with a kernel.
+_is_one_based_view(A) =
+    A isa Union{SubArray, Base.ReshapedArray} && Base.has_offset_axes(parent(A))
+
+function _fill!(A, x, backend)
+    _is_one_based_view(A) || return fill!(A, x)
+    _foreachindex(Base.OneTo(length(A)), backend) do i
+        @inbounds A[i] = x
+    end
+    return A
+end
+
 """
     _resolve_backend(backend, args...)
 

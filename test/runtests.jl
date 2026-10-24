@@ -47,6 +47,26 @@ const _testset_setup_code = quote
     # Whether the backend's arrays can hold bits unions such as `Union{Missing, Bool}` (Metal.jl's,
     # oneAPI.jl's and OpenCL.jl's cannot yet)
     global TEST_BITS_UNIONS = nameof(typeof(BACKEND)) ∉ (:MetalBackend, :oneAPIBackend, :OpenCLBackend)
+
+    # An array whose axes start at `1 + offsets[d]`, like an `OffsetArray`
+    using Adapt: Adapt, adapt
+    struct OffsetAxes{T, N, A <: AbstractArray{T, N}} <: AbstractArray{T, N}
+        parent::A
+        offsets::NTuple{N, Int}
+    end
+    Base.axes(x::OffsetAxes) =
+        Base.map((ax, o) -> Base.IdentityUnitRange(ax .+ o), axes(x.parent), x.offsets)
+    Base.size(x::OffsetAxes) = size(x.parent)
+    Base.@propagate_inbounds Base.getindex(x::OffsetAxes{T, N}, I::Vararg{Int, N}) where {T, N} =
+        x.parent[(I .- x.offsets)...]
+    Base.@propagate_inbounds Base.setindex!(x::OffsetAxes{T, N}, v, I::Vararg{Int, N}) where {T, N} =
+        x.parent[(I .- x.offsets)...] = v
+    Base.similar(x::OffsetAxes, ::Type{T}, dims::Dims) where {T} = similar(x.parent, T, dims)
+    Base.copy(x::OffsetAxes) = OffsetAxes(copy(x.parent), x.offsets)
+    Adapt.adapt_structure(to, x::OffsetAxes) = OffsetAxes(adapt(to, x.parent), x.offsets)
+    KernelAbstractions.get_backend(x::OffsetAxes) = get_backend(x.parent)
+    global offset_from_host
+    offset_from_host(h_arr::AbstractArray, offsets) = OffsetAxes(array_from_host(h_arr), offsets)
 end
 
 # Build list of active backends, each with setup code

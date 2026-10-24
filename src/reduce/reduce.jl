@@ -147,13 +147,15 @@ end
 _plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
     _plan(mapreduce, identity, op, src; kwargs...)
 
-# The source of a reduction: several arrays become one `Broadcasted` object
-_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, src)
+# The source of a reduction, indexed from 1 (`_one_based`): several arrays become one
+# `Broadcasted` object
+_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, _one_based(src))
 function _mapreduce_fuse(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
     _mapreduce_check_map_axes(src, srcs...)
-    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, _one_based(src),
+                                                               Base.map(_one_based, srcs)...))
     return identity, bc
 end
 # Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
@@ -220,11 +222,13 @@ function _mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
-_mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing, dims=:,
-                  alg) where {F, OP} =
+function _mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing,
+                           dims=:, alg) where {F, OP}
+    src = _one_based(src)
     _mapreduce_run(f, op, src,
                    _mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
                    init, bufs)
+end
 
 
 """
@@ -331,6 +335,7 @@ function _mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overw
             "cannot reduce an array of size $(size(src)) into one of size $(size(R))"))
     end
     _check_noalias(R, src)
+    R, src = _one_based(R), _one_based(src)
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)

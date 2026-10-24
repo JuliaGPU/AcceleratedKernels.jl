@@ -27,16 +27,6 @@ Base.@propagate_inbounds Base.getindex(p::LazyProduct{T, N}, I::Vararg{Int, N}) 
 Adapt.adapt_structure(to, p::LazyProduct) = LazyProduct(adapt(to, p.a), adapt(to, p.b))
 KernelAbstractions.get_backend(p::LazyProduct) = get_backend(p.a)
 
-# A lazy vector whose indices start at 2
-struct ShiftedVector{T, A <: AbstractVector{T}} <: AbstractVector{T}
-    a::A
-end
-Base.axes(v::ShiftedVector) = (2:length(v.a) + 1,)
-Base.size(v::ShiftedVector) = size(v.a)
-Base.@propagate_inbounds Base.getindex(v::ShiftedVector, i::Int) = v.a[i - 1]
-Adapt.adapt_structure(to, v::ShiftedVector) = ShiftedVector(adapt(to, v.a))
-KernelAbstractions.get_backend(v::ShiftedVector) = get_backend(v.a)
-
 @testset "reduce_1d" begin
     Random.seed!(0)
 
@@ -1295,12 +1285,6 @@ end
         @test Array(R) == maximum(abs, h; dims)
     end
 
-    # ... whose indices do not start at 1
-    h = rand(Int32(-9):Int32(9), 10_000)
-    shifted = ShiftedVector(array_from_host(h))
-    @test AK.reduce(+, shifted; alg) == sum(h)
-    @test Array(AK.reduce(+, shifted; dims=1, alg)) == [sum(h)]
-
     # Reductions into one or few outputs split each output's reduction across blocks, and keep
     # their partial results
     if TEST_KERNELS
@@ -1310,6 +1294,60 @@ end
             @test haskey(AK.workspace_size(AK.mapreducedim!, identity, +, R, lazy;
                                            alg=AK.BlockReduce()), :partials)
         end
+    end
+end
+
+
+@testset "offset axes" begin
+    # Arrays whose axes do not start at 1, as sources and destinations
+    Random.seed!(0)
+    algs = TEST_KERNELS ? [REDUCE_ALG] :
+        [REDUCE_ALG, AK.CPUThreads.Partitioned(max_tasks=4, min_elems=1)]
+    for alg in algs, commutative in (true, false)
+        h = rand(Int32(-9):Int32(9), 10_000)
+        v = offset_from_host(h, (-3,))
+        @test AK.reduce(+, v; alg, commutative) == sum(h)
+        @test AK.mapreduce(*, +, v, v; alg, commutative) == sum(h .* h)
+        @test Array(AK.reduce(+, v; dims=1, alg, commutative)) == [sum(h)]
+        single = offset_from_host(Int32[5], (-3,))
+        @test AK.reduce(+, single; alg, commutative) == 5
+        @test Array(AK.reduce(+, single; dims=1, alg, commutative)) == [5]
+
+        hm = rand(Int32(-9):Int32(9), 30, 40)
+        m = offset_from_host(hm, (-1, 3))
+        @test AK.reduce(+, m; alg, commutative) == sum(hm)
+        bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(abs, m))
+        @test AK.mapreduce(identity, +, bc; alg, commutative) == sum(abs, hm)
+        # ... and one with explicit offset axes, larger than its argument's
+        bc1 = Base.Broadcast.Broadcasted(identity, (array_from_host(Int32[2]),),
+                                         (Base.IdentityUnitRange(0:999),))
+        @test AK.mapreduce(identity, +, bc1; alg, commutative) == 2000
+        @test Array(AK.mapreduce(identity, +, bc1; dims=1, alg, commutative)) == [2000]
+        for dims in (1, 2, (1, 2))
+            @test Array(AK.reduce(+, m; dims, alg, commutative)) == sum(hm; dims)
+            @test Array(AK.mapreduce(*, +, m, m; dims, alg, commutative)) == sum(hm .* hm; dims)
+            @test Array(AK.mapreduce(identity, +, bc; dims, alg, commutative)) ==
+                  sum(abs, hm; dims)
+            @test Array(with_workspace(AK.reduce, +, m; dims, alg, commutative)) == sum(hm; dims)
+
+            # Into destinations with and without offset axes
+            hR = rand(Int32(-9):Int32(9), size(sum(hm; dims)))
+            R = array_from_host(hR)
+            AK.mapreducedim!(identity, +, R, m; alg, commutative)
+            @test Array(R) == hR .+ sum(hm; dims)
+            R = offset_from_host(hR, (2, -5))
+            AK.mapreducedim!(identity, +, R, m; alg, commutative)
+            @test Array(R.parent) == hR .+ sum(hm; dims)
+            with_workspace(AK.mapreducedim!, identity, max, R, m; overwrite=true, alg,
+                           commutative)
+            @test Array(R.parent) == maximum(hm; dims)
+        end
+
+        # Empty slices set the outputs to `init`
+        R = offset_from_host(zeros(Int32, 3, 1), (2, 2))
+        AK.mapreducedim!(identity, +, R, offset_from_host(zeros(Int32, 3, 0), (2, 2));
+                         init=Int32(7), alg, commutative)
+        @test Array(R.parent) == fill(7, 3, 1)
     end
 end
 

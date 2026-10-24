@@ -43,6 +43,12 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     # ... with offset axes
     @test AK.any(iszero, Base.IdentityUnitRange(0:999); backend=BACKEND, alg) === true
     @test AK.all(i -> i < 1000, Base.IdentityUnitRange(0:999); backend=BACKEND, alg) === true
+    v = offset_from_host(Int32.(1:1000), (-5,))
+    @test AK.any(==(1000), v; alg) === true
+    @test AK.all(<(1000), v; alg) === false
+    v = offset_from_host(Int32[5], (-5,))
+    @test AK.any(==(5), v; alg) === true
+    @test AK.all(==(5), v; alg) === true
 
     # The predicate must return a Bool, as in Base
     @test_throws ArgumentError AK.any(identity, array_from_host(Int32[2, 3]); alg)
