@@ -57,6 +57,13 @@ values per device, e.g. from the compute capability of the current CUDA device. 
 on the calling task, under its current device, never at load or precompilation time. Record the
 measurement behind each value next to it.
 
+The sorting thresholds are crossovers between `MergeSort` and `BitonicSort` or `RadixSort`, timed
+on random keys of the element types they apply to. Measure the whole-array thresholds on vectors,
+and the slice thresholds along `dims=1` and `dims=2` for several total sizes: the crossovers move
+with the number of slices, as few of them leave the device short of work.
+`radix_min_slice_len` must hold from `radix_min_len` elements in all, the smallest array along
+`dims` it applies to.
+
 ## Capabilities
 
 Capabilities are correctness facts about a backend, checked for `Auto` and explicit algorithms

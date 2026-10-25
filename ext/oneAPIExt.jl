@@ -15,5 +15,18 @@ AK.predicate_tuning(::oneAPIBackend, ::Type) = AK.PredicateTuning(prefer_concurr
 # 4M elements the column reduction is faster), so the column reduction starts at larger inputs.
 AK.reduce_tuning(::oneAPIBackend, ::Type) = AK.ReduceTuning(columns_split_min_elems=1 << 22)
 
+# Sorting random keys on an Arc A770, where every sort takes at least about 0.1 ms. `BitonicSort`
+# sorts whole arrays of 23 to 128 elements 1.0-1.4x faster than `MergeSort` (16 elements up to
+# 23% slower), and slices of up to 128 elements along `dims` 1.0-55x faster in arrays of 2^16
+# elements or more (up to 69% slower in arrays of 2^12); longer slices lose by up to 5%.
+# `RadixSort` sorts whole arrays of 2^21 32-bit elements 1.6-1.8x faster, and 32-bit slices of
+# 2^15 elements in arrays of 2^21 or more 1.1-2.8x faster. For 64-bit elements it ranges from
+# 0.4x to 1.5x up to 2^25 elements.
+AK.sort_tuning(::oneAPIBackend, ::Type{T}) where {T} =
+    sizeof(T) <= 4 ?
+    AK.SortTuning(bitonic_max_len=128, radix_min_len=1 << 21, bitonic_max_slice_len=128,
+                  radix_min_slice_len=1 << 15) :
+    AK.SortTuning(bitonic_max_len=128, bitonic_max_slice_len=128)
+
 
 end   # module oneAPIExt

@@ -19,8 +19,10 @@
 GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
 kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
 (any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
-passes merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
-the cost of reading them from global memory in every comparison; other operations reject it.
+passes merge the tiles. A tile, with the values moved along, must fit in 32 KiB; for large
+elements, the default `block_size` shrinks to fit. `lowmem=true` selects a `sortperm!` path that
+does not copy the keys, at the cost of reading them from global memory in every comparison; other
+operations reject it.
 """
 Base.@kwdef struct MergeSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -59,7 +61,7 @@ end
 GPU bitonic sorting network, for whole arrays and `dims`, every element type and ordering. It is
 unstable and does not support `sortperm!` or `sort_by_key!`. Fastest for small arrays and short
 slices: tiles of `block_size * items_per_thread` elements sort in local memory, larger inputs need
-global passes. Both settings must be positive powers of two.
+global passes. Both settings must be positive powers of two, and a tile must fit in 32 KiB.
 """
 Base.@kwdef struct BitonicSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -73,10 +75,13 @@ end
 Values that drive [`Auto`](@ref) selection and fill unset algorithm fields for sorting on one
 device, as returned by [`sort_tuning`](@ref).
 
-- `bitonic_max_len`: `Auto` picks `BitonicSort` for slices and arrays up to this length, where
-  its instability is allowed (see [`Auto`](@ref)).
-- `radix_min_len`: `Auto` picks `RadixSort` for whole-array sorts from this length, for the
-  element types and orderings it supports.
+- `bitonic_max_len`: `Auto` picks `BitonicSort` for whole arrays up to this length, where its
+  instability is allowed (see [`Auto`](@ref)).
+- `radix_min_len`: `Auto` picks `RadixSort` for whole arrays from this length, for the element
+  types and orderings it supports.
+- `bitonic_max_slice_len`, `radix_min_slice_len`: the same along `dims`, for the length of the
+  slices; `RadixSort` also needs at least `radix_min_len` elements in all. Sorting a single slice
+  (a vector, or along the only non-singleton dimension) counts as sorting a whole array.
 - `merge_block_size`, `radix_block_size`, `radix_items_per_thread`, `radix_chunk_size`,
   `bitonic_block_size`, `bitonic_items_per_thread`: settings for the algorithms' unset fields.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.SampleSort`; `max_tasks` defaults
@@ -88,10 +93,16 @@ backend's tuning does not set these thresholds.
 Base.@kwdef struct SortTuning
     bitonic_max_len::Int = 0
     radix_min_len::Int = typemax(Int)
+    bitonic_max_slice_len::Int = 0
+    radix_min_slice_len::Int = typemax(Int)
     merge_block_size::Int = 256
-    radix_block_size::Int = 256
+    # Tiles of 1024 elements ranked in chunks of 64: sorting 1M or 16M Float32 or 64-bit integers
+    # takes 5-13% less time than with 256 threads and chunks of 32 on an RTX 5080, 9-15% on an
+    # RTX 6000 Ada, 6-24% on an M1, 39-44% on an Arc A770 and 19-52% on a Radeon iGPU (gfx1036);
+    # the fastest setting measured on each of them is at most 12% faster.
+    radix_block_size::Int = 512
     radix_items_per_thread::Int = 2
-    radix_chunk_size::Int = 32
+    radix_chunk_size::Int = 64
     bitonic_block_size::Int = 256
     bitonic_items_per_thread::Int = 8
     threads_min_elems::Int = 1
@@ -112,20 +123,24 @@ sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!"
 
 
 """
-    resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false) -> SortAlgorithm
+    resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false,
+                 merge_eltypes=(eltype(v), Nothing)) -> SortAlgorithm
 
 Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `backend`, for
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
-concrete algorithm with every field set, or throws an `ArgumentError`.
+concrete algorithm with every field set, or throws an `ArgumentError`. `merge_eltypes` are the
+element types `MergeSort` holds in local memory: the keys it compares (`by.(v)` with a `by`) and
+the values it moves along with them (`Nothing` for none).
 """
 function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
-                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
+                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false,
+                      merge_eltypes::Tuple{Type, Type}=(eltype(v), Nothing))
     T = eltype(v)
     layout = slice_layout(v, dims)
     t = sort_tuning(backend, T)
     a = alg isa Auto ? select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
-    a = fill_defaults(a, t, T)
-    check_sort(a, backend, T, layout, ord; perm, pairs)
+    a = fill_defaults(a, t, T, merge_eltypes)
+    check_sort(a, backend, T, layout, ord; perm, pairs, merge_eltypes)
     return a
 end
 
@@ -133,11 +148,18 @@ function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                      perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
-    if (!a.stable || ties_identical(T, ord)) && layout.len <= t.bitonic_max_len
+    # A single slice sorts like a whole array. Along `dims` the slice length decides, but radix
+    # sort's passes also need as many elements in all as for a whole array.
+    len = layout.len
+    whole = slice_count(layout) <= 1
+    if (!a.stable || ties_identical(T, ord)) &&
+       len <= (whole ? t.bitonic_max_len : t.bitonic_max_slice_len) &&
+       bitonic_fits(T, t.bitonic_block_size, t.bitonic_items_per_thread)
         return BitonicSort()
-    elseif layout isa FlatLayout && radix_supports_eltype(T) && radix_supports_ordering(ord) &&
-           layout.len >= t.radix_min_len
-        return RadixSort()                  # whole arrays only; a single slice is not flat
+    elseif radix_supports_eltype(T) && radix_supports_ordering(ord) &&
+           (whole ? t.radix_min_len : t.radix_min_slice_len) <= len <= RADIX_MAX_LEN &&
+           len * slice_count(layout) >= t.radix_min_len
+        return RadixSort()
     end
     return MergeSort()
 end
@@ -187,31 +209,46 @@ check_fields(a::CPUThreads.SampleSort) = check_threads(a)
 
 # Fill unset fields from the tuning
 
-fill_defaults(a::MergeSort, t::SortTuning, T) =
-    MergeSort(something(a.block_size, t.merge_block_size), a.lowmem)
-fill_defaults(a::RadixSort, t::SortTuning, T) =
+# The largest block size whose tiles of `2 * block_size` keys and values fit in local memory.
+# With `lowmem`, the tiles hold only the values: the indices of `sortperm!`, compared through the
+# keys in global memory.
+function merge_max_block(lowmem, (K, V))
+    bytes = lowmem ? local_sizeof(V) : local_sizeof(K) + local_sizeof(V)
+    LOCAL_MEMORY_BUDGET ÷ max(2 * bytes, 1)
+end
+
+# The default block size shrinks to a power of two whose tiles fit in local memory
+function fill_defaults(a::MergeSort, t::SortTuning, T, merge_eltypes)
+    fitting = prevpow(2, max(merge_max_block(a.lowmem, merge_eltypes), 1))
+    MergeSort(something(a.block_size, min(t.merge_block_size, fitting)), a.lowmem)
+end
+fill_defaults(a::RadixSort, t::SortTuning, T, _) =
     RadixSort(something(a.block_size, t.radix_block_size),
               something(a.items_per_thread, t.radix_items_per_thread),
               something(a.chunk_size, t.radix_chunk_size))
-fill_defaults(a::BitonicSort, t::SortTuning, T) =
+fill_defaults(a::BitonicSort, t::SortTuning, T, _) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
-fill_defaults(a::CPUThreads.SampleSort, t::SortTuning, T) = fill_threads(a, t)
-fill_defaults(a::Algorithm, t::SortTuning, T) =
+fill_defaults(a::CPUThreads.SampleSort, t::SortTuning, T, _) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::SortTuning, T, _) =
     throw(ArgumentError("$(algname(a)) is not a sorting algorithm"))
 
 
 # Check a complete algorithm against the backend, the operation and the arguments
 
-function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs, merge_eltypes)
     check_fields(a)
     require_kernels(a, backend)
     !a.lowmem || (perm && !pairs) || throw(ArgumentError(
         "MergeSort(lowmem=true) is only supported by sortperm!, not by $(sort_opname(perm, pairs))"))
+    K, V = merge_eltypes
+    a.block_size <= merge_max_block(a.lowmem, merge_eltypes) || throw(ArgumentError(
+        "MergeSort: block_size=$(a.block_size) needs more than $(LOCAL_MEMORY_BUDGET) bytes of " *
+        "local memory for keys of type $K" * (V === Nothing ? "" : " and values of type $V")))
     nothing
 end
 
-function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) where {T}
+function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs, _...) where {T}
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
@@ -229,15 +266,19 @@ function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) 
     nothing
 end
 
-function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs, _...)
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "BitonicSort is unstable and does not support $(sort_opname(perm, pairs))"))
+    bitonic_fits(T, a.block_size, a.items_per_thread) || throw(ArgumentError(
+        "BitonicSort: tiles of block_size * items_per_thread = " *
+        "$(a.block_size * a.items_per_thread) elements need more than $(LOCAL_MEMORY_BUDGET) " *
+        "bytes of local memory for element type $T"))
     nothing
 end
 
-function check_sort(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs, _...)
     check_fields(a)
     require_threads(a, backend)
 end

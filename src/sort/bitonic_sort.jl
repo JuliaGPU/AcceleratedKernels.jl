@@ -98,6 +98,12 @@ end
 end
 
 
+# Whether the tiles of `block_size * items_per_thread` elements of `T` fit in local memory. The
+# product cannot overflow: `check_fields` bounds it.
+bitonic_fits(::Type{T}, block_size, items_per_thread) where {T} =
+    block_size * items_per_thread <= LOCAL_MEMORY_BUDGET ÷ max(local_sizeof(T), 1)
+
+
 # GPU bitonic sort of `v` (or of each slice along `dims`), in place.
 function bitonic_sort!(
     v::AbstractArray, backend::Backend, ord::Base.Order.Ordering;

@@ -28,9 +28,11 @@ AK.sort!(v)
 
 Like Base, the sorts are stable by default: elements that compare equal keep their order.
 [`Auto()`](@ref AcceleratedKernels.Auto), the default `alg`, picks an algorithm for the backend, the
-device, the element type, the ordering and the length: `CPUThreads.SampleSort` on the host and,
-until per-device tuning says otherwise, `MergeSort` on GPUs. Pass an algorithm to choose it and its
-settings yourself; an algorithm that cannot run the call is an `ArgumentError`, never replaced:
+device, the element type, the ordering and the length: `CPUThreads.SampleSort` on the host; on
+GPUs, `BitonicSort` for short arrays and slices, `RadixSort` for long ones it supports, and
+`MergeSort` otherwise and on devices whose backend has not been measured. Pass an algorithm to
+choose it and its settings yourself; an algorithm that cannot run the call is an `ArgumentError`,
+never replaced:
 
 | Algorithm | Stable | `dims` | `sortperm!` | `sort_by_key!` | Element types, orderings | Backends |
 |---|---|---|---|---|---|---|

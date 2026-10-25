@@ -374,6 +374,33 @@ end
 end
 
 
+# 256 bytes, ordered by `key`
+struct Wide
+    key::Int64
+    pad::NTuple{31, Int64}
+end
+Wide(key) = Wide(key, ntuple(_ -> 0, 31))
+Base.isless(a::Wide, b::Wide) = isless(a.key, b.key)
+
+if TEST_KERNELS
+@testset "sort: large elements" begin
+    # Tiles of the default sizes would need more local memory than devices have: merge sort
+    # shrinks its default block, bitonic sort rejects them. (`array_from_host` zero-fills, which
+    # OpenCL.jl cannot do for elements of more than 128 bytes.)
+    Random.seed!(0)
+    on_device(h) = copyto!(KernelAbstractions.allocate(BACKEND, eltype(h), size(h)), h)
+    h = [Wide(rand(1:100)) for _ in 1:3000]
+    @test Array(AK.sort!(on_device(h); alg=AK.MergeSort())) == sort(h)
+    @test Array(AK.sortperm(on_device(h); alg=AK.MergeSort())) == sortperm(h)
+    k = rand(Int32(1):Int32(50), 3000)
+    kd, vd = array_from_host(k), on_device(h)
+    AK.sort_by_key!(kd, vd; alg=AK.MergeSort())
+    @test Array(kd) == sort(k) && Array(vd) == h[sortperm(k)]
+    @test_throws ArgumentError AK.sort!(on_device(h); alg=AK.BitonicSort())
+end
+end
+
+
 if TEST_KERNELS && TEST_BITS_UNIONS
 @testset "sort: bits-union elements" begin
     # Merge sort's kernels read such elements through `@Const` (where the backend's arrays can

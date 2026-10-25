@@ -25,11 +25,13 @@ dimension independently.
 `alg` is [`Auto()`](@ref Auto) by default, which chooses an algorithm for the backend and device,
 the element type, the ordering, and the length of the array or slices: on the host,
 [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort); on GPUs,
-[`MergeSort`](@ref). A device's tuning can make it choose [`BitonicSort`](@ref) for short inputs
-or [`RadixSort`](@ref) for long ones where they give the same result, which no backend does yet;
-`Auto(stable=false)` then also allows the unstable `BitonicSort` for elements that compare equal
-without being identical (e.g. floats). An explicit algorithm, with any of its settings, is used as
-given or rejected with an `ArgumentError`.
+[`BitonicSort`](@ref) for short arrays and slices, [`RadixSort`](@ref) for long ones of the
+element types and orderings it supports, and [`MergeSort`](@ref) otherwise, with lengths measured
+for each backend (`MergeSort` on backends without such measurements). `BitonicSort` is unstable,
+so by default `Auto` uses it only where equal elements are identical (integers, `Bool`, `Char`
+under the default ordering or its reverse); `Auto(stable=false)` also allows it for others
+(e.g. floats). An explicit algorithm, with any of its settings, is used as given or rejected with
+an `ArgumentError`.
 
 `backend` is derived from `v`; pass it only for arrays that do not determine their backend.
 
@@ -79,7 +81,10 @@ function sort_setup(
     backend = resolve_backend(backend, v)
     v = one_based(v)
     ord = sort_ordering(lt, by, rev, order)
-    a = resolve_sort(alg, backend, v, dims, ord)
+    # MergeSort sorts the keys `by.(v)` carrying `v` along
+    merge_eltypes = by === identity ? (eltype(v), Nothing) :
+                    (Base.promote_op(by, eltype(v)), eltype(v))
+    a = resolve_sort(alg, backend, v, dims, ord; merge_eltypes)
     return (; plan=sort_plan(a, v, backend, dims, by), ord)
 end
 
@@ -234,7 +239,8 @@ function sortperm_setup(
     backend = resolve_backend(backend, ix, v)
     ix, v = one_based(ix), one_based(v)
     ord = sort_ordering(lt, by, rev, order)
-    a = resolve_sort(alg, backend, v, dims, ord; perm=true)
+    merge_eltypes = (Base.promote_op(by, eltype(v)), eltype(ix))
+    a = resolve_sort(alg, backend, v, dims, ord; perm=true, merge_eltypes)
     return (; plan=Plan(backend, a, sortperm_scratch(a, ix, v, dims, by)), ord)
 end
 
@@ -364,7 +370,8 @@ function sort_by_key_setup(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
     keys, values = one_based(keys), one_based(values)
-    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true)
+    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true,
+                     merge_eltypes=(eltype(keys), eltype(values)))
     return (; plan=Plan(backend, a, sort_by_key_scratch(a, keys, values, dims)), ord)
 end
 
