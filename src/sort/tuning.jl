@@ -75,10 +75,13 @@ end
 Values that drive [`Auto`](@ref) selection and fill unset algorithm fields for sorting on one
 device, as returned by [`sort_tuning`](@ref).
 
-- `bitonic_max_len`: `Auto` picks `BitonicSort` for slices and arrays up to this length, where
-  its instability is allowed (see [`Auto`](@ref)).
-- `radix_min_len`: `Auto` picks `RadixSort` for whole-array sorts from this length, for the
-  element types and orderings it supports.
+- `bitonic_max_len`: `Auto` picks `BitonicSort` for whole arrays up to this length, where its
+  instability is allowed (see [`Auto`](@ref)).
+- `radix_min_len`: `Auto` picks `RadixSort` for whole arrays from this length, for the element
+  types and orderings it supports.
+- `bitonic_max_slice_len`, `radix_min_slice_len`: the same along `dims`, for the length of the
+  slices; `RadixSort` also needs at least `radix_min_len` elements in all. Sorting a single slice
+  (a vector, or along the only non-singleton dimension) counts as sorting a whole array.
 - `merge_block_size`, `radix_block_size`, `radix_items_per_thread`, `radix_chunk_size`,
   `bitonic_block_size`, `bitonic_items_per_thread`: settings for the algorithms' unset fields.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.SampleSort`; `max_tasks` defaults
@@ -90,6 +93,8 @@ backend's tuning does not set these thresholds.
 Base.@kwdef struct SortTuning
     bitonic_max_len::Int = 0
     radix_min_len::Int = typemax(Int)
+    bitonic_max_slice_len::Int = 0
+    radix_min_slice_len::Int = typemax(Int)
     merge_block_size::Int = 256
     # Tiles of 1024 elements ranked in chunks of 64: sorting 1M or 16M Float32 or 64-bit integers
     # takes 5-13% less time than with 256 threads and chunks of 32 on an RTX 5080, 9-15% on an
@@ -143,12 +148,18 @@ function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                      perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
-    if (!a.stable || ties_identical(T, ord)) && layout.len <= t.bitonic_max_len &&
+    # A single slice sorts like a whole array. Along `dims` the slice length decides, but radix
+    # sort's passes also need as many elements in all as for a whole array.
+    len = layout.len
+    whole = slice_count(layout) <= 1
+    if (!a.stable || ties_identical(T, ord)) &&
+       len <= (whole ? t.bitonic_max_len : t.bitonic_max_slice_len) &&
        bitonic_fits(T, t.bitonic_block_size, t.bitonic_items_per_thread)
         return BitonicSort()
-    elseif layout isa FlatLayout && radix_supports_eltype(T) && radix_supports_ordering(ord) &&
-           layout.len >= t.radix_min_len
-        return RadixSort()                  # whole arrays only; a single slice is not flat
+    elseif radix_supports_eltype(T) && radix_supports_ordering(ord) &&
+           (whole ? t.radix_min_len : t.radix_min_slice_len) <= len <= RADIX_MAX_LEN &&
+           len * slice_count(layout) >= t.radix_min_len
+        return RadixSort()
     end
     return MergeSort()
 end

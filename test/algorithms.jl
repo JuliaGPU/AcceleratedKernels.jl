@@ -31,6 +31,12 @@ Base.size(a::FakeArray) = size(a.data)
 Base.getindex(a::FakeArray, i::Int...) = a.data[i...]
 KernelAbstractions.get_backend(::FakeArray) = FakeBackend()
 
+# An array of which resolution only sees the size
+struct SizeOnly{T, N} <: AbstractArray{T, N}
+    dims::NTuple{N, Int}
+end
+Base.size(a::SizeOnly) = a.dims
+
 # A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
 struct NoKernelsBackend <: KernelAbstractions.Backend end
 AK.runs_kernels(::NoKernelsBackend) = false
@@ -75,8 +81,10 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
     @test resolve(AK.Auto(), zeros(Int32, 10, 10); dims=1) isa AK.MergeSort
 
     # Thresholds: bitonic sort up to and including `bitonic_max_len`, radix sort from
-    # `radix_min_len`, for element types and orderings where they give the same result
-    with_tuning(AK.SortTuning(bitonic_max_len=1024, radix_min_len=4096, radix_block_size=128,
+    # `radix_min_len`, for element types and orderings where they give the same result; along
+    # `dims`, the slice thresholds apply to the slices' length
+    with_tuning(AK.SortTuning(bitonic_max_len=1024, radix_min_len=4096, bitonic_max_slice_len=64,
+                              radix_min_slice_len=256, radix_block_size=128,
                               radix_items_per_thread=4, radix_chunk_size=64, bitonic_block_size=64,
                               bitonic_items_per_thread=4)) do
         @test resolve(AK.Auto(), zeros(Int32, 1024)) === AK.BitonicSort(64, 4)
@@ -84,19 +92,42 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
         @test resolve(AK.Auto(), zeros(Int32, 4095)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 4096)) === AK.RadixSort(128, 4, 64)
         @test resolve(AK.Auto(), zeros(Int32, 4096); ord=REV) isa AK.RadixSort
-        @test resolve(AK.Auto(), zeros(Int32, 64, 16); dims=1) isa AK.BitonicSort
-        @test resolve(AK.Auto(), zeros(Int32, 2048, 16); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 64, 64)) isa AK.RadixSort      # dims=: sorts flat
 
-        # Radix sort is for whole arrays only: a vector or an N×1 matrix sorted along `dims`
-        # is a slice, however long
-        @test resolve(AK.Auto(), zeros(Int32, 10_000); dims=1) isa AK.MergeSort
-        @test resolve(AK.Auto(), zeros(Int32, 10_000, 1); dims=1) isa AK.MergeSort
-        @test resolve(AK.Auto(), zeros(Int32, 10_000, 1)) isa AK.RadixSort
+        # Along `dims`, contiguous or strided slices
+        for (sz, d) in (((64, 16), 1), ((16, 64), 2), ((2, 64, 8), 2))
+            @test resolve(AK.Auto(), zeros(Int32, sz); dims=d) === AK.BitonicSort(64, 4)
+        end
+        @test resolve(AK.Auto(), zeros(Int32, 65, 16); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 256, 16); dims=1) === AK.RadixSort(128, 4, 64)
+        @test resolve(AK.Auto(), zeros(Int32, 16, 256); dims=2) isa AK.RadixSort
+        @test resolve(AK.Auto(), zeros(Int32, 256, 16); dims=1, ord=REV) isa AK.RadixSort
+        @test resolve(AK.Auto(), zeros(Int32, 255, 32); dims=1) isa AK.MergeSort
+        # ... where the array also has at least `radix_min_len` elements
+        @test resolve(AK.Auto(), zeros(Int32, 256, 15); dims=1) isa AK.MergeSort
+
+        # A single slice sorts like a whole array
+        @test resolve(AK.Auto(), zeros(Int32, 1024); dims=1) isa AK.BitonicSort
+        @test resolve(AK.Auto(), zeros(Int32, 1024, 1); dims=1) isa AK.BitonicSort
+        @test resolve(AK.Auto(), zeros(Int32, 2048); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 10_000); dims=1) isa AK.RadixSort
+        @test resolve(AK.Auto(), zeros(Int32, 10_000, 1); dims=1) isa AK.RadixSort
+        @test resolve(AK.Auto(), zeros(Int32, 1, 10_000); dims=2) isa AK.RadixSort
+
+        # ... of at most 2^32 elements per array or slice
+        if Sys.WORD_SIZE == 64
+            @test resolve(AK.Auto(), SizeOnly{Int32, 1}((2^32 + 1,))) isa AK.MergeSort
+            @test resolve(AK.Auto(), SizeOnly{Int32, 2}((2^32 + 1, 2)); dims=1) isa AK.MergeSort
+            @test resolve(AK.Auto(), SizeOnly{Int32, 1}((2^32,))) isa AK.RadixSort
+            @test_throws ArgumentError resolve(AK.RadixSort(), SizeOnly{Int32, 1}((2^32 + 1,)))
+        end
 
         # Radix sort needs a supported element type and the default ordering or its reverse
         @test resolve(AK.Auto(), zeros(Int16, 10_000)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 10_000); ord=Base.Order.ord(isless, abs, nothing)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 10_000); ord=Base.Order.ord(>, identity, nothing)) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int16, 256, 16); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 256, 16); dims=1, ord=Base.Order.ord(isless, abs, nothing)) isa AK.MergeSort
 
         # Stable by default: bitonic sort only where equal elements are bitwise identical
         for T in (Int8, UInt16, Int32, UInt64, Int128, Bool, Char)
@@ -111,6 +142,8 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
         @test resolve(AK.Auto(), zeros(Int32, 100); ord=Base.Order.ord(isless, abs, nothing)) isa AK.MergeSort
         @test resolve(AK.Auto(), zeros(Int32, 100); ord=Base.Order.ord((a, b) -> a > b, identity, nothing)) isa AK.MergeSort
         @test resolve(AK.Auto(stable=false), zeros(Int32, 100); ord=Base.Order.ord(isless, abs, nothing)) isa AK.BitonicSort
+        @test resolve(AK.Auto(), zeros(Float32, 64, 16); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(stable=false), zeros(Float32, 64, 16); dims=1) isa AK.BitonicSort
 
         # Bitonic sort only where its tiles (here of 256 elements) fit in local memory
         @test resolve(AK.Auto(stable=false), Vector{NTuple{16, Float64}}(undef, 100)) isa AK.BitonicSort
@@ -120,6 +153,19 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
         @test resolve(AK.Auto(), zeros(Int32, 100); perm=true) isa AK.MergeSort
         @test resolve(AK.Auto(stable=false), zeros(Float32, 100); perm=true) isa AK.MergeSort
         @test resolve(AK.Auto(stable=false), zeros(Int32, 10_000); pairs=true) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 64, 16); dims=1, perm=true) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 256, 16); dims=1, pairs=true) isa AK.MergeSort
+    end
+
+    # The whole-array thresholds do not apply along `dims`, nor the slice thresholds to whole
+    # arrays
+    with_tuning(AK.SortTuning(bitonic_max_len=1024, radix_min_len=0)) do
+        @test resolve(AK.Auto(), zeros(Int32, 64, 16); dims=1) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 4096, 16); dims=1) isa AK.MergeSort
+    end
+    with_tuning(AK.SortTuning(bitonic_max_slice_len=1024, radix_min_slice_len=0)) do
+        @test resolve(AK.Auto(), zeros(Int32, 64)) isa AK.MergeSort
+        @test resolve(AK.Auto(), zeros(Int32, 4096)) isa AK.MergeSort
     end
 
     # A different tuning changes the selection
