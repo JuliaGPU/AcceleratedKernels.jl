@@ -2,6 +2,9 @@
 # provide (`CL_DEVICE_LOCAL_MEM_SIZE`, full profile), and Metal's threadgroup memory limit.
 const LOCAL_MEMORY_BUDGET = 32 * 1024
 
+# Bytes of local memory per element of type `T` (an isbits union adds a type tag per element)
+local_sizeof(::Type{T}) where {T} = Base.aligned_sizeof(T) + Base.isbitsunion(T)
+
 # The default of every `init` keyword: no initial value given. As in Base, this differs from
 # `init=nothing`, which is an explicit initial value.
 struct NoInit end

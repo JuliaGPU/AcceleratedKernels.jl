@@ -59,7 +59,7 @@ end
 GPU bitonic sorting network, for whole arrays and `dims`, every element type and ordering. It is
 unstable and does not support `sortperm!` or `sort_by_key!`. Fastest for small arrays and short
 slices: tiles of `block_size * items_per_thread` elements sort in local memory, larger inputs need
-global passes. Both settings must be positive powers of two.
+global passes. Both settings must be positive powers of two, and a tile must fit in 32 KiB.
 """
 Base.@kwdef struct BitonicSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -133,7 +133,8 @@ function select_sort(a::Auto, backend, t::SortTuning, ::Type{T}, layout, ord;
                      perm, pairs) where {T}
     runs_threads(backend) && return CPUThreads.SampleSort()
     (perm || pairs) && return MergeSort()   # the only stable, key/value-capable kernel algorithm
-    if (!a.stable || ties_identical(T, ord)) && layout.len <= t.bitonic_max_len
+    if (!a.stable || ties_identical(T, ord)) && layout.len <= t.bitonic_max_len &&
+       bitonic_fits(T, t.bitonic_block_size, t.bitonic_items_per_thread)
         return BitonicSort()
     elseif layout isa FlatLayout && radix_supports_eltype(T) && radix_supports_ordering(ord) &&
            layout.len >= t.radix_min_len
@@ -234,6 +235,10 @@ function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
         "BitonicSort is unstable and does not support $(sort_opname(perm, pairs))"))
+    bitonic_fits(T, a.block_size, a.items_per_thread) || throw(ArgumentError(
+        "BitonicSort: tiles of block_size * items_per_thread = " *
+        "$(a.block_size * a.items_per_thread) elements need more than $(LOCAL_MEMORY_BUDGET) " *
+        "bytes of local memory for element type $T"))
     nothing
 end
 

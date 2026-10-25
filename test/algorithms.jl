@@ -112,6 +112,10 @@ resolve(alg, v; dims=:, ord=FWD, backend=FAKE, kw...) = AK.resolve_sort(alg, bac
         @test resolve(AK.Auto(), zeros(Int32, 100); ord=Base.Order.ord((a, b) -> a > b, identity, nothing)) isa AK.MergeSort
         @test resolve(AK.Auto(stable=false), zeros(Int32, 100); ord=Base.Order.ord(isless, abs, nothing)) isa AK.BitonicSort
 
+        # Bitonic sort only where its tiles (here of 256 elements) fit in local memory
+        @test resolve(AK.Auto(stable=false), Vector{NTuple{16, Float64}}(undef, 100)) isa AK.BitonicSort
+        @test resolve(AK.Auto(stable=false), Vector{NTuple{17, Float64}}(undef, 100)) isa AK.MergeSort
+
         # sortperm! and key/value sorting always observe stability, and need a permutation path
         @test resolve(AK.Auto(), zeros(Int32, 100); perm=true) isa AK.MergeSort
         @test resolve(AK.Auto(stable=false), zeros(Float32, 100); perm=true) isa AK.MergeSort
@@ -206,6 +210,12 @@ end
     @test rejects(AK.BitonicSort(); perm=true)
     @test rejects(AK.BitonicSort(); pairs=true)
     @test !rejects(AK.BitonicSort(), zeros(Float32, 4, 4); dims=2, ord=Base.Order.ord(isless, abs, nothing))
+    @test !rejects(AK.BitonicSort(block_size=1024, items_per_thread=8), zeros(Float32, 16))
+    @test rejects(AK.BitonicSort(block_size=1024, items_per_thread=8), zeros(Int64, 16))  # local memory
+    @test rejects(AK.BitonicSort(block_size=1024, items_per_thread=16), zeros(Float32, 16))
+    @test rejects(AK.BitonicSort(), Vector{NTuple{4, Float64}}(undef, 16))
+    @test !rejects(AK.BitonicSort(items_per_thread=4), Vector{NTuple{4, Float64}}(undef, 16))
+    @test rejects(AK.BitonicSort(block_size=1024, items_per_thread=4), Vector{Union{Missing, Int64}}(undef, 16))
 
     # CPUThreads.SampleSort only on the host, where every operation supports it
     @test rejects(AK.CPUThreads.SampleSort())
