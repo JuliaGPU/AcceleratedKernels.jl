@@ -91,9 +91,13 @@ Base.@kwdef struct SortTuning
     bitonic_max_len::Int = 0
     radix_min_len::Int = typemax(Int)
     merge_block_size::Int = 256
-    radix_block_size::Int = 256
+    # Tiles of 1024 elements ranked in chunks of 64: sorting 1M or 16M Float32 or 64-bit integers
+    # takes 5-13% less time than with 256 threads and chunks of 32 on an RTX 5080, 9-15% on an
+    # RTX 6000 Ada, 6-24% on an M1, 39-44% on an Arc A770 and 19-52% on a Radeon iGPU (gfx1036);
+    # the fastest setting measured on each of them is at most 12% faster.
+    radix_block_size::Int = 512
     radix_items_per_thread::Int = 2
-    radix_chunk_size::Int = 32
+    radix_chunk_size::Int = 64
     bitonic_block_size::Int = 256
     bitonic_items_per_thread::Int = 8
     threads_min_elems::Int = 1
