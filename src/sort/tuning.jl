@@ -19,8 +19,10 @@
 GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
 kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
 (any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
-passes merge the tiles. `lowmem=true` selects a `sortperm!` path that does not copy the keys, at
-the cost of reading them from global memory in every comparison; other operations reject it.
+passes merge the tiles. A tile, with the values moved along, must fit in 32 KiB; for large
+elements, the default `block_size` shrinks to fit. `lowmem=true` selects a `sortperm!` path that
+does not copy the keys, at the cost of reading them from global memory in every comparison; other
+operations reject it.
 """
 Base.@kwdef struct MergeSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -112,20 +114,24 @@ sort_opname(perm, pairs) = pairs ? "sort_by_key!" : perm ? "sortperm!" : "sort!"
 
 
 """
-    resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false) -> SortAlgorithm
+    resolve_sort(alg, backend, v, dims, ord; perm=false, pairs=false,
+                 merge_eltypes=(eltype(v), Nothing)) -> SortAlgorithm
 
 Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `backend`, for
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
-concrete algorithm with every field set, or throws an `ArgumentError`.
+concrete algorithm with every field set, or throws an `ArgumentError`. `merge_eltypes` are the
+element types `MergeSort` holds in local memory: the keys it compares (`by.(v)` with a `by`) and
+the values it moves along with them (`Nothing` for none).
 """
 function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
-                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false)
+                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false,
+                      merge_eltypes::Tuple{Type, Type}=(eltype(v), Nothing))
     T = eltype(v)
     layout = slice_layout(v, dims)
     t = sort_tuning(backend, T)
     a = alg isa Auto ? select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
-    a = fill_defaults(a, t, T)
-    check_sort(a, backend, T, layout, ord; perm, pairs)
+    a = fill_defaults(a, t, T, merge_eltypes)
+    check_sort(a, backend, T, layout, ord; perm, pairs, merge_eltypes)
     return a
 end
 
@@ -188,31 +194,46 @@ check_fields(a::CPUThreads.SampleSort) = check_threads(a)
 
 # Fill unset fields from the tuning
 
-fill_defaults(a::MergeSort, t::SortTuning, T) =
-    MergeSort(something(a.block_size, t.merge_block_size), a.lowmem)
-fill_defaults(a::RadixSort, t::SortTuning, T) =
+# The largest block size whose tiles of `2 * block_size` keys and values fit in local memory.
+# With `lowmem`, the tiles hold only the values: the indices of `sortperm!`, compared through the
+# keys in global memory.
+function merge_max_block(lowmem, (K, V))
+    bytes = lowmem ? local_sizeof(V) : local_sizeof(K) + local_sizeof(V)
+    LOCAL_MEMORY_BUDGET ÷ max(2 * bytes, 1)
+end
+
+# The default block size shrinks to a power of two whose tiles fit in local memory
+function fill_defaults(a::MergeSort, t::SortTuning, T, merge_eltypes)
+    fitting = prevpow(2, max(merge_max_block(a.lowmem, merge_eltypes), 1))
+    MergeSort(something(a.block_size, min(t.merge_block_size, fitting)), a.lowmem)
+end
+fill_defaults(a::RadixSort, t::SortTuning, T, _) =
     RadixSort(something(a.block_size, t.radix_block_size),
               something(a.items_per_thread, t.radix_items_per_thread),
               something(a.chunk_size, t.radix_chunk_size))
-fill_defaults(a::BitonicSort, t::SortTuning, T) =
+fill_defaults(a::BitonicSort, t::SortTuning, T, _) =
     BitonicSort(something(a.block_size, t.bitonic_block_size),
                 something(a.items_per_thread, t.bitonic_items_per_thread))
-fill_defaults(a::CPUThreads.SampleSort, t::SortTuning, T) = fill_threads(a, t)
-fill_defaults(a::Algorithm, t::SortTuning, T) =
+fill_defaults(a::CPUThreads.SampleSort, t::SortTuning, T, _) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::SortTuning, T, _) =
     throw(ArgumentError("$(algname(a)) is not a sorting algorithm"))
 
 
 # Check a complete algorithm against the backend, the operation and the arguments
 
-function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::MergeSort, backend, T, layout, ord; perm, pairs, merge_eltypes)
     check_fields(a)
     require_kernels(a, backend)
     !a.lowmem || (perm && !pairs) || throw(ArgumentError(
         "MergeSort(lowmem=true) is only supported by sortperm!, not by $(sort_opname(perm, pairs))"))
+    K, V = merge_eltypes
+    a.block_size <= merge_max_block(a.lowmem, merge_eltypes) || throw(ArgumentError(
+        "MergeSort: block_size=$(a.block_size) needs more than $(LOCAL_MEMORY_BUDGET) bytes of " *
+        "local memory for keys of type $K" * (V === Nothing ? "" : " and values of type $V")))
     nothing
 end
 
-function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) where {T}
+function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs, _...) where {T}
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
@@ -230,7 +251,7 @@ function check_sort(a::RadixSort, backend, ::Type{T}, layout, ord; perm, pairs) 
     nothing
 end
 
-function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs, _...)
     check_fields(a)
     require_kernels(a, backend)
     (perm || pairs) && throw(ArgumentError(
@@ -242,7 +263,7 @@ function check_sort(a::BitonicSort, backend, T, layout, ord; perm, pairs)
     nothing
 end
 
-function check_sort(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs)
+function check_sort(a::CPUThreads.SampleSort, backend, T, layout, ord; perm, pairs, _...)
     check_fields(a)
     require_threads(a, backend)
 end

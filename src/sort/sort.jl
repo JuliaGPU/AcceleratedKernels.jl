@@ -79,7 +79,10 @@ function sort_setup(
     backend = resolve_backend(backend, v)
     v = one_based(v)
     ord = sort_ordering(lt, by, rev, order)
-    a = resolve_sort(alg, backend, v, dims, ord)
+    # MergeSort sorts the keys `by.(v)` carrying `v` along
+    merge_eltypes = by === identity ? (eltype(v), Nothing) :
+                    (Base.promote_op(by, eltype(v)), eltype(v))
+    a = resolve_sort(alg, backend, v, dims, ord; merge_eltypes)
     return (; plan=sort_plan(a, v, backend, dims, by), ord)
 end
 
@@ -234,7 +237,8 @@ function sortperm_setup(
     backend = resolve_backend(backend, ix, v)
     ix, v = one_based(ix), one_based(v)
     ord = sort_ordering(lt, by, rev, order)
-    a = resolve_sort(alg, backend, v, dims, ord; perm=true)
+    merge_eltypes = (Base.promote_op(by, eltype(v)), eltype(ix))
+    a = resolve_sort(alg, backend, v, dims, ord; perm=true, merge_eltypes)
     return (; plan=Plan(backend, a, sortperm_scratch(a, ix, v, dims, by)), ord)
 end
 
@@ -364,7 +368,8 @@ function sort_by_key_setup(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
     keys, values = one_based(keys), one_based(values)
-    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true)
+    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true,
+                     merge_eltypes=(eltype(keys), eltype(values)))
     return (; plan=Plan(backend, a, sort_by_key_scratch(a, keys, values, dims)), ord)
 end
 

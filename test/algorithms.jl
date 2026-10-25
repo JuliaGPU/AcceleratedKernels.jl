@@ -147,6 +147,15 @@ end
         @test resolve(AK.RadixSort(items_per_thread=1), v) === AK.RadixSort(512, 1, 64)
         @test resolve(AK.RadixSort(chunk_size=16), v) === AK.RadixSort(512, 8, 16)
         @test resolve(AK.BitonicSort(block_size=128), v) === AK.BitonicSort(128, 16)
+
+        # Merge sort's default block size shrinks until its tiles fit in local memory
+        big = Vector{NTuple{32, Float64}}(undef, 16)                # 256 bytes
+        @test resolve(AK.MergeSort(), big) === AK.MergeSort(64, false)
+        @test resolve(AK.Auto(), big) === AK.MergeSort(64, false)
+        @test resolve(AK.MergeSort(), big; perm=true, merge_eltypes=(eltype(big), Int)) ===
+              AK.MergeSort(32, false)
+        @test resolve(AK.MergeSort(lowmem=true), big; perm=true,
+                      merge_eltypes=(eltype(big), Int)) === AK.MergeSort(128, true)
     end
     # On the host, `max_tasks` defaults to the number of threads
     min_elems = AK.sort_tuning(HOST, Float32).threads_min_elems
@@ -171,6 +180,12 @@ end
     @test rejects(AK.MergeSort(lowmem=true); pairs=true)            # sort_by_key!
     @test !rejects(AK.MergeSort(lowmem=true); perm=true)
     @test !rejects(AK.MergeSort(), zeros(Float32, 4, 4); dims=2, perm=true)
+    @test !rejects(AK.MergeSort(block_size=4096))                   # tiles of up to 32 KiB
+    @test rejects(AK.MergeSort(block_size=8192))
+    @test rejects(AK.MergeSort(block_size=2048); perm=true, merge_eltypes=(Float32, Int64))
+    @test !rejects(AK.MergeSort(block_size=2048, lowmem=true); perm=true,
+                   merge_eltypes=(Float32, Int64))                  # only the indices
+    @test rejects(AK.MergeSort(block_size=1), Vector{NTuple{2049, Float64}}(undef, 16))
 
     # RadixSort
     @test rejects(AK.RadixSort(block_size=0))
