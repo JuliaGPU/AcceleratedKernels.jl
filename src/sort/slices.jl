@@ -74,6 +74,10 @@ Base.eltype(::Type{ContiguousSliceView{A}}) where A = eltype(A)
     SliceView(v, offset, layout.stride)
 end
 
+# No values to move along with the keys
+@inline slice(::Nothing, ::ContiguousLayout, i) = nothing
+@inline slice(::Nothing, ::SliceLayout, i) = nothing
+
 
 # CPU: run `f(slice)` on a view of each slice of `v` along `dims`, slices split across tasks
 function foreach_slice(f, v::AbstractArray{T, N}, dims::Integer; max_tasks, min_elems) where {T, N}
