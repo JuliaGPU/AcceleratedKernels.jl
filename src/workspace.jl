@@ -11,10 +11,44 @@ end
 scratch(::Type{T}, dims::Integer...) where {T} = Scratch{T, length(dims)}(Int.(dims))
 scratch(::Type{T}, dims::Tuple) where {T} = Scratch{T, length(dims)}(Int.(dims))
 
-# The public form of the sizes: `(eltype, dims)` pairs
+# An operation's scratch: its backend, its resolved algorithm (which the operation runs with),
+# and its buffers, as a `NamedTuple` of `Scratch` requirements and of the plans of the
+# operations it calls
+struct Plan{B <: Backend, A, S <: NamedTuple}
+    backend::B
+    alg::A
+    sizes::S
+end
+
+# `plan(op, args...; kwargs...)` has one method per operation that takes a workspace, with the
+# operation's arguments (without `workspace`)
+plan(op, args...; kwargs...) = throw(ArgumentError(
+    "`$op` takes no workspace for arguments of types $(join(Base.map(Core.Typeof, args), ", "))"))
+
+# The public form of the sizes: `(eltype, dims)` pairs, nested for the operations a plan calls
 size_pairs(sizes::NamedTuple) = Base.map(size_pairs, sizes)
+size_pairs(p::Plan) = size_pairs(p.sizes)
 size_pairs(b::Scratch{T}) where {T} = (T, b.dims)
 Base.show(io::IO, b::Scratch) = show(io, size_pairs(b))
+
+nbytes(sizes::NamedTuple) = Base.sum(nbytes, values(sizes); init=0)
+nbytes(p::Plan) = nbytes(p.sizes)
+nbytes(b::Scratch{T}) where {T} = Base.prod(b.dims; init=1) * Base.elsize(Array{T})
+
+# Whether a workspace made from plan `a` serves a call with plan `b`: the same backend,
+# algorithms and buffer sizes, also in the plans of the operations they call. A plan holds
+# nothing of the call's arrays, so that a workspace serves any call that needs the same buffers.
+same_plan(a::Plan, b::Plan) =
+    a.backend == b.backend && a.alg == b.alg && same_plan(a.sizes, b.sizes)
+same_plan(a::NamedTuple{K}, b::NamedTuple{K}) where {K} = Base.all(Base.map(same_plan, a, b))
+same_plan(a::Scratch, b::Scratch) = a == b
+same_plan(a, b) = false
+
+# The resolved algorithms of a plan, with those of the operations it calls
+function algorithms(p::Plan)
+    nested = (; (k => algorithms(v) for (k, v) in pairs(p.sizes) if v isa Plan)...)
+    return isempty(nested) ? p.alg : (p.alg, nested)
+end
 
 
 """
@@ -22,8 +56,9 @@ Base.show(io::IO, b::Scratch) = show(io, size_pairs(b))
 
 Scratch memory for one operation, made by [`workspace`](@ref) and passed to the operation with
 its `workspace` keyword. A workspace records the backend and device it was made for, the
-algorithm the operation resolved to, and its buffers; a call whose arguments need a different
-algorithm or other buffers throws an `ArgumentError` instead of using it.
+algorithms the operation and the operations it calls resolved to, and its buffers; a call whose
+arguments need a different algorithm or other buffers throws an `ArgumentError` instead of using
+it.
 
 A workspace holds no state between calls, so it can be reused by any number of calls, but not by
 calls that may run at the same time (on several tasks or streams). It covers the operations'
@@ -32,39 +67,16 @@ per-task bookkeeping, and `Base.sort!` its own scratch for the per-task sorts of
 `CPUThreads.SampleSort` and for the slices of a sort along `dims`; and before Julia 1.12, a
 reduction of several arrays or of a `Broadcasted` object materializes it first.
 """
-struct Workspace{B <: Backend, A, N <: NamedTuple, S <: NamedTuple, T <: NamedTuple}
-    backend::B
+struct Workspace{P <: Plan, T <: NamedTuple}
+    plan::P
     device::Int
-    alg::A
-    nested::N
-    sizes::S
     buffers::T
 end
 
 function Base.show(io::IO, ws::Workspace)
-    print(io, "Workspace(", backend_name(ws.backend), ", ", algname(ws.alg), ", ",
-          Base.format_bytes(nbytes(ws.sizes)), ")")
+    print(io, "Workspace(", backend_name(ws.plan.backend), ", ", algname(ws.plan.alg), ", ",
+          Base.format_bytes(nbytes(ws.plan)), ")")
 end
-
-nbytes(sizes::NamedTuple) = Base.sum(nbytes, values(sizes); init=0)
-nbytes(b::Scratch{T}) where {T} = Base.prod(b.dims; init=1) * Base.elsize(Array{T})
-
-
-# An operation's scratch: its backend, its resolved algorithm (which the operation runs with),
-# the resolved algorithms of the operations it calls, and its buffers, as a `NamedTuple` of
-# `(eltype, dims)` requirements, or of the `NamedTuple`s of nested operations.
-struct Plan{B <: Backend, A, N <: NamedTuple, S <: NamedTuple}
-    backend::B
-    alg::A
-    nested::N
-    sizes::S
-end
-Plan(backend, alg, sizes::NamedTuple) = Plan(backend, alg, (;), sizes)
-
-# `plan(op, args...; kwargs...)` has one method per operation that takes a workspace, with the
-# operation's arguments (without `workspace`)
-plan(op, args...; kwargs...) = throw(ArgumentError(
-    "`$op` takes no workspace for arguments of types $(join(Base.map(Core.Typeof, args), ", "))"))
 
 
 
@@ -85,7 +97,7 @@ julia> AK.workspace_size(AK.sum, CuArray(rand(Float32, 10_000)))
 (partials = (Float32, (4,)),)
 ```
 """
-workspace_size(op, args...; kwargs...) = size_pairs(plan(op, args...; kwargs...).sizes)
+workspace_size(op, args...; kwargs...) = size_pairs(plan(op, args...; kwargs...))
 
 """
     workspace(op, args...; kwargs...) -> Workspace
@@ -115,30 +127,33 @@ operation's arrays.
 """
 function workspace(op, args...; kwargs...)
     p = plan(op, args...; kwargs...)
-    return Workspace(p.backend, KernelAbstractions.device(p.backend), p.alg, p.nested, p.sizes,
-                     allocate_scratch(p.backend, p.sizes))
+    return Workspace(p, KernelAbstractions.device(p.backend), allocate_scratch(p.backend, p))
 end
 
 allocate_scratch(backend, sizes::NamedTuple) = Base.map(s -> allocate_scratch(backend, s), sizes)
+allocate_scratch(backend, p::Plan) = allocate_scratch(backend, p.sizes)
 allocate_scratch(backend, b::Scratch{T}) where {T} = KernelAbstractions.allocate(backend, T, b.dims)
 
 # The buffers of the plan: the workspace's, checked against the plan and the operation's arrays,
 # or new ones
-scratch_buffers(p::Plan, ::Nothing, arrays...) = allocate_scratch(p.backend, p.sizes)
+scratch_buffers(p::Plan, ::Nothing, arrays...) = allocate_scratch(p.backend, p)
 function scratch_buffers(p::Plan, ws::Workspace, arrays...)
-    ws.backend == p.backend && ws.device == KernelAbstractions.device(p.backend) ||
-        throw(ArgumentError("the workspace was made for another backend or device"))
-    ws.alg == p.alg && ws.nested == p.nested || throw(ArgumentError(
-        "the workspace was made for $(ws.alg) $(ws.nested), but this call resolves to " *
-        "$(p.alg) $(p.nested)"))
-    ws.sizes == p.sizes || throw(ArgumentError(
-        "the workspace holds the buffers $(size_pairs(ws.sizes)), but this call needs " *
-        "$(size_pairs(p.sizes))"))
+    ws.device == KernelAbstractions.device(p.backend) && same_plan(ws.plan, p) ||
+        throw(plan_mismatch(ws, p))
     for b in leaves(ws.buffers), a in arrays
         mayalias(b, a) &&
             throw(ArgumentError("the workspace must not alias the operation's arrays"))
     end
     return ws.buffers
+end
+function plan_mismatch(ws::Workspace, p::Plan)
+    ws.plan.backend == p.backend && ws.device == KernelAbstractions.device(p.backend) ||
+        return ArgumentError("the workspace was made for another backend or device")
+    algorithms(ws.plan) == algorithms(p) || return ArgumentError(
+        "the workspace was made for $(algorithms(ws.plan)), but this call resolves to " *
+        "$(algorithms(p))")
+    return ArgumentError("the workspace holds the buffers $(size_pairs(ws.plan)), but this " *
+                         "call needs $(size_pairs(p))")
 end
 scratch_buffers(p::Plan, ws, arrays...) =
     throw(ArgumentError("`workspace` must be a `Workspace` from `workspace`, got $(typeof(ws))"))

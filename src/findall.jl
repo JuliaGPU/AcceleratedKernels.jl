@@ -280,14 +280,14 @@ function findall_setup(v, items, predicate::Bool, backend, alg)
     a = resolve_findall(alg, backend, eltype(v))
     n = length(v)
     mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)
-    counts, nested = if a isa ScanScatter
+    counts = if a isa ScanScatter
         num_blocks = cld(n, a.block_size * a.items_per_thread)
-        scan = scan_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
-        (; counts=scratch(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
+        (; counts=scratch(Int, num_blocks),
+         scan=scan_setup(+, Int, Int, (num_blocks,), backend; init=0).plan)
     else
-        (; counts=scratch(Int, task_count(n, a.max_tasks, a.min_elems))), (;)
+        (; counts=scratch(Int, task_count(n, a.max_tasks, a.min_elems)))
     end
-    return (; plan=Plan(backend, a, nested, merge(mask, counts)))
+    return (; plan=Plan(backend, a, merge(mask, counts)))
 end
 
 function findall_run(pred, v, items, s, bufs)
