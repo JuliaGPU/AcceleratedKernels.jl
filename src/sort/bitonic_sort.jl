@@ -17,7 +17,7 @@
     i, partner
 end
 
-@inline function compare_exchange!(elems, ord, i, partner)
+Base.@propagate_inbounds function compare_exchange!(elems, ord, i, partner)
     a = elems[i + 1]
     b = elems[partner + 1]
     if Base.Order.lt(ord, b, a)
