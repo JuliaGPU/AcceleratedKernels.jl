@@ -19,4 +19,16 @@ AK.predicate_tuning(::MetalBackend, ::Type) = AK.PredicateTuning(prefer_concurre
 # Float32s, which takes about 20% less time than a block per output on an M1 (and ties at 4096).
 AK.reduce_tuning(::MetalBackend, ::Type) = AK.ReduceTuning(block_size=64, lanes_max_bytes=256)
 
+# Sorting random keys on an M1. `BitonicSort` sorts whole arrays of up to 512 elements 1.03-1.4x
+# faster than `MergeSort` (every sort takes at least about 0.2 ms), and slices of up to 1024
+# elements along `dims` 1.0-13x faster in arrays of 2^16 elements or more (up to 10% slower in
+# arrays of 2^12). `RadixSort` sorts whole arrays of 2^17 32-bit elements 1.4x faster and of 2^18
+# 64-bit elements 1.1x faster (1.9x at 2^23). Along `dims`, it sorts 32-bit slices of 2^15
+# elements in arrays of 2^17 or more 1.1-3.3x faster; 64-bit slices need 10^5 to 10^6 elements.
+AK.sort_tuning(::MetalBackend, ::Type{T}) where {T} =
+    sizeof(T) <= 4 ?
+    AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 17, bitonic_max_slice_len=1024,
+                  radix_min_slice_len=1 << 15) :
+    AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 18, bitonic_max_slice_len=1024)
+
 end
