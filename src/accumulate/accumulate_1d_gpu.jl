@@ -122,6 +122,12 @@ end
 
 # Scan `v` in linear order with `ScanPrefixes`, from the elements `load(src[i])`; `prefixes`
 # holds the `prefixes_length` tile totals
+#
+# Reduce-then-scan is `slice_scan!` on one slice, but that is slower: its chunks loop over
+# tiles, and its first pass stages and scans each tile where `tile_aggregates_kernel!` only
+# reduces. Scanning an `(n, 1)` array along `dims=1` took 18.6 instead of 14.6 µs for 1e6
+# `Float32`s and 1794 instead of 1418 µs for 1e8 on an RTX 5080; with one tile per chunk, 17.7
+# and 1423 µs.
 function accumulate_1d_gpu!(
     op, v::AbstractArray, backend, alg::ScanPrefixes;
     src=v,
