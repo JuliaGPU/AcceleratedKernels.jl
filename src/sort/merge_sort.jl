@@ -193,7 +193,7 @@ function _merge_sort!(
         end
 
         if isodd(niter)
-            copyto!(v, p1)
+            _copyto!(v, p1, backend)
         end
     end
 

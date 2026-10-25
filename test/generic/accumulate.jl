@@ -696,3 +696,47 @@ end
         @test Array(AK.accumulate!(+, v; dims, alg=slice_alg())) == accumulate(+, wrap(h); dims)
     end
 end
+
+
+@testset "accumulate: offset axes" begin
+    # Arrays whose axes do not start at 1, as sources and destinations (with the same axes)
+    Random.seed!(0)
+    whole = TEST_KERNELS ? [scan_alg()] : [scan_alg(), scan_alg(max_tasks=4, min_elems=2)]
+    slices = TEST_KERNELS ? [slice_alg()] : [slice_alg(), slice_alg(max_tasks=4, min_elems=2)]
+    h = rand(Int32(-9):Int32(9), 1000)
+    for alg in whole, inclusive in (true, false)
+        expected = inclusive ? accumulate(+, h; init=10) : accumulate(+, [10; h[1:end-1]])
+        v = offset_from_host(h, (-3,))
+        AK.accumulate!(+, v; init=Int32(10), inclusive, alg)
+        @test Array(v.parent) == expected
+        dst = offset_from_host(zeros(Int32, 1000), (-3,))
+        with_workspace(AK.accumulate!, +, dst, offset_from_host(h, (-3,)); init=Int32(10),
+                       inclusive, alg)
+        @test Array(dst.parent) == expected
+        @test Array(AK.cumsum(offset_from_host(h, (-3,)); alg)) == cumsum(h)
+        # (into a narrower element type, through a scratch array of the accumulator type)
+        hb = rand(Int8(0):Int8(1), 100)
+        dst = offset_from_host(zeros(Int8, 100), (-3,))
+        AK.accumulate!(Base.add_sum, dst, offset_from_host(hb, (-3,)); inclusive, alg)
+        @test Array(dst.parent) == (inclusive ? cumsum(hb) : [0; cumsum(hb)[1:end-1]])
+        v = offset_from_host(Int32[5], (-3,))
+        AK.accumulate!(+, v; init=Int32(10), inclusive, alg)
+        @test Array(v.parent) == [inclusive ? 15 : 10]
+    end
+    hm = rand(Int32(-9):Int32(9), 30, 40)
+    for alg in slices, dims in (1, 2)
+        m = offset_from_host(hm, (-1, 3))
+        AK.accumulate!(+, m; dims, alg)
+        @test Array(m.parent) == cumsum(hm; dims)
+        dst = offset_from_host(zeros(Int32, 30, 40), (-1, 3))
+        AK.accumulate!(+, dst, offset_from_host(hm, (-1, 3)); dims, init=Int32(10),
+                       inclusive=false, alg)
+        @test Array(dst.parent) == (dims == 1 ?
+            vcat(fill(10, 1, 40), 10 .+ cumsum(hm; dims)[1:end-1, :]) :
+            hcat(fill(10, 30, 1), 10 .+ cumsum(hm; dims)[:, 1:end-1]))
+    end
+    # Along a dimension beyond the array's, every element is a slice
+    m = offset_from_host(hm, (-1, 3))
+    AK.accumulate!(+, m; dims=3, init=Int32(4), inclusive=false, alg=slice_alg())
+    @test Array(m.parent) == fill(4, 30, 40)
+end

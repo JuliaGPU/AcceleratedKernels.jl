@@ -94,7 +94,7 @@ function _check_predicate(a::CPUThreads.Partitioned, backend)
 end
 
 
-@kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v))
+@kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v), first_index)
     temp = @localmem Int8 (1,)
     i = @index(Global, Linear)
 
@@ -106,7 +106,7 @@ end
     @synchronize()
 
     # The ndrange check already protects us from out of bounds access
-    if pred(v[i])
+    if pred(v[first_index + i - 0x1])
         temp[0x1] = 0x1
     end
 
@@ -200,7 +200,7 @@ function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
     isempty(v) && return false
     out = bufs.flag
     fill!(out, Int8(0))
-    _any_global!(backend, alg.block_size)(out, pred, v, ndrange=length(v))
+    _any_global!(backend, alg.block_size)(out, pred, v, firstindex(v), ndrange=length(v))
     return @allowscalar(out[1]) != 0
 end
 
@@ -208,18 +208,17 @@ _any(pred, v, backend, alg::ViaReduce, bufs) =
     _mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
 function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
-    overall = Ref(false)
+    found = Threads.Atomic{Bool}(false)
+    first_index = firstindex(v)
     task_partition(length(v), alg.max_tasks, alg.min_elems) do irange
         for i in irange
-            if pred(v[i])
-                # Again, this is technically a thread race, but it doesn't matter as all threads
-                # would write the same value; no data corruption can occur
-                overall[] = true
+            if pred(v[first_index + i - 1])
+                found[] = true
                 break
             end
         end
     end
-    return overall[]
+    return found[]
 end
 
 

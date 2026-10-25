@@ -14,9 +14,17 @@ _source_eltype(src::AbstractArray) = eltype(src)
 _source_eltype(bc::Base.Broadcast.Broadcasted) = Base.promote_op(bc.f, Base.map(_source_eltype, bc.args)...)
 _source_eltype(x::Base.Broadcast.Extruded) = eltype(x.x)
 _source_eltype(x) = Base.Broadcast._broadcast_getindex_eltype(x)
-# A `Broadcasted` source as a dense array of its element type (`materialize` would take the
-# element type from `combine_eltypes`, which gives `Any` for `Extruded` arguments)
-_materialize_source(bc::Base.Broadcast.Broadcasted) = copyto!(similar(bc, _source_eltype(bc)), bc)
+# A `Broadcasted` source as a dense array on `backend` of its element type (`materialize` would
+# take the element type from `combine_eltypes`, which gives `Any` for `Extruded` arguments). A
+# kernel evaluates it, so that its arrays need not have a broadcast style of the backend.
+function _materialize_source(bc::Base.Broadcast.Broadcasted, backend)
+    dst = KernelAbstractions.allocate(backend, _source_eltype(bc), size(bc))
+    indices = CartesianIndices(axes(bc))
+    _foreachindex(Base.OneTo(length(dst)), backend) do i
+        @inbounds dst[i] = bc[indices[i]]
+    end
+    return dst
+end
 
 # The type of a reduction's first partial value when no `init` is given.
 _first_type(op::OP, ::Type{M}) where {OP, M} =

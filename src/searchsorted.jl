@@ -114,8 +114,10 @@ function searchsortedfirst!(
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
     ord = Base.Order.ord(lt, by, rev, order)
-    _foreachindex(eachindex(xs), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix[i] = _searchsortedfirst(v, xs[i], firstindex(v), lastindex(v), ord)
+    # (`ix` and `xs` are paired by position)
+    ix1, xs1 = _one_based(ix), _one_based(xs)
+    _foreachindex(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
+        @inbounds ix1[i] = _searchsortedfirst(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end
@@ -151,8 +153,10 @@ function searchsortedlast!(
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
     ord = Base.Order.ord(lt, by, rev, order)
-    _foreachindex(eachindex(xs), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix[i] = _searchsortedlast(v, xs[i], firstindex(v), lastindex(v), ord)
+    # (`ix` and `xs` are paired by position)
+    ix1, xs1 = _one_based(ix), _one_based(xs)
+    _foreachindex(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
+        @inbounds ix1[i] = _searchsortedlast(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end

@@ -110,7 +110,8 @@ function reverse!(
     _check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(v, dims)
     if !(dims isa Colon)
-        return reverse_dims!(v, dims, backend; launch...)
+        reverse_dims!(_one_based(v), dims, backend; launch...)
+        return v
     end
 
     len = length(v)
@@ -166,17 +167,20 @@ function reverse!(
     if !(dims isa Colon)
         @argcheck size(dst) == size(src)
         length(src) == 0 && return dst
-        return reverse_dims!(dst, src, dims, backend; launch...)
+        reverse_dims!(_one_based(dst), _one_based(src), dims, backend; launch...)
+        return dst
     end
 
     @argcheck length(dst) == length(src)
     length(src) == 0 && return dst
 
-    hi_src = lastindex(src)
+    len = length(src)
+    lo_src = firstindex(src)
     lo_dst = firstindex(dst)
 
-    _foreachindex(eachindex(src), backend; launch...) do i
-        @inbounds dst[lo_dst + (hi_src - i)] = src[i]
+    # (linear indices, also for sources whose `eachindex` is Cartesian)
+    _foreachindex(1:len, backend; launch...) do i
+        @inbounds dst[lo_dst + (len - i)] = src[lo_src + (i - 1)]
     end
 
     dst

@@ -132,7 +132,7 @@ function mapreduce(
     f, src = _mapreduce_fuse(f, src, srcs)
     s = _mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
     bufs = _buffers(s.plan, workspace, src)
-    return _mapreduce_run(f, op, _mapreduce_source(src), s, init, bufs; commutative)
+    return _mapreduce_run(f, op, _mapreduce_source(src, s.plan.backend), s, init, bufs; commutative)
 end
 
 function _plan(
@@ -147,21 +147,23 @@ end
 _plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
     _plan(mapreduce, identity, op, src; kwargs...)
 
-# The source of a reduction: several arrays become one `Broadcasted` object
-_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, src)
+# The source of a reduction, indexed from 1 (`_one_based`): several arrays become one
+# `Broadcasted` object
+_mapreduce_fuse(f::F, src, ::Tuple{}) where {F} = (f, _one_based(src))
 function _mapreduce_fuse(f::F, src, srcs::Tuple) where {F}
     src isa AbstractArray ||
         throw(ArgumentError("a Broadcasted source cannot be combined with more arrays"))
     _mapreduce_check_map_axes(src, srcs...)
-    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, src, srcs...))
+    bc = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, _one_based(src),
+                                                               Base.map(_one_based, srcs)...))
     return identity, bc
 end
 # Scalar *linear* indexing into a multidimensional `Broadcasted` object is only available on
 # Julia 1.12, so earlier versions materialize it when the reduction runs (after the plan and the
 # workspace checks, which see the original arrays); the plan treats it as a dense array.
-_mapreduce_source(src) = src
-_mapreduce_source(src::Base.Broadcast.Broadcasted) =
-    VERSION < v"1.12-" ? _materialize_source(src) : src
+_mapreduce_source(src, backend) = src
+_mapreduce_source(src::Base.Broadcast.Broadcasted, backend) =
+    VERSION < v"1.12-" ? _materialize_source(src, backend) : src
 
 # The seed of the partial results (`_reduce_seed`), where an accumulator type exists
 _mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
@@ -220,11 +222,13 @@ function _mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
-_mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing, dims=:,
-                  alg) where {F, OP} =
+function _mapreduce_nested(f::F, op::OP, src, bufs; backend, init=_NoInit(), neutral=nothing,
+                           dims=:, alg) where {F, OP}
+    src = _one_based(src)
     _mapreduce_run(f, op, src,
                    _mapreduce_setup(f, op, src, backend, init, neutral, nothing, dims, alg),
                    init, bufs)
+end
 
 
 """
@@ -312,7 +316,8 @@ end
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
 function _mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
     bufs = _buffers(s.plan, workspace, R, src)
-    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src), s.plan.backend, s.plan.alg, _unval(s.A);
+    backend = s.plan.backend
+    mapreduce_nd!(f, op, s.dst, _mapreduce_source(s.src, backend), backend, s.plan.alg, _unval(s.A);
                   init=s.init, neutral=s.seed, dims_valid=s.dims_valid, bufs, commutative)
 end
 
@@ -331,6 +336,7 @@ function _mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overw
             "cannot reduce an array of size $(size(src)) into one of size $(size(R))"))
     end
     _check_noalias(R, src)
+    R, src = _one_based(R), _one_based(src)
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     dims_valid = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && _srcsize(src, d) != 1)

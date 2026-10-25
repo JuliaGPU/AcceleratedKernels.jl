@@ -90,7 +90,9 @@ function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=noth
                      workspace=nothing, kwargs...)
     s = _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
                           kwargs...)
-    _accumulate_run!(op, v, v, s, _buffers(s.plan, workspace, v))
+    w = _one_based(v)
+    _accumulate_run!(op, w, w, s, _buffers(s.plan, workspace, v))
+    return v
 end
 
 function accumulate!(
@@ -102,7 +104,9 @@ function accumulate!(
     _check_scan_destination(dst, src)
     s = _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
                           _resolve_backend(backend, dst, src); kwargs...)
-    _accumulate_run!(op, dst, src, s, _buffers(s.plan, workspace, dst, src))
+    _accumulate_run!(op, _one_based(dst), _one_based(src), s,
+                     _buffers(s.plan, workspace, dst, src))
+    return dst
 end
 
 _plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
@@ -204,7 +208,7 @@ function _accumulate_run!(op, v, src, s, bufs)
     else
         _accumulate_scan!(op, w, w, identity, backend, a, bufs; init, neutral, dims, inclusive)
     end
-    w === v || copyto!(v, w)
+    w === v || _copyto!(v, w, backend)
     return v
 end
 
@@ -223,7 +227,7 @@ function _accumulate_scan!(op::OP, w, src, entry, backend, a, bufs; init, neutra
     elseif dims > ndims(w)
         # Every slice has one element: inclusive scans applied `init` above, exclusive ones start
         # over
-        inclusive || fill!(w, _unlane(_scan_first_seed(w, init, neutral)))
+        inclusive || _fill!(w, _unlane(_scan_first_seed(w, init, neutral)), backend)
     else
         accumulate_nd!(op, w, backend, a; src, entry, init, neutral, dims=Int(dims), inclusive,
                        totals=get(bufs, :totals, nothing))
@@ -306,8 +310,9 @@ function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothi
                     kwargs...)
     backend = _resolve_backend(backend, v)
     D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
-    accumulate!(op, _similar(backend, v, D), v; backend, init, dims, inclusive, acctype,
-                kwargs...)
+    # (the result's axes start at 1, which `accumulate!` then requires of the source too)
+    accumulate!(op, _similar(backend, v, D), _one_based(v); backend, init, dims, inclusive,
+                acctype, kwargs...)
 end
 
 function _plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),

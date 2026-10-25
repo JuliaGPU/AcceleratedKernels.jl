@@ -353,7 +353,7 @@ function mapreduce_nd!(
 
     # Empty reductions, e.g. reduce(+, rand(3, 0, 5), dims=2): `init`, else nothing is written
     if len == 0
-        init isa Union{_NoInit, _Fold} || fill!(dst, init)
+        init isa Union{_NoInit, _Fold} || _fill!(dst, init, backend)
         return dst
     end
 

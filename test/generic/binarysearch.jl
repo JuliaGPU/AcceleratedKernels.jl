@@ -35,6 +35,18 @@
         @test Array(ix) == [searchsortedlast(svh, e; kw...) for e in xh]
     end
 
+    # Queries and destinations with offset axes are paired by position
+    vh = sort(rand(Int32, 1000))
+    xh = rand(Int32, 100)
+    v = array_from_host(vh)
+    for (ix, x) in ((array_from_host(zeros(Int, 100)), offset_from_host(xh, (-5,))),
+                    (offset_from_host(zeros(Int, 100), (7,)), array_from_host(xh)))
+        AK.searchsortedfirst!(ix, v, x)
+        @test Array(ix isa OffsetAxes ? ix.parent : ix) == [searchsortedfirst(vh, e) for e in xh]
+        AK.searchsortedlast!(ix, v, x)
+        @test Array(ix isa OffsetAxes ? ix.parent : ix) == [searchsortedlast(vh, e) for e in xh]
+    end
+
     # Launch settings
     v = array_from_host(sort(rand(Int32, 100_000)))
     x = array_from_host(rand(Int32, 10_000))

@@ -40,6 +40,13 @@ end
         end
     end
     @test all(x .== 1:length(x))
+
+    # A partitioner with a single task
+    x = zeros(Int, 10)
+    AK.task_partition(AK.TaskPartitioner(length(x), 4, 8)) do irange
+        x[irange] .= irange
+    end
+    @test x == 1:length(x)
 end
 
 @testset "itask_partition" begin
@@ -71,4 +78,11 @@ end
     for i in 1:tp.num_tasks
         @test all(ix[tp[i]] .== i)
     end
+
+    # A partitioner with a single task
+    x = zeros(Int, 10)
+    AK.itask_partition(AK.TaskPartitioner(length(x), 4, 8)) do itask, irange
+        x[irange] .= itask
+    end
+    @test x == ones(Int, length(x))
 end

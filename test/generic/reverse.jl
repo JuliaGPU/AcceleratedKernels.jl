@@ -45,6 +45,13 @@
         @test_throws Exception AK.reverse!(
             array_from_host(rand(Float32, 10)),
             array_from_host(rand(Float32, 11)))
+
+        # A source with Cartesian indices
+        h = rand(Float32, 4, 5)
+        src = view(array_from_host(h), 1:3, 2:5)
+        dst = array_from_host(zeros(Float32, 3, 4))
+        AK.reverse!(dst, src)
+        @test Array(dst) == reverse(h[1:3, 2:5])
     end
 
     @testset "reverse allocating" begin
@@ -110,6 +117,17 @@
             dst = array_from_host(zeros(Float32, shape...))
             AK.reverse!(dst, src; dims=dim)
             @test Array(dst) == reverse(h; dims=dim)
+        end
+
+        # Offset axes
+        h = rand(Float32, 4, 5)
+        for dims in (1, 2, (1, 2))
+            v = offset_from_host(h, (-3, 2))
+            AK.reverse!(v; dims)
+            @test Array(v.parent) == reverse(h; dims)
+            dst = offset_from_host(zeros(Float32, 4, 5), (1, 1))
+            AK.reverse!(dst, offset_from_host(h, (-3, 2)); dims)
+            @test Array(dst.parent) == reverse(h; dims)
         end
 
         # Multiple dimensions at once, plus dims=: (dispatches to the flat whole-array path).
