@@ -13,7 +13,8 @@ function accumulate_1d_cpu!(
     _, op = seeded_ops(PartialInputs(), op, seed)
 
     if task_count(length(v), max_tasks, min_elems) == 1
-        serial_scan!(op, v; start, seed, inclusive)
+        @inbounds serial_scan!(op, v, v, identity, identity, eachindex(v), start, seed,
+                               inclusive)
         return v
     end
 
@@ -22,16 +23,13 @@ function accumulate_1d_cpu!(
     tp = TaskPartitioner(length(v), max_tasks, min_elems)
     shared = Vector{typeof(seed)}(undef, tp.num_tasks)
     itask_partition(tp) do itask, irange
-        shared[itask] = serial_scan!(
-            op, @view(v[irange]);
-            start=itask == 1 ? start : seed,
-            seed,
-            inclusive,
-        )
+        shared[itask] = @inbounds serial_scan!(op, v, v, identity, identity, irange,
+                                               itask == 1 ? start : seed, seed, inclusive)
     end
 
     # Scan the tasks' totals serially: there are few tasks, even on 144-thread HPC nodes
-    serial_scan!(op, shared; start=seed, seed, inclusive=true)
+    @inbounds serial_scan!(op, shared, shared, identity, identity, eachindex(shared), seed, seed,
+                           true)
 
     # Combine each element after the first task's with the total of the tasks before it, on the
     # left. An exclusive section starts from `seed`, which may be an unset `Optional` that cannot
@@ -54,22 +52,3 @@ function accumulate_1d_cpu!(
     return v
 end
 
-
-# Scan a section sequentially from `start`, returning its total. `op` combines partial results
-# (`Optional`s when `seed` is an unset one); elements are lifted to them and stored back lowered.
-function serial_scan!(op, v; start, seed, inclusive)
-    @inbounds begin
-        running = start
-        for i in eachindex(v)
-            x = lift(seed, v[i])
-            if inclusive
-                running = op(running, x)
-                store_partial!(v, i, running)
-            else
-                store_partial!(v, i, running)
-                running = op(running, x)
-            end
-        end
-    end
-    return running
-end

@@ -26,18 +26,8 @@ function accumulate_nd_threads!(
     n_inner, len, n_outer = slice_extents(size(v), dims)
     foreachindex_on(1:n_inner * n_outer, HOST_BACKEND; max_tasks, min_elems) do islice
         base = (islice - 1) % n_inner + n_inner * len * ((islice - 1) ÷ n_inner) + 1
-        running = start
-        @inbounds for k in 0:len - 1
-            idx = base + k * n_inner
-            x = lift(seed, v[idx])
-            if inclusive
-                running = op(running, x)
-                store_partial!(v, idx, running)
-            else
-                store_partial!(v, idx, running)
-                running = op(running, x)
-            end
-        end
+        @inbounds serial_scan!(op, v, v, identity, k -> base + k * n_inner, 0:len - 1, start,
+                               seed, inclusive)
     end
     v
 end
@@ -192,8 +182,8 @@ end
 # `block_size * len` consecutive elements from `b * block_size * len`, in local memory of `MAX`
 # elements (`slice_rows_max`, the same for every `len`)
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_rows_kernel!(
-    v, src, load, op, start, seed, inclusive, len, nslices, ::Val{MAX},
-) where {MAX}
+    v, src, load, op::OP, start, seed, inclusive, len, nslices, ::Val{MAX},
+) where {OP, MAX}
     @uniform block_size = @groupsize()[1]
     rows = @localmem typeof(seed) (MAX,)
     _, op = seeded_ops(PartialInputs(), op, seed)
@@ -211,17 +201,8 @@ end
     @synchronize()
 
     if ithread * len < n
-        running = start
-        for k in ithread * len:(ithread + 1) * len - 1
-            x = rows[k + 1]
-            if inclusive
-                running = op(running, x)
-                rows[k + 1] = running
-            else
-                rows[k + 1] = running
-                running = op(running, x)
-            end
-        end
+        serial_scan!(op, rows, rows, identity, k -> k + 1, ithread * len:(ithread + 1) * len - 1,
+                     start, seed, inclusive)
     end
     @synchronize()
 
@@ -235,9 +216,9 @@ end
 # One thread per chunk of a slice; thread `t` takes chunk `c` of slice `(i, o)` with
 # `t = i + n_inner * (c + nchunks * o)`, the chunk's position in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_columns_kernel!(
-    v, src, load, op, start, seed, carries, totals, inclusive,
+    v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
-)
+) where {L, OP}
     _, op = seeded_ops(PartialInputs(), op, seed)
     block_size = @groupsize()[1]
     tid = (@index(Group, Linear) - 1) * block_size + (@index(Local, Linear) - 1)
@@ -252,17 +233,8 @@ end
 
         running = isnothing(carries) ? start : carries[tid + 1]
         if isnothing(totals)
-            for k in k0:k1 - 1
-                idx = base + k * n_inner + 1
-                x = lift(seed, load(src[idx]))
-                if inclusive
-                    running = op(running, x)
-                    store_partial!(v, idx, running)
-                else
-                    store_partial!(v, idx, running)
-                    running = op(running, x)
-                end
-            end
+            serial_scan!(op, v, src, load, k -> base + k * n_inner + 1, k0:k1 - 1, running, seed,
+                         inclusive)
         else
             for k in k0:k1 - 1
                 running = op(running, lift(seed, load(src[base + k * n_inner + 1])))
