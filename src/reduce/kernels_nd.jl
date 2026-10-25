@@ -1,73 +1,35 @@
 # The kernels of a reduction along `dims`, and their index helpers.
 
-# The element offset of output `tid` (`outer_offset`), or of element `j` of a slice
-# (`reduce_offset`), from the strides and sizes of the merged segments. A single segment, the
-# common case, needs no division; several (reductions over non-adjacent dimensions) take one per
-# segment and element.
-
-@inline function outer_offset(tid, outer_strides, outer_sizes)
-    isempty(outer_sizes) && return 0
-    length(outer_sizes) == 1 && return tid * outer_strides[1]
-    base = 0
-    tmp  = tid
-    @inbounds for i in 1:length(outer_sizes)
-        q     = tmp ÷ outer_sizes[i]
-        r     = tmp - q * outer_sizes[i]
-        base += r * outer_strides[i]
-        tmp   = q
-    end
-    base
-end
-
-@inline function reduce_offset(j, reduce_strides, reduce_sizes)
-    isempty(reduce_sizes) && return 0
-    length(reduce_sizes) == 1 && return j * reduce_strides[1]
+# The element offset of index `i` (from 0, of an output or of an element of its slice), from the
+# strides and sizes of the merged segments, for `i` below the product of the sizes. A single
+# segment, the common case, needs no division; several (reductions over non-adjacent dimensions)
+# take one per segment but the last, or a shift for sizes that are powers of two.
+@inline function segment_offset(i, strides, sizes)
+    isempty(sizes) && return 0
+    length(sizes) == 1 && return i * strides[1]
     off = 0
-    tmp = j
-    @inbounds for i in 1:length(reduce_sizes) - 1
-        sz = reduce_sizes[i]
+    tmp = i
+    @inbounds for d in 1:length(sizes) - 1
+        sz = sizes[d]
         if ispow2(sz)
-            shift = trailing_zeros(sz)
             r   = tmp & (sz - 1)
-            tmp = tmp >> shift
+            tmp = tmp >> trailing_zeros(sz)
         else
             q   = tmp ÷ sz
             r   = tmp - q * sz
             tmp = q
         end
-        off += r * reduce_strides[i]
+        off += r * strides[d]
     end
-    off += tmp * reduce_strides[end]
+    off += tmp * strides[end]
     off
 end
 
-# `:by_thread` for sources without a dense buffer: one thread per output, iterating over the
-# Cartesian indices of its slice as `mapreduce_nd_threads!` does on the host.
-@kernel inbounds=true cpu=false unsafe_indices=true function by_thread_cartesian_kernel!(
-    src, dst,
-    f, op, seed, init,
-    Rother, Rreduce, output_size,
-)
-    mapf, accop = seeded_ops(f, op, seed)
-    N       = @groupsize()[1]
-    iblock  = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
-    tid     = ithread + iblock * N
-
-    if tid < output_size
-        Iother = Rother[tid + 0x1]
-        res = seed
-        for Ireduce in Rreduce
-            J = max(Iother, Ireduce)
-            res = accop(res, mapf(src[J]))
-        end
-        dst[Iother] = finish(op, init, dst, Iother, res)
-    end
-end
-
-# `:tiled_strided`: each block reduces `rows` contiguous outputs, whose elements are
+# `Tiled`: each block reduces `rows` contiguous outputs, whose elements are
 # `reduce_stride` apart, with `N ÷ rows` lanes each, so that a warp's loads of one step are
-# consecutive elements.
+# consecutive elements. This is the columns kernel with one group and one load per thread, but
+# that kernel, with those settings and the whole block, takes 17 to 60% longer on an RTX 5080
+# (1024×1024 to 4096×4096 matrices along `dims=2`).
 @kernel inbounds=true cpu=false unsafe_indices=true function tiled_strided_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -119,7 +81,7 @@ end
     end
 end
 
-# `:by_lanes`: each output reduces `reduce_size` consecutive elements (from the offset
+# `ByLanes`: each output reduces `reduce_size` consecutive elements (from the offset
 # of its outer index), with `lanes` threads that read them in an interleaved order; a block of
 # `N` threads covers `N ÷ lanes` outputs, which are combined in local memory with log2(lanes)
 # steps.
@@ -143,7 +105,7 @@ end
 
     acc = seed
     if iout < output_size
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
         j = lane
         while j < reduce_size
             acc = accop(acc, mapf(src[input_base + j + 0x1]))
@@ -168,7 +130,7 @@ end
     end
 end
 
-# `:columns`: a long strided reduction into contiguous outputs, e.g. the row sums of
+# `Columns`: a long strided reduction into contiguous outputs, e.g. the row sums of
 # a wide column-major matrix (`dims=2`). Each block covers `cols` consecutive outputs of a run of
 # `run` (the outputs at an offset of the other kept dimensions, `run_strides` and `run_sizes`),
 # with `N ÷ cols` lanes each, so that a warp's loads of one step are consecutive elements, and the
@@ -206,7 +168,7 @@ end
     icol = (tile - irun * run_tiles) * cols + col
     valid = icol < run
     iout = irun * run + icol
-    sbase = base_offset + outer_offset(irun, run_strides, run_sizes) + icol
+    sbase = base_offset + segment_offset(irun, run_strides, run_sizes) + icol
 
     acc = seed
     if ordered && valid
@@ -274,7 +236,7 @@ end
     end
 end
 
-# `:by_thread`: one thread per output, which reduces its slice sequentially; for at least as
+# `ByThread`: one thread per output, which reduces its slice sequentially; for at least as
 # many outputs as elements each, e.g. `dims=1` of a 3×1000 matrix.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_kernel!(
     @Const(src), dst,
@@ -291,11 +253,11 @@ end
     tid     = ithread + iblock * N
 
     if tid < output_size
-        input_base = base_offset + outer_offset(tid, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(tid, outer_strides, outer_sizes)
 
         res = seed
         for j in 0x0:reduce_size - 0x1
-            off = reduce_offset(j, reduce_strides, reduce_sizes)
+            off = segment_offset(j, reduce_strides, reduce_sizes)
             res = accop(res, mapf(src[input_base + off + 0x1]))
         end
 
@@ -303,8 +265,8 @@ end
     end
 end
 
-# `:by_block` and `:by_block_each`: each block reduces the outputs `iblock`, `iblock + num_blocks`,
-# ..., one at a time.
+# `ByBlock`, and the second pass of the commutative split reductions (`combine_groups!`): each
+# block reduces the outputs `iblock`, `iblock + num_blocks`, ..., one at a time.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_kernel!(
     @Const(src), dst,
     f, op, seed, init,
@@ -321,12 +283,12 @@ end
     ithread = @index(Local, Linear) - 0x1
     iout = iblock
     while true
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
         acc = seed
         j   = ithread
         while j < reduce_size
-            off = reduce_offset(j, reduce_strides, reduce_sizes)
+            off = segment_offset(j, reduce_strides, reduce_sizes)
             acc = accop(acc, mapf(src[input_base + off + 0x1]))
             j  += N
         end
@@ -366,7 +328,7 @@ end
     ithread = @index(Local, Linear) - 0x1
     iout = iblock
     while true
-        input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+        input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
         acc     = seed
         rs      = UInt32(reduce_size)
@@ -399,15 +361,17 @@ end
     end
 end
 
-# `:multigroup`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + reduce_groups`,
+# `ByBlocks`, first pass: block `iblock` reduces the tiles `igroup`, `igroup + groups`,
 # ... of `N` elements of output `iout`'s slice into `partial[iout + igroup * output_size + 1]`.
+# It is compiled for each output count (below FEW_OUTPUTS): dividing by a count known only at run
+# time, in 32 or 64 bits, takes 4 to 9% longer for 3 to 16 outputs on an RTX 5080.
 @kernel inbounds=true cpu=false unsafe_indices=true function multigroup_kernel!(
     @Const(src), partial,
     f, op, seed,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    ::Val{output_size}, reduce_size, reduce_groups,
+    ::Val{output_size}, reduce_size, groups,
 ) where {output_size}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
@@ -420,14 +384,14 @@ end
     iout   = Int(unsigned(iblock) % unsigned(output_size))
     igroup = Int(unsigned(iblock) ÷ unsigned(output_size))
 
-    input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+    input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
     acc = seed
     j   = ithread + igroup * N
     while j < reduce_size
-        off = reduce_offset(j, reduce_strides, reduce_sizes)
+        off = segment_offset(j, reduce_strides, reduce_sizes)
         acc = accop(acc, mapf(src[input_base + off + 0x1]))
-        j  += N * reduce_groups
+        j  += N * groups
     end
 
     sdata[ithread + 0x1] = acc
@@ -437,38 +401,5 @@ end
 
     if ithread == 0x0
         partial[iout + igroup * output_size + 0x1] = sdata[0x1]
-    end
-end
-
-# The second pass of `:multigroup` and the commutative `:columns`: one block per output combines
-# its `reduce_groups` partial results and applies `init` (see `finish`).
-@kernel inbounds=true cpu=false unsafe_indices=true function combine_groups_kernel!(
-    @Const(partial), dst,
-    op, seed, init,
-    output_size, reduce_groups,
-)
-    @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
-    _, accop = seeded_ops(PartialInputs(), op, seed)
-
-    iblock  = @index(Group, Linear) - 0x1
-    ithread = @index(Local, Linear) - 0x1
-
-    if iblock < output_size
-        acc = seed
-        g = ithread
-        while g < reduce_groups
-            acc = accop(acc, partial[iblock + g * output_size + 0x1])
-            g += N
-        end
-
-        sdata[ithread + 0x1] = acc
-        @synchronize()
-
-        @inline reduce_group!(@context, accop, sdata, ithread)
-
-        if ithread == 0x0
-            dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
-        end
     end
 end

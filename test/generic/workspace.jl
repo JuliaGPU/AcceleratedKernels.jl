@@ -71,6 +71,12 @@ forge(ws; buffers=ws.buffers, nested=ws.nested) =
                                 array_from_host(rand(Float32, 1000, 10_000));
                                 alg=AK.BlockReduce()).partials[2] ==
               (AK.reduce_tuning(BACKEND, Float32).target_blocks,)
+        # So does one split across blocks, also in element order
+        x = array_from_host(rand(Float32, 100_000, 4))
+        for commutative in (true, false)
+            @test AK.workspace_size(AK.sum, x; dims=1, alg=AK.BlockReduce(),
+                                    commutative).partials[2][1] == 4
+        end
         # A reduction of one element needs none
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
         # `acctype` sets the partial results' type
@@ -237,6 +243,9 @@ if @isdefined(CUDACore) && BACKEND isa CUDACore.CUDABackend
                 (VERSION >= v"1.12-" ? ((AK.mapreduce, (*, +, v, v), (;)),) : ())...,
                 (AK.mapreducedim!, (identity, +, similar(v, 1, 1000), m), (;)),
                 (AK.mapreducedim!, (identity, +, similar(v, 100, 1), m), (;)),
+                (AK.mapreducedim!, (identity, +, similar(v, 1, 10), reshape(v, 10_000, 10)),
+                 (; commutative=false)),
+                (AK.mapreducedim!, (identity, +, similar(v, 100, 1), m), (; commutative=false)),
                 (AK.accumulate!, (+, copy(v)), (;)), (AK.accumulate!, (+, similar(v, Float64), v), (;)),
                 (AK.any, (x -> x > 2, v), (; alg=AK.ConcurrentWrite())),
                 (AK.any, (x -> x > 2, v), (; alg=AK.ViaReduce())),

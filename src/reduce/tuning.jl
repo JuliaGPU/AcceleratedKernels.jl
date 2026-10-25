@@ -38,20 +38,20 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.
-- `columns_min_elements`: the fewest elements of a reduction along `dims` into contiguous outputs
-  for which it splits each output's reduction across blocks of consecutive outputs; that can take
-  a second launch, which costs more on some backends.
+- `columns_split_min_elems`: the fewest elements of a reduction along `dims` into contiguous
+  outputs for which it splits each output's reduction across blocks of consecutive outputs; that
+  can take a second launch, which costs more on some backends.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`.
-- `segments_lane_bytes`: a reduction along `dims` in which every output reduces a run of
+- `lanes_max_bytes`: a reduction along `dims` in which every output reduces a run of
   consecutive elements reads each run with a group of up to 32 threads, several runs per block,
   as long as each thread reduces at most this many bytes of its run; longer runs get a block per
   output. 0 disables it.
-- `segments_short_runs`: whether runs shorter than a block are read by such groups too, rather
+- `lanes_short_runs`: whether runs shorter than a block are read by such groups too, rather
   than by one thread per output. GPUs load short runs faster with groups, as one thread per
   output loads with a stride; CPUs faster with a thread each.
 
-`items_per_thread` defaults to the choice by type, and `columns_min_elements` to 2^18, measured
-on CUDA. `segments_lane_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
+`items_per_thread` defaults to the choice by type, and `columns_split_min_elems` to 2^18,
+measured on CUDA. `lanes_max_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
 (at 512, a Ryzen 9950X's integrated GPU and an Iris Xe take up to twice as long as with a block
 per output).
 """
@@ -60,10 +60,10 @@ Base.@kwdef struct ReduceTuning
     items_per_thread::Union{Nothing, Int} = nothing
     switch_below::Int = 0
     target_blocks::Int = 256
-    columns_min_elements::Int = 1 << 18
+    columns_split_min_elems::Int = 1 << 18
     threads_min_elems::Int = 1
-    segments_lane_bytes::Int = 128
-    segments_short_runs::Bool = true
+    lanes_max_bytes::Int = 128
+    lanes_short_runs::Bool = true
 end
 
 """
@@ -77,7 +77,7 @@ reduce_tuning(::Backend, ::Type) = ReduceTuning()
 # with a thread per output, and long ones faster with groups of threads: with PoCL on a Ryzen
 # 9950X, summing an 8×10^6 matrix along `dims=1` takes half the time, and a 4096×4096 one along
 # `dims=1` also half the time.
-cpu_reduce_tuning() = ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
+cpu_reduce_tuning() = ReduceTuning(lanes_short_runs=false, lanes_max_bytes=512)
 reduce_tuning(::HostBackend, ::Type) = cpu_reduce_tuning()
 
 # Elements each thread loads per tile of a whole-array reduction: enough for 64 bytes of

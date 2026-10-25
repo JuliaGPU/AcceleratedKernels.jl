@@ -49,9 +49,10 @@ function reduce_or_empty(empty, op::OP, src; backend::Union{Nothing, Backend}=no
                          commutative::Bool=true, alg::Algorithm=Auto(),
                          workspace=nothing) where {OP}
     src = one_based(src)
-    s = mapreduce_setup(identity, op, src, backend, init, neutral, acctype, dims, alg; empty)
+    s = mapreduce_setup(identity, op, src, backend, init, neutral, acctype, dims, alg; empty,
+                        commutative)
     bufs = scratch_buffers(s.plan, workspace, src)
-    return mapreduce_run(identity, op, src, s, init, bufs; commutative)
+    return mapreduce_run(identity, op, src, s, init, bufs)
 end
 
 

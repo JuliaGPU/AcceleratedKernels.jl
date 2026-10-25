@@ -133,9 +133,9 @@ function mapreduce(
     workspace=nothing,
 ) where {F, OP}
     f, src = fuse_sources(f, src, srcs)
-    s = mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg)
+    s = mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg; commutative)
     bufs = scratch_buffers(s.plan, workspace, src)
-    return mapreduce_run(f, op, kernel_source(src, s.plan.backend), s, init, bufs; commutative)
+    return mapreduce_run(f, op, kernel_source(src, s.plan.backend), s, init, bufs)
 end
 
 function plan(
@@ -144,7 +144,8 @@ function plan(
     commutative::Bool=true, alg::Algorithm=Auto(),
 ) where {F, OP}
     f, src = fuse_sources(f, src, srcs)
-    return mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg).plan
+    return mapreduce_setup(f, op, src, backend, init, neutral, acctype, dims, alg;
+                           commutative).plan
 end
 
 plan(::typeof(reduce), op::OP, src::AbstractArray; kwargs...) where {OP} =
@@ -178,7 +179,7 @@ mapreduce_seed(op::OP, ::Type{A}, neutral) where {OP, A} =
 # `empty`, when given, makes an empty reduction without `init` give `empty(A)` of the accumulator
 # type `A` (for a whole array, and for every output along `dims`) instead of throwing.
 function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dims,
-                         alg; empty=nothing) where {F, OP}
+                         alg; empty=nothing, commutative::Bool=true) where {F, OP}
     backend = resolve_backend(backend, src)
     M = mapped_eltype(f, src)
     # The accumulator type, from `init`'s type
@@ -198,28 +199,34 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         else
             (;)
         end
-        return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty)
+        return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, commutative)
     end
 
-    rdims = reduced_dims(dims, ndims(src))
+    return mapreduce_dims_setup(f, op, src, backend, init, neutral, A, M,
+                                reduced_dims(dims, ndims(src)), alg, empty, commutative)
+end
+# (a function barrier: the type of `rdims` depends on the number of reduced dimensions)
+function mapreduce_dims_setup(f::F, op::OP, src, backend, init, neutral, ::Type{A}, ::Type{M},
+                              rdims, alg, empty, commutative) where {F, OP, A, M}
     # The result has the accumulator type; where there is none (`op` always throws), only an
     # empty reduction can succeed
     R = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in rdims ? 1 : srcsize(src, d), ndims(src))
     a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
-    sizes = mapreduce_nd_sizes(src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
+    launch = select_launch(src, backend, a, A, rdims, Base.prod(dst_sizes), commutative)
+    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
     return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, rdims,
-            R=Val(R), dst_sizes)
+            R=Val(R), dst_sizes, launch)
 end
 
 # Run the reduction set up by `mapreduce_setup`, with the plan's scratch buffers `bufs`
-function mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true) where {F, OP}
+function mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :rdims)
         return mapreduce_whole(f, op, src, backend, a, unval(s.A); init, seed=s.seed,
                                empty=s.empty, partials=get(bufs, :partials, nothing),
-                               commutative)
+                               commutative=s.commutative)
     end
     if init isa NoInit && Base.any(d -> srcsize(src, d) == 0, s.rdims) &&
        Base.prod(s.dst_sizes) > 0
@@ -230,7 +237,7 @@ function mapreduce_run(f::F, op::OP, src, s, init, bufs; commutative::Bool=true)
     end
     dst = KernelAbstractions.allocate(backend, unval(s.R), s.dst_sizes)
     return mapreduce_nd!(f, op, dst, src, backend, a, unval(s.A);
-                         init, seed=s.seed, rdims=s.rdims, bufs, commutative)
+                         init, seed=s.seed, rdims=s.rdims, bufs, launch=s.launch)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
@@ -322,26 +329,28 @@ function mapreducedim!(
     alg::Algorithm=Auto(),
     workspace=nothing,
 ) where {F, OP}
-    s = mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg)
-    mapreducedim_run!(f, op, R, src, s, workspace, commutative)
+    s = mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg,
+                           commutative)
+    mapreducedim_run!(f, op, R, src, s, workspace)
     return R
 end
 
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
-function mapreducedim_run!(f::F, op::OP, R, src, s, workspace, commutative) where {F, OP}
+function mapreducedim_run!(f::F, op::OP, R, src, s, workspace) where {F, OP}
     bufs = scratch_buffers(s.plan, workspace, R, src)
     backend = s.plan.backend
     mapreduce_nd!(f, op, s.dst, kernel_source(s.src, backend), backend, s.plan.alg, unval(s.A);
-                  init=s.init, seed=s.seed, rdims=s.rdims, bufs, commutative)
+                  init=s.init, seed=s.seed, rdims=s.rdims, bufs, launch=s.launch)
 end
 
 plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
      backend=nothing, init=NoInit(), neutral=nothing, overwrite::Bool=false, acctype=nothing,
      commutative::Bool=true, alg::Algorithm=Auto()) where {F, OP} =
-    mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg).plan
+    mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg,
+                       commutative).plan
 
 function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwrite, acctype,
-                            alg) where {F, OP}
+                            alg, commutative) where {F, OP}
     backend = resolve_backend(backend, R, src)
     nd = ndims(src)
     for d in 1:max(nd, ndims(R))
@@ -355,16 +364,17 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
     rdims = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && srcsize(src, d) != 1)
     return reducedim_setup(f, op, src, dst, rdims, backend, init, neutral, overwrite,
-                           acctype, alg)
+                           acctype, alg, commutative)
 end
 function reducedim_setup(f::F, op::OP, src, dst, rdims, backend, init, neutral,
-                         overwrite, acctype, alg) where {F, OP}
+                         overwrite, acctype, alg, commutative) where {F, OP}
     A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
     a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
-    sizes = mapreduce_nd_sizes(src, backend, a, A, seed, rdims, length(dst))
+    launch = select_launch(src, backend, a, A, rdims, length(dst), commutative)
+    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init
-    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, rdims, init)
+    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, rdims, init, launch)
 end
 
 function check_noalias(R, src::AbstractArray)

@@ -31,7 +31,7 @@
     # (unsigned division, see `tiled_strided_kernel!`)
     iout = Int(unsigned(iblock) % unsigned(output_size))
     g    = Int(unsigned(iblock) ÷ unsigned(output_size))
-    input_base = base_offset + outer_offset(iout, outer_strides, outer_sizes)
+    input_base = base_offset + segment_offset(iout, outer_strides, outer_sizes)
 
     # (this group's tiles)
     tile_size = N * K
@@ -50,14 +50,14 @@
             end
         elseif (tile + 1) * tile_size <= reduce_size
             for k in 0x0:(K - 0x1)
-                off = reduce_offset(run + k, reduce_strides, reduce_sizes)
+                off = segment_offset(run + k, reduce_strides, reduce_sizes)
                 acc = accop(acc, mapf(src[input_base + off + 0x1]))
             end
         else
             for k in 0x0:(K - 0x1)
                 j = run + k
                 if j < reduce_size
-                    off = reduce_offset(j, reduce_strides, reduce_sizes)
+                    off = segment_offset(j, reduce_strides, reduce_sizes)
                     acc = accop(acc, mapf(src[input_base + off + 0x1]))
                 end
             end
@@ -123,8 +123,6 @@ function launch_ordered!(
                   seed, Unfinished(), base_offset, outer_strides, outer_sizes,
                   reduce_strides, reduce_sizes, output_size, reduce_size, groups;
                   dense_buffer)
-    ordered_pass!(backend, combine_block_size(groups), 1, partials, dst, PartialInputs(),
-                  op, seed, init, 0, (1,), (output_size,), (output_size,),
-                  (groups,), output_size, groups, 1)
+    combine_groups!(backend, partials, dst, op, seed, init, output_size, groups, true)
     return nothing
 end

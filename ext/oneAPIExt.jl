@@ -13,7 +13,7 @@ AK.predicate_tuning(::oneAPIBackend, ::Type) = AK.PredicateTuning(prefer_concurr
 # Launches cost tens of microseconds more than on other GPUs (Iris Xe: `sum(A; dims=2)` of a
 # 64×4096 matrix takes 220 µs in one launch and 280 µs in the column reduction's two; from about
 # 4M elements the column reduction is faster), so the column reduction starts at larger inputs.
-AK.reduce_tuning(::oneAPIBackend, ::Type) = AK.ReduceTuning(columns_min_elements=1 << 22)
+AK.reduce_tuning(::oneAPIBackend, ::Type) = AK.ReduceTuning(columns_split_min_elems=1 << 22)
 
 
 end   # module oneAPIExt

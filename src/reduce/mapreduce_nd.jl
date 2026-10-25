@@ -1,19 +1,15 @@
-# Reductions along `dims`. `mapreduce_nd!` merges adjacent dimensions of the source into segments
+# Reductions along `dims`. Their setup merges adjacent dimensions of the source into segments
 # (`merge_dims`), so that `dims=2` of a matrix or `dims=(1, 2)` of a 3-d array reduce one segment
 # of elements a stride apart, and only reductions over non-adjacent dimensions decode an index per
 # element. It then picks a launch shape from the sizes and strides of the outputs and of the
-# reduction (`reduce_shape`) and launches its kernels (kernels_nd.jl). The shapes follow CUB's
-# `DeviceSegmentedReduce`: a thread (`:by_thread`), a group of lanes (`:by_lanes`) or a block
-# (`:by_block`, `:by_block_each`) per output, or several blocks per output in two passes
-# (`:multigroup`); strided reductions into contiguous outputs give each block a tile of outputs
-# (`:tiled_strided`, `:columns`), and reductions in element order have their own kernels
-# (`:ordered`, `:columns_ordered`).
+# reduction (`select_launch`, shapes.jl), which `mapreduce_nd!` launches (`launch!`, with the
+# kernels of kernels_nd.jl).
 
 # Main entry point
 
 # Reduce `src` into `dst`, which has `src`'s number of dimensions and size 1 along the reduced
-# dimensions `rdims`; `A` is the accumulator type, and `init` is a value, `NoInit()` or
-# `FoldInto()` (see `finish`). Without `commutative`, the GPU kernels combine elements in order.
+# dimensions `rdims`; `A` is the accumulator type, `init` is a value, `NoInit()` or `FoldInto()`
+# (see `finish`), and `launch` is the setup's (see `select_launch`).
 function mapreduce_nd!(
     f::F, op::OP, dst::AbstractArray, src::MapReduceSource, backend::Backend,
     alg::Union{BlockReduce, CPUThreads.Partitioned}, ::Type{A};
@@ -21,15 +17,11 @@ function mapreduce_nd!(
     seed,
     rdims::Tuple,
     bufs::NamedTuple,
-    commutative::Bool=true,
+    launch,
 ) where {F, OP, A}
     # Launch settings of the elementwise passes, and of the reduction kernels
-    launch = alg isa BlockReduce ? (; block_size=alg.block_size) :
-                                   (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
-
-    # (the blocks that fill the device, which the shapes of few outputs aim to launch)
-    tuning = reduce_tuning(backend, A)
-    target_blocks = tuning.target_blocks
+    launch_kw = alg isa BlockReduce ? (; block_size=alg.block_size) :
+                                      (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
 
     src_sizes = size(src)
 
@@ -51,10 +43,10 @@ function mapreduce_nd!(
     # Every output reduces one element, e.g. reduce(+, rand(3, 5), dims=3): no reduced
     # dimensions, or only ones of size 1
     if len == 1
-        # (a runtime dispatch on the GPU, see `launch_shape!`)
+        # (a runtime dispatch on the GPU, see `launch!`)
         single! = alg isa BlockReduce ? Base.inferencebarrier(mapreduce_singles!) :
                                         mapreduce_singles!
-        single!(f, op, dst, src, backend, A; init, launch...)
+        single!(f, op, dst, src, backend, A; init, launch_kw...)
         return dst
     end
 
@@ -63,56 +55,30 @@ function mapreduce_nd!(
     dst_size = length(dst)
 
     if alg isa CPUThreads.Partitioned
-        mapreduce_nd_threads!(f, op, dst, src; init, seed, launch...)
+        mapreduce_slices!(f, op, dst, src, HOST_BACKEND; init, seed, launch_kw...)
         return dst
     end
-    block_size = alg.block_size
+    shape = launch.shape
 
     # A single output of a contiguous source: the whole-array kernels, finishing on the device
-    if dst_size == 1
-        linear = linear_source(src, rdims)
-        if linear !== nothing
-            Base.inferencebarrier(mapreduce_1d_gpu)(
-                f, op, linear, backend; init, seed, block_size,
-                items_per_thread=alg.items_per_thread, max_blocks=target_blocks,
-                partials=get(bufs, :partials, nothing), switch_below=0, commutative, dst)
-            return dst
-        end
-    end
-
-    # The kernels below index a flat buffer at `buffer[base_offset + Σ coordᵈ·strideᵈ + 1]`
-    # (see `source_layout`)
-    strided = strided_layout(src)
-    layout = isnothing(strided) ? linear_layout(src) : strided
-    buffer, base_offset = layout.buffer, layout.offset
-    segs = merge_dims(src_sizes, layout.strides, rdims)
-    reduce_size = len
-    shape, reduce_groups = reduce_shape(dst_size, reduce_size, segs, block_size, tuning, A)
-    commutative || ((shape, reduce_groups) = ordered_shape(shape, reduce_groups, dst_size,
-                                                           reduce_size, block_size))
-
-    # One output per thread of a source without a dense buffer: iterating over the Cartesian
-    # indices of each output's elements saves decoding every linear index
-    if isnothing(strided) && shape === :by_thread
-        blocks = cld(dst_size, block_size)
-        kernel! = by_thread_cartesian_kernel!(backend, block_size)
-        Base.inferencebarrier(kernel!)(
-            src, dst, f, op, seed, init,
-            CartesianIndices(dst), slice_indices(src, dst), dst_size,
-            ndrange=(block_size * blocks,),
-        )
+    if shape isa Whole
+        Base.inferencebarrier(mapreduce_1d_gpu)(
+            f, op, linear_source(src, launch.buffer, launch.offset), backend; init, seed,
+            block_size=alg.block_size, items_per_thread=alg.items_per_thread,
+            max_blocks=reduce_tuning(backend, A).target_blocks,
+            partials=get(bufs, :partials, nothing), switch_below=0,
+            commutative=!shape.ordered, dst)
         return dst
     end
 
-    with_segments(segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
-        Base.inferencebarrier(launch_shape!)(
-            Val(shape), reduce_groups, f, op, dst, buffer, backend, block_size, target_blocks;
-            init, seed, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides,
-            outer_sizes, dst_size, reduce_size, dense_buffer=!isnothing(strided),
-            items_per_thread=alg.items_per_thread,
-        )
+    # (the kernels below index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`)
+    buffer, dense = kernel_buffer(src, launch.buffer)
+    with_segments(launch.segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
+        ix = (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
+              outer_sizes, dst_size, reduce_size=len, dense)
+        Base.inferencebarrier(launch!)(shape, f, op, dst, src, buffer, backend, alg, bufs, init,
+                                       seed, ix)
     end
-
     return dst
 end
 
@@ -126,144 +92,143 @@ function mapreduce_singles!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
     end
 end
 
-# Launch the kernels of a strided reduction of shape `shape`, with the shape's parameter
-# `reduce_groups` (see `reduce_shape`).
+# Launch the kernels of a reduction along `dims` of shape `shape` into `dst`, reading `buffer`
+# (see `kernel_buffer`) with the indices `ix`: the offsets of the segments `reduce_*` and `outer_*`
+# from `base_offset`, the sizes, and whether `buffer` is the source's dense buffer (`dense`), which
+# some kernels read with vector loads.
 #
 # This and the other GPU launches of a reduction are called through `Base.inferencebarrier`.
 # Inferring a launch through KernelAbstractions and the back-end takes far longer than the launch,
 # and without the barrier a reduction with a new `f`, `op` or element type infers every launch it
 # could make: all shapes, segment layouts and vector widths. A dynamic dispatch costs a fraction of
 # a microsecond.
-#
-# `dense_buffer` is whether `buffer` is the dense buffer of the source, which the by-block kernel
-# can read with vector loads, or a linearly indexed lazy source (see `source_layout`).
-function launch_shape!(
-    ::Val{shape}, reduce_groups, f::F, op::OP, dst, buffer, backend, block_size, target_blocks;
-    init, seed, bufs, base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes,
-    dst_size, reduce_size, dense_buffer, items_per_thread,
-) where {shape, F, OP}
-    if shape === :ordered
-        partials = reduce_groups > 1 ? bufs.partials : nothing
-        launch_ordered!(
-            backend, block_size, items_per_thread, buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, reduce_groups, partials; dense_buffer,
-        )
-    elseif shape === :columns || shape === :columns_ordered
-        ordered = shape === :columns_ordered
-        groups = reduce_groups
-        # (runs of `outer_sizes[1]` contiguous outputs, at the other kept dimensions' offsets)
-        run = outer_sizes[1]
-        runs = Base.tail(outer_strides), Base.tail(outer_sizes)
-        cols = columns_outputs(run)
-        blocks = cld(run, cols) * (dst_size ÷ run) * groups
-        threads = min(block_size, COLUMNS_MAX_THREADS)
-        kernel! = columns_kernel!(backend, threads)
-        if groups == 1
-            kernel!(buffer, dst, f, op, seed, init, base_offset, reduce_strides[1], dst_size,
-                    run, dst_size ÷ run, runs..., reduce_size, 1, Val(cols), Val(ordered);
-                    ndrange=(threads * blocks,))
-        else
-            # (the partial results of each output's groups, combined by a second pass)
-            partial = bufs.partials
-            kernel!(buffer, partial, f, op, seed, Unfinished(), base_offset,
-                    reduce_strides[1], dst_size, run, dst_size ÷ run, runs..., reduce_size, groups,
-                    Val(cols), Val(ordered);
-                    ndrange=(threads * blocks,))
-            pass2_block_size = combine_block_size(groups)
-            if ordered
-                ordered_pass!(backend, pass2_block_size, 1, partial, dst, PartialInputs(),
-                              op, seed, init, 0, (1,), (dst_size,), (dst_size,),
-                              (groups,), dst_size, groups, 1)
-            else
-                kernel2! = combine_groups_kernel!(backend, pass2_block_size)
-                kernel2!(partial, dst, op, seed, init, dst_size, groups,
-                         ndrange=(pass2_block_size * dst_size,))
-            end
-        end
-    elseif shape === :by_lanes
-        lanes = reduce_groups
-        blocks = cld(dst_size, block_size ÷ lanes)
-        kernel! = by_lanes_kernel!(backend, block_size)
-        kernel!(
-            buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(lanes),
-            ndrange=(block_size * blocks,),
-        )
-    elseif shape === :tiled_strided
-        rows_per_block = TILED_OUTPUTS
-        blocks = cld(dst_size, rows_per_block)
-        kernel! = tiled_strided_kernel!(backend, block_size)
-        kernel!(
-            buffer, dst, f, op, seed, init,
-            base_offset, reduce_strides[1], dst_size, reduce_size, Val(rows_per_block),
-            ndrange=(block_size * blocks,),
-        )
-    elseif shape === :by_thread
-        blocks = cld(dst_size, block_size)
-        kernel! = by_thread_kernel!(backend, block_size)
-        kernel!(
+function launch!(::ByThread, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes, dst_size,
+       reduce_size, dense) = ix
+    block_size = alg.block_size
+    blocks = cld(dst_size, block_size)
+    if dense
+        by_thread_kernel!(backend, block_size)(
             buffer, dst, f, op, seed, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
         )
-    elseif shape === :multigroup
-        partial = bufs.partials
-        kernel! = multigroup_kernel!(backend, block_size)
-        kernel!(
-            buffer, partial, f, op, seed,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            Val(dst_size), reduce_size, reduce_groups,
-            ndrange=(block_size * dst_size * reduce_groups,),
-        )
-
-        pass2_block_size = combine_block_size(reduce_groups)
-        kernel2! = combine_groups_kernel!(backend, pass2_block_size)
-        kernel2!(
-            partial, dst, op, seed, init,
-            dst_size, reduce_groups,
-            ndrange=(pass2_block_size * dst_size,),
-        )
     else
-        # (`:by_block_each` launches a block for each of its few outputs)
-        launch_blocks = shape === :by_block ? min(dst_size, target_blocks) : dst_size
-        launch_by_block!(
-            backend, block_size, buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            dst_size, reduce_size, launch_blocks, dense_buffer,
-        )
+        mapreduce_slices!(f, op, dst, src, backend; init, seed, block_size)
     end
-
-    return nothing
 end
 
-# Launch the by-block kernel with `num_blocks` blocks, each reducing the outputs `iblock`,
-# `iblock + num_blocks`, ...; with vector loads where `buffer` is a dense buffer they suit
-function launch_by_block!(
-    backend, block_size, buffer, dst, f::F, op::OP, seed, init,
-    base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-    output_size, reduce_size, num_blocks, dense_buffer,
-) where {F, OP}
-    W = dense_buffer ? vector_width(
-        buffer, base_offset, outer_strides, reduce_strides, reduce_size, block_size,
-    ) : 0
+function launch!(shape::ByLanes, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, outer_strides, outer_sizes, dst_size, reduce_size) = ix
+    block_size = alg.block_size
+    blocks = cld(dst_size, block_size ÷ shape.lanes)
+    by_lanes_kernel!(backend, block_size)(
+        buffer, dst, f, op, seed, init,
+        base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(shape.lanes),
+        ndrange=(block_size * blocks,),
+    )
+end
+
+# (with vector loads where `buffer` is a dense buffer they suit)
+function launch!(shape::ByBlock, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes, dst_size,
+       reduce_size, dense) = ix
+    block_size, blocks = alg.block_size, shape.blocks
+    W = dense ? vector_width(buffer, base_offset, outer_strides, reduce_strides, reduce_size,
+                             block_size) : 0
     if W > 0
         kernel! = by_block_vector_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
-            buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes,
-            output_size, reduce_size, num_blocks, Val(W),
-            ndrange=(block_size * num_blocks,),
+            buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
+            dst_size, reduce_size, blocks, Val(W),
+            ndrange=(block_size * blocks,),
         )
     else
         kernel! = by_block_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
-            buffer, dst, f, op, seed, init,
-            base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-            output_size, reduce_size, num_blocks,
-            ndrange=(block_size * num_blocks,),
+            buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
+            reduce_strides, reduce_sizes, dst_size, reduce_size, blocks,
+            ndrange=(block_size * blocks,),
         )
+    end
+end
+
+function launch!(shape::ByBlocks, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes, dst_size,
+       reduce_size) = ix
+    block_size, groups = alg.block_size, shape.groups
+    partials = bufs.partials
+    multigroup_kernel!(backend, block_size)(
+        buffer, partials, f, op, seed,
+        base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+        Val(dst_size), reduce_size, groups,
+        ndrange=(block_size * dst_size * groups,),
+    )
+    combine_groups!(backend, partials, dst, op, seed, init, dst_size, groups, false)
+end
+
+function launch!(shape::Columns, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, reduce_strides, outer_strides, outer_sizes, dst_size, reduce_size) = ix
+    (; outputs, groups, ordered) = shape
+    # (runs of `outer_sizes[1]` contiguous outputs, at the other kept dimensions' offsets)
+    run = outer_sizes[1]
+    runs = Base.tail(outer_strides), Base.tail(outer_sizes)
+    blocks = cld(run, outputs) * (dst_size ÷ run) * groups
+    threads = min(alg.block_size, COLUMNS_MAX_THREADS)
+    # (with several groups, the partial results of each output's groups, for a second pass)
+    out, out_init = groups == 1 ? (dst, init) : (bufs.partials, Unfinished())
+    columns_kernel!(backend, threads)(
+        buffer, out, f, op, seed, out_init, base_offset, reduce_strides[1], dst_size,
+        run, dst_size ÷ run, runs..., reduce_size, groups, Val(outputs), Val(ordered);
+        ndrange=(threads * blocks,),
+    )
+    groups == 1 || combine_groups!(backend, out, dst, op, seed, init, dst_size, groups, ordered)
+end
+
+function launch!(::Tiled, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, reduce_strides, dst_size, reduce_size) = ix
+    block_size = alg.block_size
+    blocks = cld(dst_size, TILED_OUTPUTS)
+    tiled_strided_kernel!(backend, block_size)(
+        buffer, dst, f, op, seed, init,
+        base_offset, reduce_strides[1], dst_size, reduce_size, Val(TILED_OUTPUTS),
+        ndrange=(block_size * blocks,),
+    )
+end
+
+function launch!(shape::Ordered, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+                 seed, ix) where {F, OP}
+    (; base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes, dst_size,
+       reduce_size, dense) = ix
+    groups = shape.groups
+    launch_ordered!(
+        backend, alg.block_size, alg.items_per_thread, buffer, dst, f, op, seed, init,
+        base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
+        dst_size, reduce_size, groups, groups > 1 ? bufs.partials : nothing;
+        dense_buffer=dense,
+    )
+end
+
+# The second pass of a reduction split across `groups` blocks per output: a block per output
+# combines the partial results `partials` of its groups (`dst_size` apart) into `dst`, in order if
+# `ordered`
+function combine_groups!(backend, partials, dst, op::OP, seed, init, dst_size, groups,
+                         ordered) where {OP}
+    block_size = combine_block_size(groups)
+    if ordered
+        ordered_pass!(backend, block_size, 1, partials, dst, PartialInputs(), op, seed, init,
+                      0, (1,), (dst_size,), (dst_size,), (groups,), dst_size, groups, 1)
+    else
+        by_block_kernel!(backend, block_size)(
+            partials, dst, PartialInputs(), op, seed, init, 0, (1,), (dst_size,), (dst_size,),
+            (groups,), dst_size, groups, dst_size, ndrange=(block_size * dst_size,))
     end
 end
 
@@ -277,18 +242,15 @@ end
 end
 
 
-# CPU path
-
-# Reduce `src` into `dst` on Julia threads, one output after the other in each task
-function mapreduce_nd_threads!(
-    f::F, op::OP, dst, src;
-    init, seed, max_tasks, min_elems,
-) where {F, OP}
+# Reduce `src` into `dst` with a thread per output, which reduces its slice in turn: on Julia
+# threads, or on the GPU for sources without a dense buffer (iterating over the Cartesian indices
+# of each output's elements saves decoding every linear index)
+function mapreduce_slices!(f::F, op::OP, dst, src, backend; init, seed, launch...) where {F, OP}
     Rother  = CartesianIndices(dst)
     Rreduce = slice_indices(src, dst)
     mapf, accop = seeded_ops(f, op, seed)
 
-    foreachindex_on(eachindex(dst), HOST_BACKEND; max_tasks, min_elems) do idst
+    foreachindex_on(eachindex(dst), backend; launch...) do idst
         @inbounds begin
             Iother = Rother[idst]
             res = seed

@@ -50,19 +50,29 @@ end
 end
 firstn(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 
-# The source of a reduction along `dims` into a single output as a linearly indexed collection
-# of its elements, for the whole-array kernels (`mapreduce_1d_gpu`): a `Broadcasted` object, an
-# array without a dense buffer, or a contiguous range of a dense buffer; `nothing` for other
-# sources.
-linear_source(src::Base.Broadcast.Broadcasted, rdims) = src
-function linear_source(src::AbstractArray, rdims)
-    layout = strided_layout(src)
-    isnothing(layout) && return src
-    (rstrides, _, nr), _ = merge_dims(size(src), layout.strides, rdims)
-    nr == 1 && rstrides[1] == 1 || return nothing
-    (; buffer, offset) = layout
-    return offset == 0 && buffer === src ? src : view(buffer, offset + 1:offset + length(src))
+# Where the kernels find the elements of the source `src` of a reduction along `dims`, which
+# `select_launch` records so that the run takes them from the source it reduces: `:parent`, the
+# dense buffer `src` wraps (see `strided_layout`); `:linear`, `src` indexed linearly (see
+# `linear_layout`); or `:source`, the source itself, a dense array or a `Broadcasted` object. Before
+# Julia 1.12, a `Broadcasted` source is materialized when the reduction runs (see `kernel_source`).
+function buffer_kind(src, strided)
+    isnothing(strided) && !(src isa Base.Broadcast.Broadcasted) && return :linear
+    return isnothing(strided) || strided.buffer === src ? :source : :parent
 end
+
+# The buffer the kernels index, from the source `src` and the `buffer_kind`, and whether it is a
+# dense buffer, which the kernels can read with vector loads
+function kernel_buffer(src, kind::Symbol)
+    kind === :parent && return parent(src), true
+    kind === :linear && return linear_view(src), false
+    return src, src isa AbstractArray
+end
+
+# The source of a reduction along `dims` into a single output of a contiguous source, as a
+# linearly indexed collection of its elements for the whole-array kernels (`mapreduce_1d_gpu`):
+# the source itself, or the range of its elements in the dense buffer it wraps, from `offset` on
+linear_source(src, kind::Symbol, offset::Int) =
+    kind === :parent ? view(parent(src), offset + 1:offset + length(src)) : src
 
 # (the strides of a dense column-major array: 1 and the running products of the sizes)
 dense_strides(sizes::Tuple{}) = ()
