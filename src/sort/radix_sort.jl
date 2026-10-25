@@ -446,9 +446,8 @@ function radix_plan(a, v::AbstractArray{T}, backend, dims) where T
     scan = scan_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                       inclusive=false).plan
     key_range = first(radix_key_range_setup(v, backend)).plan
-    return Plan(backend, a, (; scan=scan.alg, key_range=key_range.alg),
-                (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan=scan.sizes,
-                 key_range=key_range.sizes))
+    return Plan(backend, a, (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan,
+                             key_range))
 end
 
 

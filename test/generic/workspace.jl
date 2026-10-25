@@ -5,9 +5,8 @@
 buffer_sizes(buffers::NamedTuple) = map(buffer_sizes, buffers)
 buffer_sizes(buffer::AbstractArray) = (eltype(buffer), size(buffer))
 
-# `ws` with other buffers or nested algorithms, which the operations must reject
-forge(ws; buffers=ws.buffers, nested=ws.nested) =
-    AK.Workspace(ws.backend, ws.device, ws.alg, nested, ws.sizes, buffers)
+# `ws` with other buffers or another plan, which the operations must reject
+forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buffers)
 
 @testset "workspace: sizes" begin
     v = array_from_host(rand(Float32, 10_000))
@@ -197,12 +196,15 @@ end
         bools = array_from_host(rand(Bool, 10_000))
         alg = AK.ScanScatter()
         ws = AK.workspace(AK.findall, bools; alg)
-        @test haskey(ws.nested, :scan)
-        other = forge(ws; nested=(; ws.nested..., scan=AK.ScanPrefixes(16, 1)))
-        @test_throws ArgumentError AK.findall(bools; alg, workspace=other)
+        p = ws.plan
+        @test p.sizes.scan isa AK.Plan
+        scan = AK.Plan(p.backend, AK.ScanPrefixes(16, 1), p.sizes.scan.sizes)
+        other = forge(ws; plan=AK.Plan(p.backend, p.alg, (; p.sizes..., scan)))
+        err = try AK.findall(bools; alg, workspace=other) catch e; e end
+        @test err isa ArgumentError && occursin("ScanPrefixes(16, 1)", err.msg)
         @test Array(AK.findall(bools; alg, workspace=ws)) == findall(Array(bools))
         ws = AK.workspace(AK.sort!, v; alg=AK.RadixSort())
-        @test Base.all(k -> haskey(ws.nested, k), (:scan, :key_range))
+        @test Base.all(k -> ws.plan.sizes[k] isa AK.Plan, (:scan, :key_range))
     else
         # A workspace of reference elements, on the host
         ws = AK.workspace(AK.sort!, fill("a", 100); alg=AK.CPUThreads.SampleSort(max_tasks=4))
