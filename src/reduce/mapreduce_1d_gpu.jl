@@ -10,8 +10,8 @@
 # `iblock` reduces the tiles `iblock`, `iblock + nblocks`, ... of `src`, and stores
 # `finish(op, init, dst, iblock + 1, partial)` in `dst[iblock + 1]`.
 @kernel inbounds=true cpu=false unsafe_indices=true function mapreduce_1d_kernel!(
-    @Const(src), dst, f, op, seed, init, nblocks, ::Val{NI}, ::Val{K},
-) where {NI, K}
+    @Const(src), dst, f::F, op::OP, seed, init, nblocks, ::Val{NI}, ::Val{K},
+) where {F, OP, NI, K}
 
     sdata = @localmem typeof(seed) (NI,)
     mapf, accop = seeded_ops(f, op, seed)

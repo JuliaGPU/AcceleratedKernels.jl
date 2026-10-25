@@ -15,13 +15,13 @@
 # aligned vector loads (see `ordered_vector_width`).
 @kernel inbounds=true cpu=false unsafe_indices=true function ordered_kernel!(
     src, dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size, groups,
     ::Val{K}, ::Val{W}, subgroups::Val,
-) where {K, W}
+) where {F, OP, K, W}
     @uniform N = @groupsize()[1]
     totals = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
