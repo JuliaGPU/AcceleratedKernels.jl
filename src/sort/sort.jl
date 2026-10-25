@@ -25,11 +25,13 @@ dimension independently.
 `alg` is [`Auto()`](@ref Auto) by default, which chooses an algorithm for the backend and device,
 the element type, the ordering, and the length of the array or slices: on the host,
 [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort); on GPUs,
-[`MergeSort`](@ref). A device's tuning can make it choose [`BitonicSort`](@ref) for short inputs
-or [`RadixSort`](@ref) for long ones where they give the same result, which no backend does yet;
-`Auto(stable=false)` then also allows the unstable `BitonicSort` for elements that compare equal
-without being identical (e.g. floats). An explicit algorithm, with any of its settings, is used as
-given or rejected with an `ArgumentError`.
+[`BitonicSort`](@ref) for short arrays and slices, [`RadixSort`](@ref) for long ones of the
+element types and orderings it supports, and [`MergeSort`](@ref) otherwise, with lengths measured
+for each backend (`MergeSort` on backends without such measurements). `BitonicSort` is unstable,
+so by default `Auto` uses it only where equal elements are identical (integers, `Bool`, `Char`
+under the default ordering or its reverse); `Auto(stable=false)` also allows it for others
+(e.g. floats). An explicit algorithm, with any of its settings, is used as given or rejected with
+an `ArgumentError`.
 
 `backend` is derived from `v`; pass it only for arrays that do not determine their backend.
 
