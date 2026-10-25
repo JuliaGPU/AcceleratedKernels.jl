@@ -1,9 +1,8 @@
-
 @testset "foreachindex" begin
     Random.seed!(0)
 
     # CPU
-    if AK._runs_threads(BACKEND)
+    if AK.runs_threads(BACKEND)
         x = zeros(Int, 1000)
         AK.foreachindex(x) do i
             x[i] = i
@@ -54,7 +53,7 @@
     end
     f3(x)
     @test Array(x) == [1:500; zeros(Int, 500)]
-    # ... without one, it runs on the host
+    # Without a backend, the loop over a range runs on the host
     y = zeros(Int, 10)
     AK.foreachindex(i -> (y[i] = i), 1:10)
     @test y == 1:10
@@ -72,8 +71,7 @@
         @test_throws ArgumentError AK.foreachindex(i -> nothing, x; kw...)
     end
     @test_throws TypeError AK.foreachindex(i -> nothing, x; backend=:gpu)
-    @test_throws MethodError AK.foreachindex(i -> nothing, x; prefer_threads=true)
-    @test_throws MethodError AK.foreachindex(i -> nothing, x, AK.get_backend(x))
+    @test_throws MethodError AK.foreachindex(i -> nothing, x; bad=:kwarg)
 end
 
 

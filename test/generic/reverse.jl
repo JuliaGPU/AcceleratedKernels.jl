@@ -42,9 +42,17 @@
             @test Array(src) == h                   # source left untouched
         end
 
-        @test_throws Exception AK.reverse!(
+        @test_throws DimensionMismatch AK.reverse!(
             array_from_host(rand(Float32, 10)),
             array_from_host(rand(Float32, 11)))
+
+        # The destination does not overlap the source (where the array type lets
+        # `Base.mightalias` see the overlap: Metal's contiguous views are separate arrays)
+        x = array_from_host(rand(Float32, 10))
+        @test_throws ArgumentError AK.reverse!(x, x)
+        if Base.mightalias(view(x, 2:10), view(x, 1:9))
+            @test_throws ArgumentError AK.reverse!(view(x, 2:10), view(x, 1:9))
+        end
 
         # A source with Cartesian indices
         h = rand(Float32, 4, 5)
@@ -225,7 +233,7 @@
         dst = similar(v)
         @test_throws ArgumentError AK.reverse!(dst, v; dims=Iterators.Stateful([1, 1]))
         @test_throws ArgumentError AK.reverse!(v; dims=nothing)
-        @test_throws ArgumentError AK.reverse!(similar(v, 4, 3, 2), v; dims=1)
+        @test_throws DimensionMismatch AK.reverse!(similar(v, 4, 3, 2), v; dims=1)
 
         # Duplicate dims throw, as in Base
         @test_throws ArgumentError AK.reverse!(v; dims=(1, 1))
@@ -246,6 +254,7 @@
         @test_throws ArgumentError AK.reverse!(similar(m), m; dims=1, min_elems=0)
     end
 end
+
 
 @testset "reverse: backend-free inputs" begin
     r = AK.reverse(1:5; backend=BACKEND)

@@ -3,7 +3,9 @@
 
 GPU `any`/`all` in which every thread whose element decides the result stores the same value to
 one global flag. It is the fastest predicate algorithm, but some older Intel GPUs have been reported
-to hang when many threads write one location, so `Auto` picks [`ViaReduce`](@ref) on oneAPI.
+to hang when many threads write one location, and it launches a thread per element, which Metal's
+grid cannot hold for 2^32 elements or more, so `Auto` picks [`ViaReduce`](@ref) on oneAPI and
+Metal.
 """
 Base.@kwdef struct ConcurrentWrite <: PredicateAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -13,7 +15,9 @@ end
     ViaReduce(; reduce::ReduceAlgorithm=BlockReduce())
 
 `any`/`all` as a reduction with `|` or `&`, using the reduction algorithm `reduce`. It runs on
-every backend that runs AcceleratedKernels' kernels, but reads every element.
+every backend that runs AcceleratedKernels' kernels. Both algorithms read every element, but
+this one takes the reduction's passes over partial results, where [`ConcurrentWrite`](@ref)
+takes a single pass.
 """
 Base.@kwdef struct ViaReduce{R <: ReduceAlgorithm} <: PredicateAlgorithm
     reduce::R = BlockReduce()
@@ -29,8 +33,6 @@ device, as returned by [`predicate_tuning`](@ref):
 - `prefer_concurrent_write`: whether `Auto` picks `ConcurrentWrite`, rather than `ViaReduce()`.
 - `block_size`: for `ConcurrentWrite`.
 - `threads_min_elems`: the default `min_elems` of `CPUThreads.Partitioned`.
-
-The defaults reproduce AK's historical settings. Internal: the fields may change in any release.
 """
 Base.@kwdef struct PredicateTuning
     prefer_concurrent_write::Bool = true
@@ -47,54 +49,58 @@ The `any`/`all` tuning for element type `T` (the input's) on `backend`'s current
 predicate_tuning(::Backend, ::Type) = PredicateTuning()
 
 """
-    _resolve_predicate(alg, backend, T) -> Algorithm
+    resolve_predicate(alg, backend, T) -> Algorithm
 
 Resolve `alg` for `any`/`all` over elements of type `T` on `backend`: `ConcurrentWrite`,
 `ViaReduce` (with its reduction resolved) or `CPUThreads.Partitioned`, with every field set, or an
 `ArgumentError`.
 """
-function _resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    _checkdomain(alg)
+function resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
     t = predicate_tuning(backend, T)
-    a = alg isa Auto ? _select_predicate(backend, t) : alg
-    a = _fill(a, t, backend)
-    _check_predicate(a, backend)
+    a = alg isa Auto ? select_predicate(backend, t) : alg
+    a = fill_defaults(a, t, backend)
+    check_predicate(a, backend)
     return a
 end
 
-function _select_predicate(backend, t::PredicateTuning)
-    _runs_threads(backend) && return CPUThreads.Partitioned()
+function select_predicate(backend, t::PredicateTuning)
+    runs_threads(backend) && return CPUThreads.Partitioned()
     return t.prefer_concurrent_write ? ConcurrentWrite() : ViaReduce()
 end
 
-function _checkdomain(a::ConcurrentWrite)
-    _check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "ConcurrentWrite: `block_size` must be at most 1024, got $(a.block_size)"))
+function check_fields(a::ConcurrentWrite)
+    check_block_size(a)
     nothing
 end
 
-_fill(a::ConcurrentWrite, t::PredicateTuning, backend) =
+fill_defaults(a::ConcurrentWrite, t::PredicateTuning, backend) =
     ConcurrentWrite(something(a.block_size, t.block_size))
 # The nested reduction reduces `Bool`s along the whole array
-_fill(a::ViaReduce, t::PredicateTuning, backend) =
-    ViaReduce(_resolve_reduce(a.reduce, backend, Bool, :))
-_fill(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = _fill_threads(a, t)
-_fill(a::Algorithm, t::PredicateTuning, backend) =
-    throw(ArgumentError("$(_algname(a)) is not an algorithm for `any` and `all`"))
+fill_defaults(a::ViaReduce, t::PredicateTuning, backend) =
+    ViaReduce(resolve_reduce(a.reduce, backend, Bool, :))
+fill_defaults(a::CPUThreads.Partitioned, t::PredicateTuning, backend) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::PredicateTuning, backend) =
+    throw(ArgumentError("$(algname(a)) is not an algorithm for `any` and `all`"))
 
-function _check_predicate(a::ConcurrentWrite, backend)
-    _checkdomain(a)
-    _require_kernels(a, backend)
+function check_predicate(a::ConcurrentWrite, backend)
+    check_fields(a)
+    require_kernels(a, backend)
 end
-_check_predicate(a::ViaReduce, backend) = nothing       # its reduction was resolved by `_fill`
-function _check_predicate(a::CPUThreads.Partitioned, backend)
-    _checkdomain(a)
-    _require_threads(a, backend)
+check_predicate(a::ViaReduce, backend) = nothing       # its reduction was resolved by `fill_defaults`
+function check_predicate(a::CPUThreads.Partitioned, backend)
+    check_fields(a)
+    require_threads(a, backend)
 end
 
 
-@kernel cpu=false inbounds=true function _any_global!(out, pred, @Const(v), first_index)
+# `f`, required to return a `Bool` (Base's `_bool`), for `count` and the predicates
+struct BoolResult{F} <: Function
+    f::F
+end
+@inline (c::BoolResult)(x) = c.f(x)::Bool
+
+
+@kernel cpu=false inbounds=true function any_kernel!(out, pred, @Const(v), first_index)
     temp = @localmem Int8 (1,)
     i = @index(Global, Linear)
 
@@ -124,14 +130,11 @@ Check if any element of `v` satisfies the predicate `pred` (i.e. some `pred(v[i]
 must return a `Bool`. Optimised differently to `mapreduce` due to shortcircuiting behaviour of
 booleans.
 
-**Other names**: not often implemented standalone on GPUs, typically included as part of a
-reduction.
-
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and [`ConcurrentWrite`](@ref) on GPUs
-([`ViaReduce`](@ref) on oneAPI). `backend` is derived from `v`; pass it for inputs that do not
-determine it, such as index ranges. `workspace` takes
-the scratch memory of a [`workspace`](@ref) made for the same call.
+([`ViaReduce`](@ref) on oneAPI and Metal). `backend` is derived from `v`; pass it for inputs
+that do not determine it, such as index ranges. `workspace` takes the scratch memory of a
+[`workspace`](@ref) made for the same call.
 
 On the host, multithreaded parallelisation is only worth it for large arrays, relatively expensive
 predicates, and/or rare occurrence of true; use `CPUThreads.Partitioned(; max_tasks, min_elems)`
@@ -160,17 +163,17 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 """
 function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = _predicate_plan(pred, |, v, backend, alg)
-    _any(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
+    p = predicate_setup(pred, |, false, v, backend, alg).plan
+    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
-_plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    _predicate_plan(pred, |, v, backend, alg)
+plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+    predicate_setup(pred, |, false, v, backend, alg).plan
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
 # (which GPU backends report without Base's `TypeError`).
-function _check_bool_result(pred, v)
+function check_bool_result(pred, v)
     isempty(v) && return nothing        # (Base never calls the predicate then)
     R = Base.promote_op(pred, eltype(v))
     R === Union{} || Bool <: R || throw(ArgumentError(
@@ -178,36 +181,36 @@ function _check_bool_result(pred, v)
     nothing
 end
 
-# The plan of `any`/`all` (whose `ViaReduce` reduces with `op`): the flag of `ConcurrentWrite`,
-# or the scratch of the reduction
-function _predicate_plan(pred, op, v, backend, alg)
-    _check_bool_result(pred, v)
-    backend = _resolve_backend(backend, v)
-    a = _resolve_predicate(alg, backend, eltype(v))
+# The plan of `any`/`all` (whose `ViaReduce` reduces with `op` from `init`): the flag of
+# `ConcurrentWrite`, or the scratch of the reduction
+function predicate_setup(pred, op, init, v, backend, alg)
+    check_bool_result(pred, v)
+    backend = resolve_backend(backend, v)
+    a = resolve_predicate(alg, backend, eltype(v))
     sizes = if a isa ConcurrentWrite
-        (; flag=_buffer(Int8, 1))
+        (; flag=scratch(Int8, 1))
     elseif a isa ViaReduce
-        (; reduce=_mapreduce_setup(_BoolValued(pred), op, v, backend, op === (|) ? false : true,
-                                   nothing, nothing, :, a.reduce).plan.sizes)
+        (; reduce=mapreduce_setup(BoolResult(pred), op, v, backend, init, nothing, nothing, :,
+                                  a.reduce).plan.sizes)
     else
         (;)
     end
-    return _Plan(backend, a, sizes)
+    return (; plan=Plan(backend, a, sizes))
 end
 
-function _any(pred, v, backend, alg::ConcurrentWrite, bufs)
+function any_run(pred, v, backend, alg::ConcurrentWrite, bufs)
     # `ndrange` must not be zero
     isempty(v) && return false
     out = bufs.flag
     fill!(out, Int8(0))
-    _any_global!(backend, alg.block_size)(out, pred, v, firstindex(v), ndrange=length(v))
+    any_kernel!(backend, alg.block_size)(out, pred, v, firstindex(v), ndrange=length(v))
     return @allowscalar(out[1]) != 0
 end
 
-_any(pred, v, backend, alg::ViaReduce, bufs) =
-    _mapreduce_nested(_BoolValued(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
+any_run(pred, v, backend, alg::ViaReduce, bufs) =
+    mapreduce_nested(BoolResult(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
-function _any(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
+function any_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
     found = Threads.Atomic{Bool}(false)
     first_index = firstindex(v)
     task_partition(length(v), alg.max_tasks, alg.min_elems) do irange
@@ -250,14 +253,15 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 """
 function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing)
-    p = _predicate_plan(pred, &, v, backend, alg)
-    _all(pred, v, p.backend, p.alg, _buffers(p, workspace, v))
+    p = predicate_setup(pred, &, true, v, backend, alg).plan
+    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
 end
 
-_plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
-    _predicate_plan(pred, &, v, backend, alg)
+plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+    predicate_setup(pred, &, true, v, backend, alg).plan
 
-_all(pred, v, backend, alg::ConcurrentWrite, bufs) = !_any(!pred, v, backend, alg, bufs)
-_all(pred, v, backend, alg::ViaReduce, bufs) =
-    _mapreduce_nested(_BoolValued(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
-_all(pred, v, backend, alg::CPUThreads.Partitioned, bufs) = !_any(!pred, v, backend, alg, bufs)
+all_run(pred, v, backend, alg::ConcurrentWrite, bufs) = !any_run(!pred, v, backend, alg, bufs)
+all_run(pred, v, backend, alg::ViaReduce, bufs) =
+    mapreduce_nested(BoolResult(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
+all_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs) =
+    !any_run(!pred, v, backend, alg, bufs)

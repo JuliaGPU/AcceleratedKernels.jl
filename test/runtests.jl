@@ -11,9 +11,11 @@ const init_code = quote
     using Random
 end
 
-# Discover root-level tests (aqua.jl, partition.jl) and generic tests
+# The root-level tests run once; the generic ones (test/generic) once per backend. promote.jl is a
+# script, and setup.jl the generic tests' setup.
 const testsuite = find_tests(@__DIR__)
 delete!(testsuite, "promote")
+delete!(testsuite, "setup")
 const generic_tests = find_tests(joinpath(@__DIR__, "generic"))
 
 args = parse_args(ARGS; custom=["cpu-ka", "cpu"])
@@ -22,70 +24,30 @@ args = parse_args(ARGS; custom=["cpu-ka", "cpu"])
 # explicitly promoted them from weak to regular dependencies (see test/promote.jl).
 in_test_env(pkg) = Base.identify_package(pkg) !== nothing
 
-# Common helper code appended to every backend setup
-const _testset_setup_code = quote
-    global array_from_host
-    array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
-    function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
-        d_arr = if !TEST_KERNELS    # host arrays for the threaded algorithms
-            zeros(isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
-        else
-            KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
-        end
-        copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
-        d_arr
-    end
-
-    global with_workspace
-    # Call `op` with the workspace made for the same call
-    with_workspace(op, args...; kwargs...) =
-        op(args...; kwargs..., workspace=AK.workspace(op, args...; kwargs...))
-
-    global valid_backend_eltypes
-    valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
-
-    # Whether the backend's arrays can hold bits unions such as `Union{Missing, Bool}` (Metal.jl's,
-    # oneAPI.jl's and OpenCL.jl's cannot yet)
-    global TEST_BITS_UNIONS = nameof(typeof(BACKEND)) ∉ (:MetalBackend, :oneAPIBackend, :OpenCLBackend)
-
-    # An array whose axes start at `1 + offsets[d]`, like an `OffsetArray`
-    using Adapt: Adapt, adapt
-    struct OffsetAxes{T, N, A <: AbstractArray{T, N}} <: AbstractArray{T, N}
-        parent::A
-        offsets::NTuple{N, Int}
-    end
-    Base.axes(x::OffsetAxes) =
-        Base.map((ax, o) -> Base.IdentityUnitRange(ax .+ o), axes(x.parent), x.offsets)
-    Base.size(x::OffsetAxes) = size(x.parent)
-    Base.@propagate_inbounds Base.getindex(x::OffsetAxes{T, N}, I::Vararg{Int, N}) where {T, N} =
-        x.parent[(I .- x.offsets)...]
-    Base.@propagate_inbounds Base.setindex!(x::OffsetAxes{T, N}, v, I::Vararg{Int, N}) where {T, N} =
-        x.parent[(I .- x.offsets)...] = v
-    Base.similar(x::OffsetAxes, ::Type{T}, dims::Dims) where {T} = similar(x.parent, T, dims)
-    Base.copy(x::OffsetAxes) = OffsetAxes(copy(x.parent), x.offsets)
-    Adapt.adapt_structure(to, x::OffsetAxes) = OffsetAxes(adapt(to, x.parent), x.offsets)
-    KernelAbstractions.get_backend(x::OffsetAxes) = get_backend(x.parent)
-    global offset_from_host
-    offset_from_host(h_arr::AbstractArray, offsets) = OffsetAxes(array_from_host(h_arr), offsets)
-end
-
-# Build list of active backends, each with setup code
+# The backends under test, each with the code that sets up a generic test file for it: the
+# globals the tests use, then test/setup.jl. `BACKEND` is the backend, `MAX_BLOCK_SIZE` its
+# largest block, `TEST_KERNELS` whether AK's kernels run (else the threaded algorithms on host
+# arrays), and `HOST_KERNELS` whether those kernels run on the host backend. `load` and the
+# backend and block size are expressions, evaluated where the tests run.
 backends = Pair{String, Expr}[]
-
+function add_backend!(name, load, backend, max_block_size; kernels=true, host_kernels=false)
+    push!(backends, name => quote
+        $load
+        global BACKEND = $backend
+        global MAX_BLOCK_SIZE = Int($max_block_size)
+        global TEST_KERNELS = $kernels
+        global HOST_KERNELS = $host_kernels
+        include($(joinpath(@__DIR__, "setup.jl")))
+    end)
+end
 
 if in_test_env("CUDACore")
     using CUDACore, CUDATools
     @assert CUDACore.functional()
     @info "CUDACore information:\n" * sprint(CUDATools.versioninfo)
-    push!(backends, "cuda" => quote
-        using CUDACore
-        global BACKEND = CUDABackend()
-        global MAX_BLOCK_SIZE = Int(CUDACore.attribute(CUDACore.device(), CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK))
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = true
-        $_testset_setup_code
-    end)
+    add_backend!("cuda", :(using CUDACore), :(CUDABackend()),
+                 :(CUDACore.attribute(CUDACore.device(),
+                                      CUDACore.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)))
 end
 
 if in_test_env("AMDGPU")
@@ -93,95 +55,50 @@ if in_test_env("AMDGPU")
     @assert AMDGPU.functional()
     println("AMDGPU information:")
     AMDGPU.versioninfo()
-    push!(backends, "amdgpu" => quote
-        using AMDGPU
-        global BACKEND = ROCBackend()
-        global MAX_BLOCK_SIZE = 1024
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = true
-        $_testset_setup_code
-    end)
+    add_backend!("amdgpu", :(using AMDGPU), :(ROCBackend()), 1024)
 end
 
 if in_test_env("Metal")
     using Metal
     @assert Metal.functional()
     @info "Metal information:\n" * sprint(Metal.versioninfo)
-    push!(backends, "metal" => quote
-        using Metal
-        global BACKEND = MetalBackend()
-        global MAX_BLOCK_SIZE = Int(Metal.device().maxThreadsPerThreadgroup.width)
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
-        $_testset_setup_code
-    end)
+    add_backend!("metal", :(using Metal), :(MetalBackend()),
+                 :(Metal.device().maxThreadsPerThreadgroup.width))
 end
 
 if in_test_env("oneAPI")
     using oneAPI
     @assert oneAPI.functional()
     @info "oneAPI information:\n" * sprint(oneAPI.versioninfo)
-    push!(backends, "oneapi" => quote
-        using oneAPI
-        global BACKEND = oneAPIBackend()
-        global MAX_BLOCK_SIZE = Int(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize)
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
-        $_testset_setup_code
-    end)
+    add_backend!("oneapi", :(using oneAPI), :(oneAPIBackend()),
+                 :(oneAPI.oneL0.compute_properties(oneAPI.device()).maxTotalGroupSize))
 end
 
 if in_test_env("OpenCL")
     using pocl_jll, OpenCL
     @assert !isempty(OpenCL.cl.platforms())
     @info "OpenCL information:\n" * sprint(OpenCL.versioninfo)
-    push!(backends, "opencl" => quote
-        using pocl_jll
-        using OpenCL
-        global BACKEND = OpenCLBackend()
-        global MAX_BLOCK_SIZE = Int(OpenCL.cl.device().max_work_group_size)
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = false     # ... on the host backend
-        global TEST_DL = false
-        $_testset_setup_code
-    end)
+    add_backend!("opencl", :(using pocl_jll, OpenCL), :(OpenCLBackend()),
+                 :(OpenCL.cl.device().max_work_group_size))
 end
 
-# cpu-ka only when --cpu-ka flag passed: AK's kernels on the host backend, which runs them on
-# KernelAbstractions 0.10 (on PoCL) but not on 0.9
+# AK's kernels on the host backend, only with --cpu-ka: KernelAbstractions 0.10 runs them (on
+# PoCL), 0.9 does not
 if args.custom["cpu-ka"] !== nothing
-    AK._runs_kernels(AK.HOST_BACKEND) ||
+    AK.runs_kernels(AK.HOST_BACKEND) ||
         error("--cpu-ka needs KernelAbstractions 0.10, whose host backend runs AK's kernels")
-    push!(backends, "cpu-ka" => quote
-        global BACKEND = get_backend([])
-        global MAX_BLOCK_SIZE = 1024
-        global TEST_KERNELS = true      # AK's kernels run in this configuration
-        global HOST_KERNELS = true      # ... on the host backend
-        global TEST_DL = false
-        $_testset_setup_code
-    end)
+    add_backend!("cpu-ka", nothing, :(get_backend([])), 1024; host_kernels=true)
 end
 
-# CPU runs if no backend selected or if explicitly specified
+# The threaded algorithms, if no other backend is selected or with --cpu
 if args.custom["cpu"] !== nothing || isempty(backends)
-    push!(backends, "cpu" => quote
-        global BACKEND = get_backend([])
-        global MAX_BLOCK_SIZE = 1024
-        global TEST_KERNELS = false
-        global HOST_KERNELS = false
-        global TEST_DL = false
-        $_testset_setup_code
-    end)
+    add_backend!("cpu", nothing, :(get_backend([])), 1024; kernels=false)
 end
 
-# Duplicate generic tests per active backend
-for (backend_name, setup_code) in backends
+for (backend_name, setup) in backends
     for (test_name, test_body) in generic_tests
         testsuite["$backend_name/$test_name"] = quote
-            $setup_code
+            $setup
             $test_body
         end
     end

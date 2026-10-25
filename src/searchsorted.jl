@@ -1,24 +1,6 @@
-# Taken from julia.Base to ensure consistent results with the Base CPU version
+# Copied from Base, so that the results match `Base.searchsortedfirst` and `searchsortedlast`
 # License is MIT: https://julialang.org/license
-function _searchsortedfirst(v, x, lo::T, hi::T, comp) where T<:Integer
-    hi = hi + T(1)
-    len = hi - lo
-    @inbounds while len != 0x0
-        half_len = len >>> 0x1
-        m = lo + half_len
-        if comp(v[m], x)
-            lo = m + 0x1
-            len -= half_len + 0x1
-        else
-            hi = m
-            len = half_len
-        end
-    end
-    return lo
-end
-
-
-function _searchsortedfirst(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
+function searchsorted_first(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     hi = hi + T(1)
     len = hi - lo
     @inbounds while len != 0x0
@@ -36,23 +18,7 @@ function _searchsortedfirst(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where 
 end
 
 
-function _searchsortedlast(v, x, lo::T, hi::T, comp) where T<:Integer
-    u = T(1)
-    lo = lo - u
-    hi = hi + u
-    @inbounds while lo < hi - u
-        m = lo + ((hi - lo) >>> 0x1)
-        if comp(x, v[m])
-            hi = m
-        else
-            lo = m
-        end
-    end
-    return lo
-end
-
-
-function _searchsortedlast(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
+function searchsorted_last(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T<:Integer
     u = T(1)
     lo = lo - u
     hi = hi + u
@@ -65,6 +31,40 @@ function _searchsortedlast(v, x, lo::T, hi::T, ord::Base.Order.Ordering) where T
         end
     end
     return lo
+end
+
+
+# C++'s `std::lower_bound` and `std::upper_bound` with zero-based positions, for the merge sort
+# kernels, whose index arithmetic is zero-based: the first position in `[left, right)` whose
+# element is not less than `value` (`lower_bound0`) or is greater than `value` (`upper_bound0`)
+# under the less-than `comp`, or `right` if there is none.
+Base.@propagate_inbounds function lower_bound0(arr, value, left=0, right=length(arr), comp=(<))
+    right <= left && return left
+    comp(arr[right], value) && return right
+    while right > left + 0x1
+        mid = left + ((right - left) >> 0x1)
+        if comp(arr[mid], value)
+            left = mid
+        else
+            right = mid
+        end
+    end
+    return left
+end
+
+
+Base.@propagate_inbounds function upper_bound0(arr, value, left=0, right=length(arr), comp=(<))
+    right <= left && return left
+    comp(value, arr[left + 0x1]) && return left
+    while right > left + 0x1
+        mid = left + ((right - left) >> 0x1)
+        if comp(value, arr[mid + 0x1])
+            right = mid
+        else
+            left = mid
+        end
+    end
+    return right
 end
 
 
@@ -110,16 +110,8 @@ function searchsortedfirst!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = _resolve_backend(backend, ix, v, xs)
-    length(ix) == length(xs) || throw(ArgumentError(
-        "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
-    ord = Base.Order.ord(lt, by, rev, order)
-    # (`ix` and `xs` are paired by position)
-    ix1, xs1 = _one_based(ix), _one_based(xs)
-    _foreachindex(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = _searchsortedfirst(v, xs1[i], firstindex(v), lastindex(v), ord)
-    end
-    ix
+    searchsorted_each!(searchsorted_first, ix, v, xs, resolve_backend(backend, ix, v, xs),
+                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
 end
 
 
@@ -149,14 +141,18 @@ function searchsortedlast!(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1000,
 )
-    backend = _resolve_backend(backend, ix, v, xs)
+    searchsorted_each!(searchsorted_last, ix, v, xs, resolve_backend(backend, ix, v, xs),
+                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
+end
+
+# `ix[i] = search(v, xs[i], ...)` for every query
+function searchsorted_each!(search, ix, v, xs, backend, ord; launch...)
     length(ix) == length(xs) || throw(ArgumentError(
         "index array must have as many elements as the queries, $(length(ix)) != $(length(xs))"))
-    ord = Base.Order.ord(lt, by, rev, order)
     # (`ix` and `xs` are paired by position)
-    ix1, xs1 = _one_based(ix), _one_based(xs)
-    _foreachindex(eachindex(xs1), backend; block_size, max_tasks, min_elems) do i
-        @inbounds ix1[i] = _searchsortedlast(v, xs1[i], firstindex(v), lastindex(v), ord)
+    ix1, xs1 = one_based(ix), one_based(xs)
+    foreachindex_on(eachindex(xs1), backend; launch...) do i
+        @inbounds ix1[i] = search(v, xs1[i], firstindex(v), lastindex(v), ord)
     end
     ix
 end

@@ -7,7 +7,6 @@ settings; any other value is an algorithm you choose, with the settings you give
 ```@docs
 AcceleratedKernels.Algorithm
 AcceleratedKernels.Auto
-AcceleratedKernels.SortAlgorithm
 AcceleratedKernels.CPUThreads
 ```
 
@@ -18,13 +17,13 @@ The algorithm types of each operation are documented with it, for [sorting](sort
 #### How `Auto` chooses
 
 `Auto` looks at the backend and its current device, the element type, the layout (a whole array or
-slices along `dims`, and their length) and the ordering, never at the array's contents. On the
-host backend it chooses the family's `CPUThreads` algorithm, which runs on Julia threads. On a GPU
-it follows per-device tuning values: for sorting, `BitonicSort` for short arrays and slices,
-`RadixSort` for long whole arrays of the element types it supports, and `MergeSort` otherwise,
-subject to `Auto`'s requirements (`stable=true` by default); for reductions, `BlockReduce`; for
-scans, `ScanPrefixes` for whole arrays and `SliceScan` along `dims`; for `findall`,
-`ScanScatter`; for `any`/`all`, `ConcurrentWrite` (`ViaReduce` on oneAPI).
+slices along `dims`, and their length) and the ordering, never at the array's contents. On the host
+backend it chooses the family's `CPUThreads` algorithm, which runs on Julia threads. On a GPU it
+follows per-device tuning values: for sorting, `MergeSort` (a device's tuning can select
+`BitonicSort` for short arrays and slices and `RadixSort` for long whole arrays of the element types
+it supports, subject to `Auto`'s requirements, but no backend does so yet); for reductions,
+`BlockReduce`; for scans, `ScanPrefixes` for whole arrays and `SliceScan` along `dims`; for
+`findall`, `ScanScatter`; for `any`/`all`, `ConcurrentWrite` (`ViaReduce` on oneAPI and Metal).
 
 Algorithms carry their settings as fields, and a field left at `nothing` takes the device's
 tuned value:

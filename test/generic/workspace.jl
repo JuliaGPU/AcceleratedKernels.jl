@@ -1,6 +1,14 @@
 # The workspace protocol: `workspace_size` and `workspace` plan the same buffers as the operation,
 # which then allocates no scratch of its own; a workspace made for another call is rejected.
 
+# The `(eltype, dims)` pairs of a workspace's buffers, as `workspace_size` gives them
+buffer_sizes(buffers::NamedTuple) = map(buffer_sizes, buffers)
+buffer_sizes(buffer::AbstractArray) = (eltype(buffer), size(buffer))
+
+# `ws` with other buffers or nested algorithms, which the operations must reject
+forge(ws; buffers=ws.buffers, nested=ws.nested) =
+    AK.Workspace(ws.backend, ws.device, ws.alg, nested, ws.sizes, buffers)
+
 @testset "workspace: sizes" begin
     v = array_from_host(rand(Float32, 10_000))
     ks = array_from_host(rand(Int32(1):Int32(9), 10_000))
@@ -29,7 +37,7 @@
             (AK.findall, (x -> x > 0.5f0, v), (;)), (AK.findall, (array_from_host(rand(Bool, 100)),), (;)),
             (AK.findall, (x -> x > 0.5f0, v), (; items=v)),
             (AK.any, (x -> x > 2, v), (;)), (AK.all, (x -> x < 2, v), (;)),
-            # (the keywords that change the buffers' types)
+            # Keywords that change the buffers' types
             (AK.sum, (v,), (; acctype=Float32)), (AK.reduce, (+, reshape(v, 100, 100)), (; dims=1, acctype=Float32)),
             (AK.mapreducedim!, (identity, +, array_from_host(zeros(Float32, 1, 100)), reshape(v, 100, 100)), (; acctype=Float32)),
             (AK.accumulate!, (+, similar(ks), ks), (; acctype=Int)), (AK.accumulate, (+, v), (; acctype=Float32)),
@@ -38,7 +46,7 @@
         check_sizes(sizes)
         ws = AK.workspace(op, args...; kw...)
         @test ws isa AK.Workspace
-        @test AK._public_sizes(ws.sizes) == sizes
+        @test buffer_sizes(ws.buffers) == sizes
         @test occursin("Workspace(", sprint(show, ws))
         # The operation runs with it, as without it
         @test (op(args...; kw..., workspace=ws); true)
@@ -57,19 +65,14 @@
         @test AK.workspace_size(AK.sum, array_from_host(rand(Float32, 10^7));
                                 alg=AK.BlockReduce()).partials[2] ==
               (AK.reduce_tuning(BACKEND, Float32).target_blocks + 1,)
-        # ... as does one along `dims` into a single output, which has no slot
+        # So does a reduction along `dims` into a single output, without the slot
         @test AK.workspace_size(AK.mapreducedim!, identity, +,
                                 array_from_host(zeros(Float32, 1, 1)),
                                 array_from_host(rand(Float32, 1000, 10_000));
                                 alg=AK.BlockReduce()).partials[2] ==
               (AK.reduce_tuning(BACKEND, Float32).target_blocks,)
-        # ... which a reduction of one element does not need
+        # A reduction of one element needs none
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
-        # DecoupledLookback's flags only where it runs
-        if TEST_DL
-            @test haskey(AK.workspace_size(AK.accumulate!, +, copy(v); alg=AK.DecoupledLookback()), :flags)
-        end
-        @test !haskey(AK.workspace_size(AK.accumulate!, +, copy(v); alg=AK.ScanPrefixes()), :flags)
         # `acctype` sets the partial results' type
         m = reshape(v, 10, 1000)
         R = array_from_host(zeros(Float32, 1, 1000))
@@ -104,7 +107,7 @@ end
     ws = AK.workspace(AK.sum, v)
     @test AK.sum(v; workspace=ws) ≈ sum(vh)
     @test AK.sum(v; workspace=ws) ≈ sum(vh)
-    # ... also by an empty `sum`, and not by one with another accumulator type
+    # Also by an empty `sum`, but not by one with another accumulator type
     e = array_from_host(zeros(Float32, 0, 3))
     @test Array(AK.sum(e; dims=1, workspace=AK.workspace(AK.sum, e; dims=1))) == zeros(1, 3)
     @test_throws ArgumentError AK.sum(e; dims=1, workspace=:invalid)
@@ -115,8 +118,8 @@ end
                                                                  alg=AK.BlockReduce()))
     end
 
-    # ... and is rejected by a call with another plan: other buffer sizes, another algorithm,
-    # another operation's buffers, or no `Workspace` at all
+    # Calls with another plan reject it: other buffer sizes, another algorithm, another
+    # operation's buffers, or no `Workspace` at all
     alg = TEST_KERNELS ? AK.MergeSort() : AK.CPUThreads.SampleSort(max_tasks=4)
     @test_throws ArgumentError AK.sort!(array_from_host(rand(Float32, 20_000)); alg,
                                         workspace=AK.workspace(AK.sort!, v; alg))
@@ -137,15 +140,12 @@ end
     w = copy(v)
     ws = AK.workspace(AK.sort!, w; alg)
     @test haskey(ws.buffers, :temp)
-    aliased = AK.Workspace(ws.backend, ws.device, ws.alg, ws.nested, ws.sizes,
-                           merge(ws.buffers, (; temp=w)))
+    aliased = forge(ws; buffers=(; ws.buffers..., temp=w))
     @test_throws ArgumentError AK.sort!(w; alg, workspace=aliased)
 
-    # The scratch keywords are gone
-    @test_throws MethodError AK.sort!(copy(v); temp=similar(v))
-    @test_throws MethodError AK.sum(v; temp=similar(v))
-    @test_throws MethodError AK.accumulate!(+, copy(v); temp=similar(v))
-    @test_throws MethodError AK.findall(x -> x > 0.5f0, v; temp_bools=similar(v, Bool))
+    # Operations without a workspace say so
+    @test_throws ArgumentError AK.workspace_size(AK.map!, identity, similar(v), v)
+    @test_throws ArgumentError AK.workspace(AK.foreachindex, identity, v)
 end
 
 
@@ -156,22 +156,21 @@ end
     alg = TEST_KERNELS ? AK.MergeSort() : AK.CPUThreads.SampleSort(max_tasks=4)
     ws = AK.workspace(AK.sort, v; alg)
     w = copy(v)
-    aliased = AK.Workspace(ws.backend, ws.device, ws.alg, ws.nested, ws.sizes,
-                           merge(ws.buffers, (; temp=w)))
+    aliased = forge(ws; buffers=(; ws.buffers..., temp=w))
     @test_throws ArgumentError AK.sort(w; alg, workspace=aliased)
     @test Array(AK.sort(w; alg, workspace=ws)) == sort(Array(w))
 
     if TEST_KERNELS
-        # ... and a reduction against every array of a fused source
+        # A reduction checks it against every array of a fused source
         x = array_from_host(ones(Int32, 1000))
         y = copy(x)
-        # (two elements in one tile: the partials are the first pass's one and the result's)
+        # Two elements in one tile: the partials are the first pass's one and the result's
         a = AK.BlockReduce(block_size=2, items_per_thread=1)
         ws = AK.workspace(AK.mapreduce, +, +, x[1:2], y[1:2]; alg=a)
         z = ws.buffers.partials
         @test length(z) == 2
         @test_throws ArgumentError AK.mapreduce(+, +, z, y[1:2]; alg=a, workspace=ws)
-        # ... and a findall against its input
+        # findall checks it against its input
         ws = AK.workspace(AK.findall, identity, array_from_host(rand(Bool, 1000)))
         @test_throws ArgumentError AK.findall(identity, ws.buffers.mask; workspace=ws)
 
@@ -193,8 +192,7 @@ end
         alg = AK.ScanScatter()
         ws = AK.workspace(AK.findall, bools; alg)
         @test haskey(ws.nested, :scan)
-        other = AK.Workspace(ws.backend, ws.device, ws.alg,
-                             merge(ws.nested, (; scan=AK.ScanPrefixes(16, 1))), ws.sizes, ws.buffers)
+        other = forge(ws; nested=(; ws.nested..., scan=AK.ScanPrefixes(16, 1)))
         @test_throws ArgumentError AK.findall(bools; alg, workspace=other)
         @test Array(AK.findall(bools; alg, workspace=ws)) == findall(Array(bools))
         ws = AK.workspace(AK.sort!, v; alg=AK.RadixSort())

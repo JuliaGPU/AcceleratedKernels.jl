@@ -28,42 +28,42 @@ up to the current one; often used in GPU programming as a first step in finding 
 subsets of data. The first form scans `v` in place; the second writes the scan of `src` to `dst`,
 which must be `src` itself or not overlap it.
 
-**Other names**: prefix sum, `thrust::scan`, cumulative sum; inclusive (or exclusive) if the first
-element is included in the accumulation (or not).
+Also known as a prefix sum, `thrust::scan` or `cub::DeviceScan`; it is inclusive (or exclusive) if
+the first element is included in the accumulation (or not).
 
 With `dims=nothing` the array is scanned in linear order, whatever its number of dimensions; with
 an integer `dims`, each slice along that dimension is scanned independently. A `dims` beyond the
 array's dimensions makes every slice one element long.
 
-The contract, which is AcceleratedKernels' own (see [Differences from Base](@ref)):
+This contract is AcceleratedKernels' own (see [Differences from Base](@ref)).
 
-- **Algebra.** `op` must be associative, as elements are combined in parallel; it does not need
-  to be commutative, as every combination keeps the elements in order (matrix products are
-  fine). Non-associative operators such as `-` are not supported.
-- **Inclusive scans** (the default): with running values `y`, `y[1] = Base.reduce_first(op,
-  src[1])` without `init`, and `op(init, src[1])` with it; then `y[k] = op(y[k-1], src[k])`, and
-  `dst[k] = y[k]`. `init` is applied once per slice.
-- **Exclusive scans** (`inclusive=false`): `y[1]` is `init`, or the neutral element of `op`
-  without it (an `ArgumentError` when none is known); then `y[k] = op(y[k-1], src[k-1])`.
-- **Neutral element.** `neutral` (a two-sided identity of `op`) seeds partial results; it
-  defaults to `GPUArraysCore.neutral_element(op, T)` where that is defined. For other operators,
-  partial results start from their first element instead, so inclusive scans need no neutral
-  element.
-- **Running-value type.** The running values have one type, and are converted to `eltype(dst)`
-  only when stored: `acctype` when it is given, else the type the fold of `op` settles on,
-  starting from `eltype(dst)` (joined with `init`'s type) and the elements, as for
-  [`mapreducedim!`](@ref) (e.g. `Int` for `add_sum` over `Int8`). So with the usual operators and
-  no `acctype`, a scan does not run in a type narrower than its destination: `Float32`s scanned into a `Float64`
-  array are summed in `Float64`. Where the running type differs from `eltype(dst)`, the scan runs in a scratch array
-  of that type. An `acctype` that cannot hold the running values at all is an `ArgumentError`;
-  whether their values fit is the caller's obligation. [`accumulate`](@ref) allocates the fold
-  type from `init`'s type and the elements.
+`op` must be associative, as elements are combined in parallel; it need not be commutative, as
+every combination keeps the elements in order (matrix products are fine). Non-associative
+operators such as `-` are not supported.
+
+An inclusive scan (the default) computes the running values `y[1] = Base.reduce_first(op,
+src[1])`, or `op(init, src[1])` with `init`, then `y[k] = op(y[k-1], src[k])`, and stores
+`dst[k] = y[k]`; `init` is applied once per slice. An exclusive scan (`inclusive=false`) starts
+from `y[1] = init`, or from the neutral element of `op` without it (an `ArgumentError` when none
+is known), and continues with `y[k] = op(y[k-1], src[k-1])`.
+
+Partial results start from `neutral`, a two-sided identity of `op`. It defaults to
+`GPUArraysCore.neutral_element(op, T)` where that is defined; for other operators, partial
+results start from their first element instead, so inclusive scans need no neutral element.
+
+The running values have one type, the accumulator type, and are converted to `eltype(dst)` only
+when stored. It is `acctype` when that is given; otherwise the type the fold of `op` settles on,
+starting from `eltype(dst)` (joined with `init`'s type) and the elements, as for
+[`mapreducedim!`](@ref): `Int` for `add_sum` over `Int8`, and `Float64` for `Float32`s scanned
+into a `Float64` array. Where it differs from `eltype(dst)`, the scan runs in a scratch array of
+that type. An `acctype` that cannot hold the running values at all is an `ArgumentError`;
+whether their values fit is the caller's obligation. [`accumulate`](@ref) allocates the fold
+type from `init`'s type and the elements.
 
 `alg` is [`Auto()`](@ref Auto) by default: [`CPUThreads.Partitioned`](@ref
 AcceleratedKernels.CPUThreads.Partitioned) on the host, and on GPUs [`ScanPrefixes`](@ref) for
-whole arrays and [`SliceScan`](@ref) along `dims`, with the device's settings.
-[`DecoupledLookback`](@ref) is available on backends that support it. `backend` is derived from
-`dst` and `src`.
+whole arrays and [`SliceScan`](@ref) along `dims`, with the device's settings. `backend` is
+derived from `dst` and `src`.
 
 On the host, accumulation is typically a memory-bound operation, so multithreaded accumulation
 only becomes faster for more compute-heavy operations that hide memory latency, e.g. accumulating
@@ -88,10 +88,10 @@ AK.accumulate!(+, v; alg=AK.ScanPrefixes(block_size=512))
 """
 function accumulate!(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                      workspace=nothing, kwargs...)
-    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
-                          kwargs...)
-    w = _one_based(v)
-    _accumulate_run!(op, w, w, s, _buffers(s.plan, workspace, v))
+    s = scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
+                   kwargs...)
+    w = one_based(v)
+    scan_run!(op, w, w, s, scratch_buffers(s.plan, workspace, v))
     return v
 end
 
@@ -101,40 +101,31 @@ function accumulate!(
     workspace=nothing,
     kwargs...
 )
-    _check_scan_destination(dst, src)
-    s = _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
-                          _resolve_backend(backend, dst, src); kwargs...)
-    _accumulate_run!(op, _one_based(dst), _one_based(src), s,
-                     _buffers(s.plan, workspace, dst, src))
+    check_dst(dst, src, "a scan")
+    s = scan_setup(op, eltype(dst), eltype(src), size(dst),
+                   resolve_backend(backend, dst, src); kwargs...)
+    scan_run!(op, one_based(dst), one_based(src), s,
+              scratch_buffers(s.plan, workspace, dst, src))
     return dst
 end
 
-_plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
-    _accumulate_setup(op, eltype(v), eltype(v), size(v), _resolve_backend(backend, v);
-                      kwargs...).plan
-function _plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
-               backend=nothing, kwargs...)
-    _check_scan_destination(dst, src)
-    _accumulate_setup(op, eltype(dst), eltype(src), size(dst),
-                      _resolve_backend(backend, dst, src); kwargs...).plan
-end
-
-function _check_scan_destination(dst, src)
-    dst === src && return nothing
-    Base.mightalias(dst, src) && throw(ArgumentError(
-        "the destination of a scan must be its source or not overlap it"))
-    axes(dst) == axes(src) || throw(DimensionMismatch(
-        "the destination of a scan must have the source's axes $(axes(src)), got $(axes(dst))"))
-    nothing
+plan(::typeof(accumulate!), op, v::AbstractArray; backend=nothing, kwargs...) =
+    scan_setup(op, eltype(v), eltype(v), size(v), resolve_backend(backend, v);
+               kwargs...).plan
+function plan(::typeof(accumulate!), op, dst::AbstractArray, src::AbstractArray;
+              backend=nothing, kwargs...)
+    check_dst(dst, src, "a scan")
+    scan_setup(op, eltype(dst), eltype(src), size(dst),
+               resolve_backend(backend, dst, src); kwargs...).plan
 end
 
 
 # Everything a scan of elements of type `T` into an array of element type `D` and size `sz`
 # resolves before touching data: its plan (backend, algorithm, scratch), running-value type and
-# partial-result seed (see `_reduce_seed`)
-function _accumulate_setup(
+# partial-result seed (see `reduce_seed`)
+function scan_setup(
     op, ::Type{D}, ::Type{T}, sz::Dims, backend::Backend;
-    init=_NoInit(),
+    init=NoInit(),
     neutral=nothing,
     dims::Union{Nothing, Integer}=nothing,
     inclusive::Bool=true,
@@ -144,121 +135,128 @@ function _accumulate_setup(
     dims isa Integer && dims < 1 &&
         throw(ArgumentError("region dimension(s) must be ≥ 1, got $dims"))
     n = Base.prod(sz; init=1)
-    A = _scan_acctype(op, D, T, init, inclusive, _scan_combines(sz, dims, init, inclusive),
-                      acctype)
-    seed = _reduce_seed(op, A, neutral)
-    # The kernels' tiles hold partial results: lanes, when `op` has no known neutral element
-    a = _resolve_scan(alg, backend, A, dims, typeof(seed))
-    if !inclusive && init isa _NoInit && seed isa _Lane && !_valid(seed)
+    A = scan_acctype(op, D, T, init, inclusive, scan_calls_op(sz, dims, init, inclusive),
+                     acctype)
+    seed = reduce_seed(op, A, neutral)
+    a = resolve_scan(alg, backend, A, dims, typeof(seed))
+    if !inclusive && init isa NoInit && seed isa Optional && !isset(seed)
         throw(ArgumentError(
             "an exclusive scan without `init` starts from the neutral element of `op`, " *
             "which is not known for $op; pass `init` or `neutral`"))
     end
     # A destination of another element type scans in a scratch array of the accumulator type
-    work = D === A ? (;) : (; work=_buffer(A, sz))
+    work = D === A ? (;) : (; work=scratch(A, sz))
     prefixes = if a isa ScanPrefixes
-        (; prefixes=_buffer(typeof(seed), _scan_prefixes_length(n, a)))
-    elseif a isa DecoupledLookback
-        num_blocks = cld(n, a.block_size * a.items_per_thread)
-        (; prefixes=_buffer(typeof(seed), num_blocks), flags=_buffer(UInt8, num_blocks))
+        (; prefixes=scratch(typeof(seed), prefixes_length(n, a)))
     elseif a isa SliceScan
         # The chunk totals of slices split into chunks
-        m = _slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
-        m == 0 ? (;) : (; totals=_buffer(typeof(seed), m))
+        m = slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
+        m == 0 ? (;) : (; totals=scratch(typeof(seed), m))
     else
         (;)
     end
-    return (; plan=_Plan(backend, a, merge(work, prefixes)), A=Val(A), seed, init, dims,
+    return (; plan=Plan(backend, a, merge(work, prefixes)), A=Val(A), seed, init, dims,
             inclusive)
 end
 
-# Scan `src` into `v` (which may be `src`), as set up by `_accumulate_setup`, with the plan's
+# Scan `src` into `v` (which may be `src`), as set up by `scan_setup`, with the plan's
 # scratch buffers `bufs`
-function _accumulate_run!(op, v, src, s, bufs)
+function scan_run!(op, v, src, s, bufs)
     backend, a = s.plan.backend, s.plan.alg
-    init, neutral, dims, inclusive = s.init, s.seed, s.dims, s.inclusive
-    A = _unval(s.A)
+    init, seed, dims, inclusive = s.init, s.seed, s.dims, s.inclusive
+    A = unval(s.A)
 
     # As Base, scan in the accumulator type and convert to `v`'s element type only when storing:
     # in `v` when it has that type, else in the scratch array. Elements enter as one-element
     # reductions (`Base.reduce_first`), and an inclusive scan applies `init` to the first element
-    # of each slice, as `op(init, x)`.
+    # of each slice, as `op(init, x)`. The kernels do both as they read `src`, for an `init` of
+    # the accumulator type. The threaded algorithms, an `init` of another type, and slices of one
+    # element (which no kernel scans) copy `src` to `w` first, apply `init` there, and scan `w`
+    # in place.
     w = haskey(bufs, :work) ? bufs.work : v
-    launch = _scan_launch(a)
-    # (`init` of the accumulator type seeds the kernels directly instead, except where every
-    # slice has one element and no kernel runs)
-    apply_init = inclusive && !(init isa _NoInit) && !isempty(w) &&
-                 (!(init isa A) || dims !== nothing && dims > ndims(w))
-    # The kernels read the elements from `src` as they scan them; the other cases first copy them
-    # to `w`, and scan that in place
-    fused = !(a isa CPUThreads.Partitioned) && !apply_init &&
-            (dims === nothing || dims <= ndims(w))
-    if w !== src && !fused
-        _foreachindex(eachindex(w, src), backend; launch...) do i
+    launch = launch_kwargs(a)
+    singletons = dims !== nothing && dims > ndims(w)
+    separate_init = inclusive && !(init isa NoInit) && !isempty(w) &&
+                    (singletons || !(init isa A))
+    in_place = a isa CPUThreads.Partitioned || separate_init || singletons
+    if in_place && w !== src
+        foreachindex_on(eachindex(w, src), backend; launch...) do i
             @inbounds w[i] = Base.reduce_first(op, src[i])
         end
     end
-    if apply_init
-        _scan_apply_init!(w, op, init, dims, backend, launch)
-        init = _NoInit()
+    if separate_init
+        apply_init!(w, op, init, dims, backend, launch)
+        init = NoInit()
     end
-    if w !== src && fused
-        _accumulate_scan!(op, w, src, _ScanEntry{A}(op), backend, a, bufs; init, neutral, dims,
-                          inclusive)
+    if singletons
+        # Every slice has one element: an inclusive scan applied `init` above, an exclusive one
+        # starts over
+        inclusive || fill_on!(w, unwrap(scan_start(w, init, seed)), backend)
+    elseif in_place || w === src
+        scan_into!(op, w, w, identity, backend, a, bufs; init, seed, dims, inclusive)
     else
-        _accumulate_scan!(op, w, w, identity, backend, a, bufs; init, neutral, dims, inclusive)
+        scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims, inclusive)
     end
-    w === v || _copyto!(v, w, backend)
+    w === v || copyto_on!(v, w, backend)
     return v
 end
 
-# Scan into `w`, from the elements `entry(src[i])` (`src` is `w`, with `entry === identity`, for
-# a scan in place; the threaded algorithms only scan in place)
-function _accumulate_scan!(op::OP, w, src, entry, backend, a, bufs; init, neutral, dims,
-                           inclusive) where {OP}
+# Scan into `w` along `dims` (at most `ndims(w)`), from the elements `load(src[i])` (`src` is
+# `w`, with `load === identity`, for a scan in place)
+function scan_into!(op::OP, w, src, load, backend, a, bufs; init, seed, dims,
+                    inclusive) where {OP}
+    isempty(w) && return w
     if dims === nothing
-        if a isa CPUThreads.Partitioned
-            accumulate_1d_cpu!(op, w, backend, a; init, neutral, inclusive)
-        else
-            accumulate_1d_gpu!(op, w, backend, a; src, entry, init, neutral, inclusive,
-                               prefixes=get(bufs, :prefixes, nothing),
-                               flags=get(bufs, :flags, nothing))
-        end
-    elseif dims > ndims(w)
-        # Every slice has one element: inclusive scans applied `init` above, exclusive ones start
-        # over
-        inclusive || _fill!(w, _unlane(_scan_first_seed(w, init, neutral)), backend)
+        accumulate_1d_gpu!(op, w, backend, a; src, load, init, seed, inclusive,
+                           prefixes=get(bufs, :prefixes, nothing))
     else
-        accumulate_nd!(op, w, backend, a; src, entry, init, neutral, dims=Int(dims), inclusive,
+        accumulate_nd!(op, w, backend, a; src, load, init, seed, dims=Int(dims), inclusive,
                        totals=get(bufs, :totals, nothing))
+    end
+    return w
+end
+
+# The threaded algorithms only scan in place
+function scan_into!(op::OP, w, src, load, backend, a::CPUThreads.Partitioned, bufs; init, seed,
+                    dims, inclusive) where {OP}
+    isempty(w) && return w
+    if dims === nothing
+        accumulate_1d_cpu!(op, w, backend, a; init, seed, inclusive)
+    else
+        accumulate_nd_threads!(op, w; start=scan_start(w, init, seed), seed, dims=Int(dims),
+                               inclusive, max_tasks=a.max_tasks, min_elems=a.min_elems)
     end
     return w
 end
 
 # How a kernel reads an element of a scan's source: as a one-element reduction, of the
 # accumulator type `A`, as the pass that copies the source to the destination stores it
-struct _ScanEntry{A, OP}
+struct ScanLoad{A, OP}
     op::OP
 end
-_ScanEntry{A}(op::OP) where {A, OP} = _ScanEntry{A, OP}(op)
-@inline (e::_ScanEntry{A})(x) where {A} = convert(A, Base.reduce_first(e.op, x))
+ScanLoad{A}(op::OP) where {A, OP} = ScanLoad{A, OP}(op)
+@inline (e::ScanLoad{A})(x) where {A} = convert(A, Base.reduce_first(e.op, x))
+
+# The value a scan starts from: `init` in the element type, else the seed
+scan_start(v, init, seed) = lift(seed, convert(eltype(v), init))
+scan_start(v, ::NoInit, seed) = seed
 
 # The running-value type of a scan of elements of type `T` into an array of element type `D`
 # (`Union{}` for none): `acctype`, else the accumulator type of a reduction from `D` joined with
 # `init`'s type; an exclusive scan's `init` is a running value too. `combines` says whether `op`
 # is called at all.
-function _scan_acctype(op, ::Type{D}, ::Type{T}, init, inclusive::Bool, combines::Bool,
-                       acctype=nothing) where {D, T}
-    acctype === nothing || return _acctype(op, Union{}, T, acctype)
-    S = init isa _NoInit ? D : promote_type(D, typeof(init))
-    A = _reduce_acctype(op, S, T)
-    if !inclusive && !(init isa _NoInit) && A !== Union{}
+function scan_acctype(op, ::Type{D}, ::Type{T}, init, inclusive::Bool, combines::Bool,
+                      acctype=nothing) where {D, T}
+    acctype === nothing || return resolve_acctype(op, Union{}, T, acctype)
+    S = init isa NoInit ? D : promote_type(D, typeof(init))
+    A = accumulator_type(op, S, T)
+    if !inclusive && !(init isa NoInit) && A !== Union{}
         A = promote_type(A, typeof(init))
     end
     if A === Union{}
         # `op` always throws for these types, which only a scan that never calls it gets past
-        combines && _check_acctype(op, identity, A)
-        F = _first_type(op, T)
+        combines && check_combinable(op, identity, A)
+        F = first_type(op, T)
         return F === Union{} ? T : F
     end
     return A
@@ -267,33 +265,30 @@ end
 # Whether a scan of an array of size `sz` along `dims` calls `op`: some slice has two elements,
 # or an inclusive scan applies `init` to a first element (along a `dims` beyond the array's
 # dimensions, every element is one)
-function _scan_combines(sz, dims, init, inclusive)
+function scan_calls_op(sz, dims, init, inclusive)
     n = Base.prod(sz; init=1)
     (n == 0 || dims isa Integer && dims < 1) && return false
     len = dims === nothing ? n : dims <= length(sz) ? sz[dims] : 1
-    return len >= 2 || (inclusive && !(init isa _NoInit))
+    return len >= 2 || (inclusive && !(init isa NoInit))
 end
-
-_scan_launch(a::Union{ScanPrefixes, DecoupledLookback, SliceScan}) = (; block_size=a.block_size)
-_scan_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
 
 # `w[i] = op(init, w[i])` for the first element `i` of the array (`dims === nothing`) or of each
 # slice along `dims` (every element, for a `dims` beyond the array's)
-function _scan_apply_init!(w, op, init, dims, backend, launch)
+function apply_init!(w, op, init, dims, backend, launch)
     ax = axes(w)
     firsts = dims === nothing ? CartesianIndices(Base.map(a -> first(a):first(a), ax)) :
              dims > length(ax) ? CartesianIndices(ax) :
              CartesianIndices(Base.setindex(ax, first(ax[dims]):first(ax[dims]), dims))
-    _foreachindex(firsts, backend; launch...) do I
+    foreachindex_on(firsts, backend; launch...) do I
         @inbounds w[I] = op(init, w[I])
     end
     return w
 end
 
 # A scan nested in another operation, with the scratch buffers of its plan in the outer one
-function _accumulate_nested!(op, v, bufs; backend, kwargs...)
-    s = _accumulate_setup(op, eltype(v), eltype(v), size(v), backend; kwargs...)
-    _accumulate_run!(op, v, v, s, bufs)
+function accumulate_nested!(op, v, bufs; backend, kwargs...)
+    s = scan_setup(op, eltype(v), eltype(v), size(v), backend; kwargs...)
+    scan_run!(op, v, v, s, bufs)
 end
 
 
@@ -306,23 +301,78 @@ given) and the elements, e.g. an `Int` array for `accumulate(+, Int8[1, 2]; init
 `accumulate(Base.add_sum, Int8[1, 2])`.
 """
 function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
-                    init=_NoInit(), dims=nothing, inclusive::Bool=true, acctype=nothing,
+                    init=NoInit(), dims=nothing, inclusive::Bool=true, acctype=nothing,
                     kwargs...)
-    backend = _resolve_backend(backend, v)
-    D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
+    backend = resolve_backend(backend, v)
+    D = accumulate_eltype(op, v, init, dims, inclusive, acctype)
     # (the result's axes start at 1, which `accumulate!` then requires of the source too)
-    accumulate!(op, _similar(backend, v, D), _one_based(v); backend, init, dims, inclusive,
+    accumulate!(op, similar_on(backend, v, D), one_based(v); backend, init, dims, inclusive,
                 acctype, kwargs...)
 end
 
-function _plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=_NoInit(),
-               dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
-    D = _accumulate_eltype(op, v, init, dims, inclusive, acctype)
-    _accumulate_setup(op, D, eltype(v), size(v), _resolve_backend(backend, v); init, dims,
-                      inclusive, acctype, kwargs...).plan
+function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=NoInit(),
+              dims=nothing, inclusive::Bool=true, acctype=nothing, kwargs...)
+    D = accumulate_eltype(op, v, init, dims, inclusive, acctype)
+    scan_setup(op, D, eltype(v), size(v), resolve_backend(backend, v); init, dims,
+               inclusive, acctype, kwargs...).plan
 end
 
 # The element type `accumulate` allocates: the running-value type from `init`'s type alone
-_accumulate_eltype(op, v, init, dims, inclusive, acctype) =
-    _scan_acctype(op, Union{}, eltype(v), init, inclusive,
-                  _scan_combines(size(v), dims, init, inclusive), acctype)
+accumulate_eltype(op, v, init, dims, inclusive, acctype) =
+    scan_acctype(op, Union{}, eltype(v), init, inclusive,
+                 scan_calls_op(size(v), dims, init, inclusive), acctype)
+
+
+"""
+    cumsum(src::AbstractArray; kwargs...)
+
+Cumulative sum of elements of an array, as `Base.cumsum` (Base's `add_sum`, so small integers are
+summed as `Int`), except that without `dims` a multidimensional array is summed in linear order.
+The keywords are those of [`accumulate`](@ref).
+
+# Examples
+Simple cumulative sum of elements in a vector:
+```julia
+import AcceleratedKernels as AK
+using AMDGPU
+
+v = ROCArray(rand(Int32(1):Int32(100), 100_000))
+s = AK.cumsum(v)
+```
+
+Cumulative sum down each column of a matrix:
+```julia
+m = ROCArray(rand(Int32(1):Int32(100), 10, 100_000))
+s = AK.cumsum(m, dims=1)
+```
+"""
+cumsum(src::AbstractArray; kwargs...) = accumulate(Base.add_sum, src; kwargs...)
+
+
+"""
+    cumprod(src::AbstractArray; kwargs...)
+
+Cumulative product of elements of an array, as `Base.cumprod` (Base's `mul_prod`), except that
+without `dims` a multidimensional array is multiplied in linear order. The keywords are those of
+[`accumulate`](@ref).
+
+# Examples
+Simple cumulative product of elements in a vector:
+```julia
+import AcceleratedKernels as AK
+using oneAPI
+
+v = oneArray(rand(Int32(1):Int32(100), 100_000))
+p = AK.cumprod(v)
+```
+
+Cumulative product down each column of a matrix:
+```julia
+m = oneArray(rand(Int32(1):Int32(100), 10, 100_000))
+p = AK.cumprod(m, dims=1)
+```
+"""
+cumprod(src::AbstractArray; kwargs...) = accumulate(Base.mul_prod, src; kwargs...)
+
+plan(::typeof(cumsum), src::AbstractArray; kwargs...) = plan(accumulate, Base.add_sum, src; kwargs...)
+plan(::typeof(cumprod), src::AbstractArray; kwargs...) = plan(accumulate, Base.mul_prod, src; kwargs...)

@@ -1,6 +1,4 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _forindices_global!(f, indices)
-
-    # Calculate global index
+@kernel inbounds=true cpu=false unsafe_indices=true function foreachindex_kernel!(f, indices)
     N = @groupsize()[1]
     iblock = @index(Group, Linear)
     ithread = @index(Local, Linear)
@@ -8,43 +6,16 @@
 
     # Avoid an out-of-line device call that can copy captured state to local memory.
     if i <= length(indices)
-        @inline f(_nth(indices, i))
+        @inline f(nth(indices, i))
     end
 end
 
 # The `i`-th element of `indices`, counting from 1 whatever the first index of `indices` is
-@inline _nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
-
-
-function _forindices_gpu(
-    f,
-    indices,
-    backend::Backend;
-
-    block_size::Int=256,
-)
-    # GPU implementation
-    @argcheck block_size > 0
-    blocks = (length(indices) + block_size - 1) ÷ block_size
-    _forindices_global!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
-    nothing
-end
-
-
-function _forindices_threads(f, indices; max_tasks, min_elems)
-    task_partition(length(indices), max_tasks, min_elems) do irange
-        # Task partition returns static ranges indexed from 1:length(indices); use those to index
-        # into indices, which supports arbitrary indices (and gets compiled away when using 1-based
-        # collections); each thread processes this range
-        for i in irange
-            @inline f(_nth(indices, i))
-        end
-    end
-end
+@inline nth(indices, i) = @inbounds indices[firstindex(indices) - 1 + i]
 
 
 # Launch settings of the wrappers, checked on every backend (only one of them applies to each)
-function _check_launch(; block_size, max_tasks, min_elems)
+function check_launch(; block_size, max_tasks, min_elems)
     block_size >= 1 || throw(ArgumentError("`block_size` must be positive, got $block_size"))
     max_tasks >= 1 || throw(ArgumentError("`max_tasks` must be positive, got $max_tasks"))
     min_elems >= 1 || throw(ArgumentError("`min_elems` must be positive, got $min_elems"))
@@ -52,13 +23,18 @@ function _check_launch(; block_size, max_tasks, min_elems)
 end
 
 # Run `f` over `indices`: on Julia threads on the host backend, as a kernel elsewhere
-function _foreachindex(f, indices, backend::Backend;
-                       block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
-    _check_launch(; block_size, max_tasks, min_elems)
-    if _runs_threads(backend)
-        _forindices_threads(f, indices; max_tasks, min_elems)
+function foreachindex_on(f, indices, backend::Backend;
+                         block_size=256, max_tasks=Threads.nthreads(), min_elems=1)
+    check_launch(; block_size, max_tasks, min_elems)
+    if runs_threads(backend)
+        task_partition(length(indices), max_tasks, min_elems) do irange
+            for i in irange
+                @inline f(nth(indices, i))
+            end
+        end
     else
-        _forindices_gpu(f, indices, backend; block_size)
+        blocks = cld(length(indices), block_size)
+        foreachindex_kernel!(backend, block_size)(f, indices, ndrange=(block_size * blocks,))
     end
     nothing
 end
@@ -131,8 +107,8 @@ x = CuArray(1:100)
 y = 2 .* x .+ 1
 ```
 
-**Important note**: to use this function on a GPU, the objects referenced inside the loop body must
-have known types - i.e. be inside a function. For example:
+To use this function on a GPU, the objects referenced inside the loop body must have known types -
+i.e. be inside a function. For example:
 ```julia
 using oneAPI
 import AcceleratedKernels as AK
@@ -161,8 +137,8 @@ function foreachindex(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, itr)
-    _foreachindex(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
+    backend = resolve_backend(backend, itr)
+    foreachindex_on(f, eachindex(itr), backend; block_size, max_tasks, min_elems)
 end
 
 
@@ -219,7 +195,7 @@ function foraxes(
     max_tasks::Int=Threads.nthreads(),
     min_elems::Int=1,
 )
-    backend = _resolve_backend(backend, itr)
+    backend = resolve_backend(backend, itr)
     indices = isnothing(dims) ? eachindex(itr) : axes(itr, dims)
-    _foreachindex(f, indices, backend; block_size, max_tasks, min_elems)
+    foreachindex_on(f, indices, backend; block_size, max_tasks, min_elems)
 end

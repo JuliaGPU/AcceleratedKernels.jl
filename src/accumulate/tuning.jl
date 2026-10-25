@@ -5,11 +5,12 @@
     ScanPrefixes(; block_size=nothing, items_per_thread=nothing)
 
 GPU scan of a whole array in tiles of `block_size * items_per_thread` elements (`block_size` a
-power of two up to 1024): the blocks reduce their tile, the tiles' totals are scanned the same
-way, and each block then scans its tile from the total of the tiles before it (or, depending on
-the device, the blocks scan their tile, and then add the total of the tiles before it). No block
-waits for another, so it runs on every backend. The default `items_per_thread` is at most 8, fewer for wide
-element types, to keep the tile in local memory.
+power of two up to 1024): each block reduces its tile, the tiles' totals are scanned the same
+way, and each block then scans its tile from the total of the tiles before it. On devices whose
+[`ScanTuning`](@ref) says so (CPUs), the blocks instead scan their tile first and then add the
+total of the tiles before it. No block waits for another, so it runs on every backend. The
+default `items_per_thread` is the largest, up to 8, whose tile fits in the tuning's local-memory
+budget.
 """
 Base.@kwdef struct ScanPrefixes <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -17,30 +18,14 @@ Base.@kwdef struct ScanPrefixes <: ScanAlgorithm
 end
 
 """
-    DecoupledLookback(; block_size=nothing, items_per_thread=nothing)
-
-GPU scan of a whole array in which each block looks back at earlier blocks' published prefixes
-instead of waiting for a separate pass over the tiles' totals; the tiles are those of
-[`ScanPrefixes`](@ref). It needs device-scope memory ordering and forward progress between
-blocks, so it is rejected on backends that do not guarantee them (currently all but CUDA and
-AMDGPU). Elements keep their order, but how they are grouped depends on which blocks have
-finished, so floating-point results can differ between runs.
-"""
-Base.@kwdef struct DecoupledLookback <: ScanAlgorithm
-    block_size::Union{Nothing, Int} = nothing
-    items_per_thread::Union{Nothing, Int} = nothing
-end
-
-"""
     SliceScan(; block_size=nothing, items_per_thread=nothing)
 
-GPU scan of each slice along `dims`, the algorithm for scans along `dims`. Which threads scan a
-slice depends on the layout: one thread per slice for short slices, and where neighbouring
-threads then load neighbouring elements (when the dimensions before `dims` hold several
-elements); otherwise a block per slice, scanning tiles of `block_size * items_per_thread` consecutive
-elements of it (`block_size` a power of two up to 1024, smaller for short slices). When that
-leaves too few threads to fill the device, each slice is split into chunks, which takes two more
-passes: one over the source, to reduce each chunk, and a scan of the chunks' totals.
+GPU scan of each slice along `dims`. Short slices, and slices whose neighbours are next to them in
+memory (when the dimensions before `dims` hold several elements), are scanned by one thread
+each; other slices by one block each, in tiles of `block_size * items_per_thread` consecutive
+elements (`block_size` a power of two up to 1024, smaller for short slices). When that leaves too
+few threads to fill the device, each slice is split into chunks, which takes two more passes: one
+over the source to reduce each chunk, and a scan of the chunks' totals.
 """
 Base.@kwdef struct SliceScan <: ScanAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -54,8 +39,6 @@ end
 Values that drive `Auto` selection and fill unset algorithm fields for scans on one device, as
 returned by [`scan_tuning`](@ref).
 
-- `prefer_lookback`: `Auto` picks `DecoupledLookback` for whole-array scans where the backend
-  supports it (`_supports_lookback`), else `ScanPrefixes`.
 - `block_size`: the block size of every scan kernel algorithm.
 - `local_mem_bytes`, `max_items`: the default `items_per_thread` of the kernel algorithms is the
   largest that keeps a tile of the element type within `local_mem_bytes`, and at most
@@ -84,11 +67,9 @@ returned by [`scan_tuning`](@ref).
   operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
   memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
 
-The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070); the other defaults reproduce
-AK's historical settings. Internal: the fields may change in any release.
+The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070).
 """
 Base.@kwdef struct ScanTuning
-    prefer_lookback::Bool = false
     block_size::Int = 256
     local_mem_bytes::Int = LOCAL_MEMORY_BUDGET
     max_items::Int = 8
@@ -112,101 +93,89 @@ The scan tuning for element type `T` (the running-value type the scan computes i
 conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
-# (kernels on the host backend run on the CPU)
-scan_tuning(::HostBackend, ::Type) = ScanTuning(reduce_then_scan=false, subgroups=false)
+# CPU devices (the host backend's, and OpenCL's CPU devices) implement sub-group operations with
+# barriers of the whole block, and keep a scanned tile in their caches for adding its prefix
+cpu_scan_tuning() = ScanTuning(reduce_then_scan=false, subgroups=false)
+scan_tuning(::HostBackend, ::Type) = cpu_scan_tuning()
 
 
 """
-    _resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
+    resolve_scan(alg, backend, T, dims, S=T) -> Algorithm
 
 Resolve `alg` for a scan of element type `T` along `dims` (`nothing` for the whole array in
-linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (a
-lane type when the operator has no known neutral element). Returns `ScanPrefixes`,
-`DecoupledLookback`, `SliceScan` or `CPUThreads.Partitioned` with every field set, or throws an
-`ArgumentError`.
+linear order) on `backend`, whose kernels hold partial results of type `S` in local memory (an
+`Optional` when the operator has no known neutral element). Returns `ScanPrefixes`, `SliceScan`
+or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
-function _resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
-                       ::Type{S}=T) where {T, S}
-    _checkdomain(alg)
+function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
+                      ::Type{S}=T) where {T, S}
     t = scan_tuning(backend, T)
-    a = alg isa Auto ? _select_scan(backend, t, dims) : alg
-    a = _fill(a, t, S)
-    _check_scan(a, backend, S, dims)
+    a = alg isa Auto ? select_scan(backend, dims) : alg
+    a = fill_defaults(a, t, S)
+    check_scan(a, backend, S, dims)
     return a
 end
 
-function _select_scan(backend, t::ScanTuning, dims)
-    _runs_threads(backend) && return CPUThreads.Partitioned()
-    dims === nothing || return SliceScan()
-    return _supports_lookback(backend) && t.prefer_lookback ? DecoupledLookback() : ScanPrefixes()
+function select_scan(backend, dims)
+    runs_threads(backend) && return CPUThreads.Partitioned()
+    return dims === nothing ? ScanPrefixes() : SliceScan()
 end
 
-function _checkdomain(a::Union{ScanPrefixes, DecoupledLookback, SliceScan})
-    _check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "$(_algname(a)): `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+function check_fields(a::Union{ScanPrefixes, SliceScan})
+    check_block_size(a)
+    check_positive(a, :items_per_thread)
     nothing
 end
 
-# The largest number of items per thread whose tile fits the tuning's local-memory budget. Types
-# without a definite size and block sizes that `_check_scan` rejects get a placeholder.
-function _scan_items(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
+# The largest number of items per thread whose tile fits the tuning's local-memory budget, next
+# to the block's `block_size` per-thread totals (hence the `- 1`). Types without a definite size
+# and block sizes that `check_scan` rejects get a placeholder.
+function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
     clamp(t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1,
           1, max(t.max_items, 1))
 end
 
-function _fill(a::A, t::ScanTuning,
-               ::Type{T}) where {A <: Union{ScanPrefixes, DecoupledLookback, SliceScan}, T}
+function fill_defaults(a::A, t::ScanTuning,
+                       ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
     block_size = something(a.block_size, t.block_size)
-    items_per_thread = isnothing(a.items_per_thread) ? _scan_items(t, block_size, T) :
+    items_per_thread = isnothing(a.items_per_thread) ? default_items_per_thread(t, block_size, T) :
                                                        a.items_per_thread
     return A(block_size, items_per_thread)
 end
-_fill(a::CPUThreads.Partitioned, t::ScanTuning, T) = _fill_threads(a, t)
-_fill(a::Algorithm, t::ScanTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a scan algorithm"))
+fill_defaults(a::CPUThreads.Partitioned, t::ScanTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::ScanTuning, T) =
+    throw(ArgumentError("$(algname(a)) is not a scan algorithm"))
 
-function _check_scan(a::Union{ScanPrefixes, DecoupledLookback}, backend, ::Type{T}, dims) where {T}
-    _checkdomain(a)
-    _require_kernels(a, backend)
-    _check_scan_eltype(a, T)
+function check_scan(a::ScanPrefixes, backend, ::Type{T}, dims) where {T}
+    check_fields(a)
+    require_kernels(a, backend)
+    check_bits_eltype(a, T)
     dims === nothing || throw(ArgumentError(
-        "$(_algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
-    if a isa DecoupledLookback && !_supports_lookback(backend)
-        throw(ArgumentError(
-            "DecoupledLookback needs device-scope memory ordering and forward progress between " *
-            "blocks, which $(_backend_name(backend)) does not guarantee; use `ScanPrefixes`"))
-    end
-    # Keep the kernels' index arithmetic far from overflow
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "$(_algname(a)): `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+        "$(algname(a)) scans whole arrays; scan along `dims` with `SliceScan` or `Auto()`"))
     # ScanPrefixes scans its tiles' totals in tiles too, which a tile of one element never shrinks
-    a isa ScanPrefixes && a.block_size * a.items_per_thread < 2 && throw(ArgumentError(
-        "ScanPrefixes: `block_size * items_per_thread` must be at least 2"))
+    check_tile(a; min=2)
     nothing
 end
 
-function _check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
-    _checkdomain(a)
-    _require_kernels(a, backend)
-    _check_scan_eltype(a, T)
+function check_scan(a::SliceScan, backend, ::Type{T}, dims) where {T}
+    check_fields(a)
+    require_kernels(a, backend)
+    check_bits_eltype(a, T)
     dims === nothing && throw(ArgumentError(
         "SliceScan scans along `dims`; scan whole arrays with `ScanPrefixes` or `Auto()`"))
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "SliceScan: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+    check_tile(a)
     nothing
 end
 
-function _check_scan(a::CPUThreads.Partitioned, backend, T, dims)
-    _checkdomain(a)
-    _require_threads(a, backend)
+function check_scan(a::CPUThreads.Partitioned, backend, T, dims)
+    check_fields(a)
+    require_threads(a, backend)
     # Each task's part must hold two elements for the exclusive scan's carries
     a.min_elems >= 2 || throw(ArgumentError(
         "CPUThreads.Partitioned: scans need `min_elems` of at least 2, got $(a.min_elems)"))
     nothing
 end
 
-_check_scan_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
-    "$(_algname(a)): the element type $T is not a bits type, which the kernels need"))
+check_bits_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
+    "$(algname(a)): the element type $T is not a bits type, which the kernels need"))

@@ -29,11 +29,11 @@ end
 
 # Run the local strides of levels `first_level:last_level`. A tile holds part of one long slice
 # (`SPAN == CAP`) or `CAP ÷ SPAN` short slices. Unused entries are never read.
-@kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile!(
-    vec, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
+@kernel cpu=false inbounds=true unsafe_indices=true function bitonic_tile_kernel!(
+    v, ord, layout, tiles_per_slice::Int, first_level::Int, last_level::Int, ::Val{CAP}, ::Val{SPAN},
 ) where {CAP, SPAN}
     @uniform BS = Int(@groupsize()[1])
-    tile = @localmem eltype(vec) (CAP,)
+    tile = @localmem eltype(v) (CAP,)
 
     iblock = Int(@index(Group, Linear)) - 1
     ithread = Int(@index(Local, Linear)) - 1
@@ -50,7 +50,7 @@ end
         s = SPAN == CAP ? islice : islice + (pos >> spanlog)
         off = SPAN == CAP ? pos : pos & (SPAN - 1)
         if off < len && s < nslices
-            tile[pos + 1] = slice(vec, layout, s)[base + off + 1]
+            tile[pos + 1] = slice(v, layout, s)[base + off + 1]
         end
         pos += BS
     end
@@ -80,7 +80,7 @@ end
         s = SPAN == CAP ? islice : islice + (pos >> spanlog)
         off = SPAN == CAP ? pos : pos & (SPAN - 1)
         if off < len && s < nslices
-            slice(vec, layout, s)[base + off + 1] = tile[pos + 1]
+            slice(v, layout, s)[base + off + 1] = tile[pos + 1]
         end
         pos += BS
     end
@@ -88,36 +88,24 @@ end
 
 
 # One global step at stride `2^jlog >= CAP`, one thread per comparator
-@kernel cpu=false inbounds=true function bitonic_global!(
-    vec, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
+@kernel cpu=false inbounds=true function bitonic_pass_kernel!(
+    v, ord, layout, pairs_per_slice, kklog::Int, jlog::Int,
 )
     islice, p = slice_block(layout, Int(@index(Global, Linear)) - 1, pairs_per_slice)
-    elems = slice(vec, layout, islice)
+    elems = slice(v, layout, islice)
     i, partner = bitonic_pair(p, kklog, jlog)
     partner < layout.len && compare_exchange!(elems, ord, i, partner)
 end
 
 
 # GPU bitonic sort of `v` (or of each slice along `dims`), in place.
-function _bitonic_sort!(
-    v::AbstractArray, backend::Backend=get_backend(v);
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    items_per_thread::Int=8,
-    dims::Union{Colon, Integer}=Colon(),
+function bitonic_sort!(
+    v::AbstractArray, backend::Backend, ord::Base.Order.Ordering;
+    block_size::Int, items_per_thread::Int, dims::Union{Colon, Integer},
 )
-    @argcheck block_size > 0 && ispow2(block_size)
-    @argcheck items_per_thread > 0 && ispow2(items_per_thread)
-    @argcheck block_size <= typemax(Int) ÷ items_per_thread
     layout = slice_layout(v, dims)
     len = layout.len
     (isempty(v) || len <= 1) && return v
-    ord = Base.Order.ord(lt, by, rev, order)
 
     # Pack short slices into one tile; split long slices across tiles.
     tile_size = block_size * items_per_thread
@@ -128,12 +116,12 @@ function _bitonic_sort!(
     tiles_per_slice = cld(len, span)
     nblocks = cld(nslices, cap ÷ span) * tiles_per_slice
     tile_threads = min(block_size, cap)
-    tile! = bitonic_tile!(backend, tile_threads)
+    tile! = bitonic_tile_kernel!(backend, tile_threads)
     tile!(v, ord, layout, tiles_per_slice, 1, trailing_zeros(span), Val(cap), Val(span);
           ndrange=nblocks * tile_threads)
 
     if npow > span
-        global! = bitonic_global!(backend, block_size)
+        global! = bitonic_pass_kernel!(backend, block_size)
         pairs = npow ÷ 2
         for kklog in (trailing_zeros(span) + 1):trailing_zeros(npow)
             for jlog in (kklog - 1):-1:trailing_zeros(span)

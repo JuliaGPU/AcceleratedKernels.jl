@@ -43,7 +43,7 @@ function map!(
     min_elems::Int=1,
 )
     srcs = (src, srcs...)
-    backend = _resolve_backend(backend, dst, srcs...)
+    backend = resolve_backend(backend, dst, srcs...)
     for s in srcs
         length(s) == length(dst) || throw(ArgumentError(
             "destination and sources must have the same length, $(length(dst)) != $(length(s))"))
@@ -51,21 +51,17 @@ function map!(
     launch = (; block_size, max_tasks, min_elems)
     if Base.all(s -> axes(s) == axes(dst), srcs)
         # Index all arrays alike, linearly if they all support it
-        _foreachindex(eachindex(dst, srcs...), backend; launch...) do i
-            @inbounds dst[i] = f(_getindices(srcs, i)...)
+        foreachindex_on(eachindex(dst, srcs...), backend; launch...) do i
+            @inbounds dst[i] = f(Base.map(s -> @inbounds(s[i]), srcs)...)
         end
     else
         # Match the elements by their position in column-major order
-        _foreachindex(Base.OneTo(length(dst)), backend; launch...) do k
-            @inbounds dst[firstindex(dst) - 1 + k] = f(_getnth(srcs, k)...)
+        foreachindex_on(Base.OneTo(length(dst)), backend; launch...) do k
+            @inbounds dst[firstindex(dst) - 1 + k] = f(Base.map(s -> nth(s, k), srcs)...)
         end
     end
     dst
 end
-
-# The elements of `arrays` at index `i`, and at position `k` in column-major order
-@inline _getindices(arrays::Tuple, i) = Base.map(a -> @inbounds(a[i]), arrays)
-@inline _getnth(arrays::Tuple, k) = Base.map(a -> _nth(a, k), arrays)
 
 
 """
@@ -77,6 +73,6 @@ and `eltype` of `src` (if `f` changes the `eltype`, allocate `dst` separately an
 """
 function map(f, src::AbstractArray, srcs::AbstractArray...;
              backend::Union{Nothing, Backend}=nothing, kwargs...)
-    backend = _resolve_backend(backend, src, srcs...)
-    return map!(f, _similar(backend, src), src, srcs...; backend, kwargs...)
+    backend = resolve_backend(backend, src, srcs...)
+    return map!(f, similar_on(backend, src), src, srcs...; backend, kwargs...)
 end

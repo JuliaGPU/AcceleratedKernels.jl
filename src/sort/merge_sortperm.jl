@@ -1,63 +1,38 @@
-# GPU merge sort permutation: sorts a copy of the keys, carrying the indices along.
-function _merge_sortperm!(
-    ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend,
-    bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+# GPU merge sort permutation: sorts a copy of the keys, `by.(v)`, carrying the indices along.
+function merge_sortperm!(
+    ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
+    ord::Base.Order.Ordering, by; block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck block_size > 0
-    @argcheck length(ix) == length(v)
-    dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
-    Base.Order.ord(lt, by, rev, order)      # validate the ordering keywords before touching ix
 
     # Initialise the linear indices that will be sorted by the keys in v
-    _foreachindex(Base.OneTo(length(ix)), backend; block_size) do i
+    foreachindex_on(Base.OneTo(length(ix)), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(v) || layout.len <= 1) && return ix
-    # (a range, for instance, has no backend: collected on the host first)
-    keys = _copyto!(bufs.keys, _backend_free(v) ? collect(v) : v, backend)
-
-    _merge_sort_by_key!(keys, ix, backend, bufs; lt, by, rev, order, block_size, dims)
+    if by === identity
+        # (a range, for instance, has no backend: collected on the host first)
+        keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
+        merge_sort_by_key!(keys, ix, backend, bufs, ord; block_size, dims)
+    else
+        # Evaluated once instead of in every comparison; `ord` is `By(by, ord.order)`
+        keys = map!(by, bufs.keys, v; backend, block_size)
+        merge_sort_by_key!(keys, ix, backend, bufs, ord.order; block_size, dims)
+    end
 
     ix
 end
 
 
 # GPU merge sort permutation comparing the keys in global memory, without copying them.
-function _merge_sortperm_lowmem!(
-    ix::AbstractArray,
-    v::AbstractArray,
-    backend::Backend,
-    bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+function merge_sortperm_lowmem!(
+    ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
+    ord::Base.Order.Ordering; block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck block_size > 0
-    @argcheck length(ix) == length(v)
-    dims isa Colon || @argcheck axes(ix) == axes(v)
     layout = slice_layout(v, dims)
-    ord = Base.Order.ord(lt, by, rev, order)
 
     # Initialise the linear indices that will be sorted by the keys in v
-    _foreachindex(Base.OneTo(length(ix)), backend; block_size) do i
+    foreachindex_on(Base.OneTo(length(ix)), backend; block_size) do i
         @inbounds ix[i] = i
     end
     (isempty(ix) || layout.len <= 1) && return ix
@@ -68,38 +43,36 @@ function _merge_sortperm_lowmem!(
     # Block level
     len = layout.len
     blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(
+    merge_tile_kernel!(backend, block_size)(
         ix, comp, layout, blocks,
         ndrange=(block_size * blocks * slice_count(layout),),
     )
 
     # Global level
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
-    half_size_group = block_size * 2
-    size_group = half_size_group * 2
-    if len > half_size_group
+    run_len = block_size * 2
+    if len > run_len
         p1 = ix
         p2 = bufs.temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = merge_pass_kernel!(backend, block_size)
 
         niter = 0
-        while len > half_size_group
-            blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
+        while len > run_len
+            blocks = ((len + run_len - 1) ÷ run_len + 1) ÷ 2 * (run_len ÷ block_size)
             kernel!(
-                p1, p2, comp, half_size_group, layout, blocks,
+                p1, p2, comp, run_len, layout, blocks,
                 ndrange=(block_size * blocks * slice_count(layout),),
             )
 
-            half_size_group = half_size_group << 1;
-            size_group = size_group << 1;
+            run_len = run_len << 1;
             p1, p2 = p2, p1
 
             niter += 1
         end
 
         if isodd(niter)
-            _copyto!(ix, p1, backend)
+            copyto_on!(ix, p1, backend)
         end
     end
 

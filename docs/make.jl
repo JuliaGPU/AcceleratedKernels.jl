@@ -1,13 +1,15 @@
 using AcceleratedKernels
 using Documenter
 
+include("DocHelpers.jl")
+
 
 makedocs(;
     modules=[AcceleratedKernels],
     authors="Andrei-Leonard Nicusan <a.l.nicusan@gmail.com> and contributors",
     sitename="AcceleratedKernels.jl",
     format=Documenter.HTML(;
-        canonical="https://juliagpu.github.io/KernelAbstractions.jl/",
+        canonical="https://juliagpu.github.io/AcceleratedKernels.jl/",
         edit_link="main",
         assets=String[],
         sidebar_sitename=false,
@@ -18,7 +20,6 @@ makedocs(;
     pages=[
         "Overview" => "index.md",
         "Benchmarks" => "benchmarks.md",
-        "Performance Tips" => "performance.md",
         "Manual" =>[
             "Using Different Backends" => "api/using_backends.md",
             "Algorithms and Backends" => "api/algorithms.md",
@@ -28,7 +29,7 @@ makedocs(;
             "Reduce" => "api/reduce.md",
             "MapReduce" => "api/mapreduce.md",
             "Accumulate" => "api/accumulate.md",
-            "Binary Search" => "api/binarysearch.md",
+            "Binary Search" => "api/searchsorted.md",
             "Find All" => "api/findall.md",
             "Reverse" => "api/reverse.md",
             "Predicates" => "api/predicates.md",
@@ -36,7 +37,6 @@ makedocs(;
             "Scratch Memory" => "api/workspace.md",
             "Custom Structs" => "api/custom_structs.md",
             "Task Partitioning" => "api/task_partition.md",
-            "Utilities" => "api/utilities.md",
             "Differences from Base" => "api/differences.md",
         ],
         "Testing" => "testing.md",
@@ -45,7 +45,7 @@ makedocs(;
         "Roadmap" => "roadmap.md",
         "References" => "references.md",
     ],
-    warnonly=true,
+    checkdocs=:all,
 )
 
 deploydocs(;

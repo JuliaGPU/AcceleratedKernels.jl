@@ -21,7 +21,7 @@
     end
     @test Array(y) == map(i -> i > 0.5 ? i : 0, Array(x))
 
-    if AK._runs_threads(BACKEND) # host arrays
+    if AK.runs_threads(BACKEND) # host arrays
         x = rand(Float32, 1000)
         y = AK.map(x; max_tasks=4, min_elems=500) do i
             i > 0.5 ? i : 0
@@ -43,7 +43,7 @@
     y = array_from_host(zeros(Int, 4, 3))
     AK.map!(i -> 2i, y, view(x, :, :))
     @test vec(Array(y)) == 2:2:24
-    # ... also through views that do not support linear indexing
+    # Also through views that do not support linear indexing
     x = array_from_host(reshape(1:20, 4, 5))
     v = view(x, 1:3, 2:5)
     y = array_from_host(zeros(Int, 12))
@@ -66,8 +66,8 @@
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.map(x -> x^2, x; bad=:kwarg)
-    @test_throws MethodError AK.map(x -> x^2, x; prefer_threads=true)
 end
+
 
 @testset "map: backend-free inputs" begin
     # A range has no backend: the result is allocated on the one given

@@ -16,8 +16,7 @@ end
 
 Values that fill unset algorithm fields for `findall` on one device, as returned by
 [`findall_tuning`](@ref): `block_size` and `items_per_thread` for `ScanScatter`, and
-`threads_min_elems` for `CPUThreads.Partitioned`. The defaults reproduce AK's historical
-settings. Internal: the fields may change in any release.
+`threads_min_elems` for `CPUThreads.Partitioned`.
 """
 Base.@kwdef struct FindallTuning
     block_size::Int = 256
@@ -34,60 +33,54 @@ The `findall` tuning for element type `T` (the input's) on `backend`'s current d
 findall_tuning(::Backend, ::Type) = FindallTuning()
 
 """
-    _resolve_findall(alg, backend, T) -> Algorithm
+    resolve_findall(alg, backend, T) -> Algorithm
 
 Resolve `alg` for `findall` over elements of type `T` on `backend`: `ScanScatter` or
 `CPUThreads.Partitioned` with every field set, or an `ArgumentError`.
 """
-function _resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    _checkdomain(alg)
+function resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
     t = findall_tuning(backend, T)
-    a = alg isa Auto ? (_runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
-    a = _fill(a, t, T)
-    _check_findall(a, backend)
+    a = alg isa Auto ? (runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
+    a = fill_defaults(a, t, T)
+    check_findall(a, backend)
     return a
 end
 
-function _checkdomain(a::ScanScatter)
-    _check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "ScanScatter: `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+function check_fields(a::ScanScatter)
+    check_block_size(a)
+    check_positive(a, :items_per_thread)
     nothing
 end
 
-_fill(a::ScanScatter, t::FindallTuning, T) =
+fill_defaults(a::ScanScatter, t::FindallTuning, T) =
     ScanScatter(something(a.block_size, t.block_size),
                 something(a.items_per_thread, t.items_per_thread))
-_fill(a::CPUThreads.Partitioned, t::FindallTuning, T) = _fill_threads(a, t)
-_fill(a::Algorithm, t::FindallTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a findall algorithm"))
+fill_defaults(a::CPUThreads.Partitioned, t::FindallTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::FindallTuning, T) =
+    throw(ArgumentError("$(algname(a)) is not a findall algorithm"))
 
-function _check_findall(a::ScanScatter, backend)
-    _checkdomain(a)
-    _require_kernels(a, backend)
-    widemul(a.block_size, a.items_per_thread) <= typemax(Int32) || throw(ArgumentError(
-        "ScanScatter: `block_size * items_per_thread` must be at most $(typemax(Int32))"))
+function check_findall(a::ScanScatter, backend)
+    check_fields(a)
+    require_kernels(a, backend)
+    check_tile(a)
     nothing
 end
 
-function _check_findall(a::CPUThreads.Partitioned, backend)
-    _checkdomain(a)
-    _require_threads(a, backend)
+function check_findall(a::CPUThreads.Partitioned, backend)
+    check_fields(a)
+    require_threads(a, backend)
 end
 
 
 # The element of `indices` at the ordinal `position` (1-based, whatever the axes)
-@inline findall_index(indices::AbstractUnitRange, position) =
+@inline ordinal_index(indices::Union{AbstractUnitRange, LinearIndices{1}}, position) =
     first(indices) + position - 1
-@inline findall_index(indices::LinearIndices{1}, position) =
-    first(indices) + position - 1
-@inline findall_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
+@inline ordinal_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
 
 
 # With `out === nothing`, compute block counts. Otherwise, `block_counts` contains their
 # inclusive prefix scan and the kernel scatters the selected items.
-@kernel cpu=false inbounds=true unsafe_indices=true function findall_block!(
+@kernel cpu=false inbounds=true unsafe_indices=true function compact_kernel!(
     out, @Const(bools), block_counts, input_indices, output_indices, ::Val{ITEMS},
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
@@ -104,7 +97,7 @@ end
         p = j * block_size + ithread
         position = block_offset + p
         tile[p + 0x1] = position < len ?
-                         UInt8(bools[findall_index(input_indices, position + 0x1)]) : 0x0
+                         UInt8(bools[ordinal_index(input_indices, position + 0x1)]) : 0x0
         j += 1
     end
     @synchronize()
@@ -133,7 +126,7 @@ end
             if tile[run + k + 0x1] != 0x0
                 pos += 1
                 position = block_offset + run + k + 0x1
-                out[pos] = findall_index(output_indices, position)
+                out[pos] = ordinal_index(output_indices, position)
             end
             k += 1
         end
@@ -141,14 +134,17 @@ end
 end
 
 
-function findall_gpu(
+# Stream compaction: the elements of `output_indices`, of type `I`, at the positions where
+# `bools` is `true`. On GPUs, the result is an array like `like` (the searched array, rather than
+# a mask of it in scratch memory), so that it shares properties such as the storage mode.
+function compact(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg::ScanScatter;
     bufs, like,
 ) where I
     block_size = alg.block_size
     items_per_thread = alg.items_per_thread
 
-    isempty(bools) && return _similar(backend, like, I, (0,))
+    isempty(bools) && return similar_on(backend, like, I, (0,))
 
     elems_per_block = block_size * items_per_thread
     num_blocks = cld(length(bools), elems_per_block)
@@ -156,13 +152,13 @@ function findall_gpu(
     input_indices = eachindex(bools)
     items = Val(items_per_thread)
 
-    kernel! = findall_block!(backend, block_size)
+    kernel! = compact_kernel!(backend, block_size)
     kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
             ndrange=num_blocks * block_size)
-    _accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
+    accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
-    out = _similar(backend, like, I, (n,))
+    out = similar_on(backend, like, I, (n,))
     if n > 0
         kernel!(out, bools, block_counts, input_indices, output_indices, items;
                 ndrange=num_blocks * block_size)
@@ -171,23 +167,17 @@ function findall_gpu(
 end
 
 
-function findall_cpu(
+function compact(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend,
     alg::CPUThreads.Partitioned;
-    bufs,
+    bufs, like,
 ) where I
     input_indices = eachindex(bools)
     tp = TaskPartitioner(length(bools), alg.max_tasks, alg.min_elems)
-    if tp.num_tasks == 1
-        out = similar(bools, I, Base.count(bools))
-        findall_section!(out, bools, input_indices, output_indices, Base.OneTo(length(bools)), 0)
-        return out
-    end
-
     task_counts = bufs.counts
     itask_partition(tp) do itask, positions
         task_counts[itask] = Base.count(
-            position -> @inbounds(bools[findall_index(input_indices, position)]), positions,
+            position -> @inbounds(bools[ordinal_index(input_indices, position)]), positions,
         )
     end
     cumsum!(task_counts, task_counts)
@@ -195,47 +185,29 @@ function findall_cpu(
     out = similar(bools, I, task_counts[end])
     itask_partition(tp) do itask, positions
         offset = itask == 1 ? 0 : task_counts[itask - 1]
-        findall_section!(out, bools, input_indices, output_indices, positions, offset)
+        compact_serial!(out, bools, input_indices, output_indices, positions, offset)
     end
     out
 end
 
 
-function findall_section!(out, bools, input_indices, output_indices, positions, pos)
+function compact_serial!(out, bools, input_indices, output_indices, positions, pos)
     @inbounds for position in positions
-        if bools[findall_index(input_indices, position)]
+        if bools[ordinal_index(input_indices, position)]
             pos += 1
-            out[pos] = findall_index(output_indices, position)
+            out[pos] = ordinal_index(output_indices, position)
         end
     end
     out
 end
 
 
-# The result is an array like `like` (the searched array, rather than a mask of it in scratch
-# memory), so that it shares properties such as a GPU array's storage mode
-function findall_impl(
-    bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg; bufs,
-    like=bools,
-) where I
-    if alg isa ScanScatter
-        findall_gpu(bools, I, output_indices, backend, alg; bufs, like)
-    else
-        findall_cpu(bools, I, output_indices, backend, alg; bufs)
-    end
-end
-
-
-# The launch settings of the mask pass for a resolved findall algorithm
-_findall_launch(a::ScanScatter) = (; block_size=a.block_size)
-_findall_launch(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
-
-function findall_bools!(bools, pred, v::AbstractArray, backend::Backend, alg)
+function findall_mask!(bools, pred, v::AbstractArray, backend::Backend, alg)
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
-    _foreachindex(Base.OneTo(length(v)), backend; _findall_launch(alg)...) do position
-        input_index = findall_index(input_indices, position)
-        bool_index = findall_index(bool_indices, position)
+    foreachindex_on(Base.OneTo(length(v)), backend; launch_kwargs(alg)...) do position
+        input_index = ordinal_index(input_indices, position)
+        bool_index = ordinal_index(bool_indices, position)
         @inbounds bools[bool_index] = pred(v[input_index]) ? true : false
     end
     bools
@@ -286,52 +258,51 @@ AK.findall(m; items=LinearIndices(m))   # [1, 4]
 function findall(values::AbstractArray; items::AbstractArray=keys(values),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
-    values isa AbstractArray{Bool} || _check_bool_result(identity, values)
-    s = _findall_setup(values, items, false, backend, alg)
-    _findall_run(identity, values, items, s, _buffers(s.plan, workspace, values, items))
+    values isa AbstractArray{Bool} || check_bool_result(identity, values)
+    s = findall_setup(values, items, false, backend, alg)
+    findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
 end
 
 function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
                  workspace=nothing)
-    _check_bool_result(pred, v)
-    s = _findall_setup(v, items, true, backend, alg)
-    _findall_run(pred, v, items, s, _buffers(s.plan, workspace, v, items))
+    check_bool_result(pred, v)
+    s = findall_setup(v, items, true, backend, alg)
+    findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
 end
 
-_plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
-      backend=nothing, alg::Algorithm=Auto()) =
-    _findall_setup(values, items, false, backend, alg).plan
-_plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
-      alg::Algorithm=Auto()) =
-    _findall_setup(v, items, true, backend, alg).plan
+plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
+     backend=nothing, alg::Algorithm=Auto()) =
+    findall_setup(values, items, false, backend, alg).plan
+plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
+     alg::Algorithm=Auto()) =
+    findall_setup(v, items, true, backend, alg).plan
 
 # The plan of `findall` over `v`: its scratch is a mask of `pred(v[i])` for the predicate form
 # and for non-Bool values, the counts of the blocks or tasks, and the scan of the block counts
-function _findall_setup(v, items, predicate::Bool, backend, alg)
+function findall_setup(v, items, predicate::Bool, backend, alg)
     length(items) == length(v) || throw(DimensionMismatch(
         "`items` must have the length of the array, $(length(v)), got $(length(items))"))
-    backend = _resolve_backend(backend, v, items)
-    a = _resolve_findall(alg, backend, eltype(v))
+    backend = resolve_backend(backend, v, items)
+    a = resolve_findall(alg, backend, eltype(v))
     n = length(v)
-    mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=_buffer(Bool, size(v))) : (;)
+    mask = predicate || !(v isa AbstractArray{Bool}) ? (; mask=scratch(Bool, size(v))) : (;)
     counts, nested = if a isa ScanScatter
         num_blocks = cld(n, a.block_size * a.items_per_thread)
-        scan = _accumulate_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
-        (; counts=_buffer(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
+        scan = scan_setup(+, Int, Int, (num_blocks,), backend; init=0).plan
+        (; counts=scratch(Int, num_blocks), scan=scan.sizes), (; scan=scan.alg)
     else
-        num_tasks = TaskPartitioner(n, a.max_tasks, a.min_elems).num_tasks
-        (; counts=_buffer(Int, num_tasks)), (;)
+        (; counts=scratch(Int, task_count(n, a.max_tasks, a.min_elems))), (;)
     end
-    return (; plan=_Plan(backend, a, nested, merge(mask, counts)))
+    return (; plan=Plan(backend, a, nested, merge(mask, counts)))
 end
 
-function _findall_run(pred, v, items, s, bufs)
+function findall_run(pred, v, items, s, bufs)
     backend, a = s.plan.backend, s.plan.alg
     bools = if haskey(bufs, :mask)
-        findall_bools!(bufs.mask, pred, v, backend, a)
+        findall_mask!(bufs.mask, pred, v, backend, a)
     else
         v
     end
-    findall_impl(bools, eltype(items), items, backend, a; bufs, like=v)
+    compact(bools, eltype(items), items, backend, a; bufs, like=v)
 end

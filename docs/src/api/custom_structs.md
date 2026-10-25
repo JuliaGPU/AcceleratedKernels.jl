@@ -1,8 +1,7 @@
 ### Custom Structs
 
 ```@example
-import AcceleratedKernels as AK # hide
-AK.DocHelpers.readme_section("## 6. Custom Structs") # hide
+Main.DocHelpers.readme_section("## 6. Custom Structs") # hide
 ```
 
 You can also use unmaterialised index ranges in GPU kernels - unmaterialised meaning you do not

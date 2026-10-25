@@ -4,7 +4,9 @@ Sorting with the interface and results of the Julia Base functions, on GPUs and 
 - `sort!` (in-place), `sort` (out-of-place)
 - `sortperm!`, `sortperm`
 - `sort_by_key!`, which sorts keys and applies the same permutation to values
-- **Other names**: `sort`, `sort_team`, `sort_team_by_key`, `stable_sort`, `sort_by_key` or variations in Kokkos, RAJA, Thrust, oneDPL and CUB.
+
+Kokkos, RAJA, Thrust, oneDPL and CUB call these `sort`, `sort_team`, `sort_team_by_key`,
+`stable_sort`, `sort_by_key` or variations of them.
 
 Function signatures:
 ```@docs
@@ -25,8 +27,9 @@ AK.sort!(v)
 ```
 
 Like Base, the sorts are stable by default: elements that compare equal keep their order.
-[`Auto()`](@ref AcceleratedKernels.Auto), the default `alg`, picks an algorithm for the backend,
-the device, the element type, the ordering and the length. Pass an algorithm to choose it and its
+[`Auto()`](@ref AcceleratedKernels.Auto), the default `alg`, picks an algorithm for the backend, the
+device, the element type, the ordering and the length: `CPUThreads.SampleSort` on the host and,
+until per-device tuning says otherwise, `MergeSort` on GPUs. Pass an algorithm to choose it and its
 settings yourself; an algorithm that cannot run the call is an `ArgumentError`, never replaced:
 
 | Algorithm | Stable | `dims` | `sortperm!` | `sort_by_key!` | Element types, orderings | Backends |
@@ -40,6 +43,7 @@ settings yourself; an algorithm that cannot run the call is an `ArgumentError`, 
 AcceleratedKernels' kernels on PoCL. See [Algorithms and backends](@ref) for how `Auto` chooses.
 
 ```@docs
+AcceleratedKernels.SortAlgorithm
 AcceleratedKernels.MergeSort
 AcceleratedKernels.RadixSort
 AcceleratedKernels.BitonicSort
@@ -50,7 +54,7 @@ AcceleratedKernels.CPUThreads.SampleSort
 v = ROCArray(rand(Float32, 1_000_000))
 AK.sort!(v; alg=AK.RadixSort())                      # this algorithm, with the device's settings
 AK.sort!(v; alg=AK.RadixSort(items_per_thread=4))    # and this setting
-AK.sort!(v; alg=AK.Auto(stable=false))               # allow unstable algorithms (Base's QuickSort)
+AK.sort!(v; alg=AK.Auto(stable=false))               # unstable algorithms allowed too
 ```
 
 Multidimensional arrays are sorted as one flat vector by default; pass `dims` to sort each 1D slice

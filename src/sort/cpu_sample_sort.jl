@@ -1,11 +1,11 @@
-function _sample_sort_histogram!(
+function bucket_counts!(
     v::AbstractArray{T}, ord,
     splitters::Vector{T}, histograms::Matrix{Int},
     itask, irange,
 ) where T
     @inbounds begin
         for i in irange
-            ibucket = 1 + _searchsortedlast(splitters, v[i], 1, length(splitters), ord)
+            ibucket = 1 + searchsorted_last(splitters, v[i], 1, length(splitters), ord)
             histograms[ibucket, itask] += 1
         end
     end
@@ -13,7 +13,7 @@ function _sample_sort_histogram!(
 end
 
 
-function _sample_sort_compute_offsets!(histograms, max_tasks)
+function bucket_offsets!(histograms, max_tasks)
     # Not worth parallelising this, as the number of tasks is much smaller than the number of
     # elements - in profiling this does not show up
     @inbounds begin
@@ -43,7 +43,7 @@ function _sample_sort_compute_offsets!(histograms, max_tasks)
 end
 
 
-function _sample_sort_move_buckets!(
+function scatter_buckets!(
     v, temp, ord,
     splitters, global_offsets, task_offsets,
     itask, max_tasks, irange,
@@ -59,7 +59,7 @@ function _sample_sort_move_buckets!(
 
         for i in irange
             # Find the bucket for this element
-            ibucket = 1 + _searchsortedlast(splitters, v[i], 1, length(splitters), ord)
+            ibucket = 1 + searchsorted_last(splitters, v[i], 1, length(splitters), ord)
 
             # Get the current destination index for this element, then increment
             temp[offsets[ibucket]] = v[i]
@@ -71,10 +71,7 @@ function _sample_sort_move_buckets!(
 end
 
 
-function _sample_sort_sort_bucket!(
-    v, temp, offsets, itask, max_tasks;
-    lt, by, rev, order
-)
+function sort_bucket!(v, temp, offsets, itask, max_tasks, ord)
     @inbounds begin
         istart = offsets[itask] + 1
         istop = itask == max_tasks ? length(temp) : offsets[itask + 1]
@@ -90,10 +87,10 @@ function _sample_sort_sort_bucket!(
         # odd-numbered itask, move elements first, to avoid false sharing from threads
         if isodd(itask)
             copyto!(v, istart, temp, istart, istop - istart + 1)
-            Base.sort!(view(v, istart:istop); lt, by, rev, order)
+            Base.sort!(view(v, istart:istop); order=ord)
         else
             # For even-numbered itasks, sort first, then move elements back to v
-            Base.sort!(view(temp, istart:istop); lt, by, rev, order)
+            Base.sort!(view(temp, istart:istop); order=ord)
             copyto!(v, istart, temp, istart, istop - istart + 1)
         end
     end
@@ -102,16 +99,11 @@ function _sample_sort_sort_bucket!(
 end
 
 
-function _sample_sort_parallel!(
-    v, temp, ord,
-    splitters, histograms,
-    max_tasks;
-    lt, by, rev, order,
-)
+function sample_sort_parallel!(v, temp, ord, splitters, histograms, max_tasks)
     # Compute the histogram for each task
     tp = TaskPartitioner(length(v), max_tasks, 1)
     itask_partition(tp) do itask, irange
-        _sample_sort_histogram!(
+        bucket_counts!(
             v, ord,
             splitters, histograms,
             itask, irange,
@@ -119,12 +111,12 @@ function _sample_sort_parallel!(
     end
 
     # Compute the global and local (per-bucket) offsets for each task
-    _sample_sort_compute_offsets!(histograms, max_tasks)
+    bucket_offsets!(histograms, max_tasks)
     offsets = @view histograms[1:max_tasks, max_tasks + 1]
 
     # Move the elements into the destination buffer
     itask_partition(tp) do itask, irange
-        _sample_sort_move_buckets!(
+        scatter_buckets!(
             v, temp, ord,
             splitters, offsets, histograms,
             itask, max_tasks, irange,
@@ -133,38 +125,8 @@ function _sample_sort_parallel!(
 
     # Sort each bucket in parallel
     itask_partition(tp) do itask, irange
-        _sample_sort_sort_bucket!(
-            v, temp, offsets, itask, max_tasks;
-            lt, by, rev, order,
-        )
+        sort_bucket!(v, temp, offsets, itask, max_tasks, ord)
     end
-
-    # # Debug: single-threaded version
-    # tp = TaskPartitioner(length(v), max_tasks, 1)
-    # for itask in 1:max_tasks
-    #     irange = tp[itask]
-    #     _sample_sort_histogram!(
-    #         v, ord,
-    #         splitters, histograms,
-    #         itask, irange,
-    #     )
-    # end
-    # _sample_sort_compute_offsets!(histograms, max_tasks)
-    # offsets = @view histograms[1:max_tasks, max_tasks + 1]
-    # for itask in 1:max_tasks
-    #     irange = tp[itask]
-    #     _sample_sort_move_buckets!(
-    #         v, temp, ord,
-    #         splitters, offsets, histograms,
-    #         itask, max_tasks, irange,
-    #     )
-    # end
-    # for itask in 1:max_tasks
-    #     _sample_sort_sort_bucket!(
-    #         v, temp, offsets, itask, max_tasks;
-    #         lt, by, rev, order,
-    #     )
-    # end
 
     nothing
 end
@@ -173,21 +135,7 @@ end
 
 
 # Parallel sample sort on Julia threads, deferring to `Base.sort!` for the local sorts.
-function _sample_sort!(
-    v::AbstractArray;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    temp::Union{Nothing, AbstractArray}=nothing,
-)
-    # Sanity checks
-    @argcheck max_tasks > 0
-
+function sample_sort!(v::AbstractArray, ord::Base.Order.Ordering; max_tasks, min_elems, temp)
     # For uniform distributions, the error is O(1/sqrt(n)); still, there may be pathological
     # cases - maybe there's a fancier way to choose samples / splitters?
     oversampling_factor = 16
@@ -201,45 +149,27 @@ function _sample_sort!(
     if max_tasks <= 1 || num_elements < oversampling_factor * max_tasks
         # `temp` (a workspace's) is Base's scratch then
         return temp isa Vector{eltype(v)} && length(temp) >= num_elements ?
-            Base.sort!(v; lt, by, rev, order, scratch=temp) : Base.sort!(v; lt, by, rev, order)
+            Base.sort!(v; order=ord, scratch=temp) : Base.sort!(v; order=ord)
     end
 
-    # Create a temporary buffer for the sorted output
-    if isnothing(temp)
-        dest = similar(v)
-    else
-        @argcheck length(temp) == length(v)
-        @argcheck eltype(temp) == eltype(v)
-        dest = temp
-    end
-
-    # Take equally spaced samples, save them in dest for the moment
+    # Take equally spaced samples, save them in temp for the moment
     num_samples = oversampling_factor * max_tasks
-    isamples = IntLinSpace(1, num_elements, num_samples)
     @inbounds for i in 1:num_samples
-        dest[i] = v[isamples[i]]
+        temp[i] = v[1 + div((i - 1) * (num_elements - 1), num_samples - 1, RoundUp)]
     end
 
     # Sort samples and choose splitters; these are small allocations, which Julia is fast at
-    Base.sort!(view(dest, 1:num_samples); lt, by, rev, order)
+    Base.sort!(view(temp, 1:num_samples); order=ord)
     splitters = Vector{eltype(v)}(undef, max_tasks - 1)
     for i in 1:(max_tasks - 1)
-        splitters[i] = dest[div(i * num_samples, max_tasks)]
+        splitters[i] = temp[div(i * num_samples, max_tasks)]
     end
 
     # Pre-allocate histogram for each task; each column is exclusive to the task; one extra column
     # for global offsets; add 8 rows (i.e. 64 bytes) of padding to avoid false sharing
     histograms = zeros(Int, max_tasks + 8, max_tasks + 1)
 
-    # Run parallel sample sort for a given constructed ord (there may be a type instability for
-    # rev=true, so we keep this function barrier)
-    ord = Base.Order.ord(lt, by, rev, order)
-    _sample_sort_parallel!(
-        v, dest, ord,
-        splitters, histograms,
-        max_tasks;
-        lt, by, rev, order,
-    )
+    sample_sort_parallel!(v, temp, ord, splitters, histograms, max_tasks)
 
     v
 end
@@ -248,55 +178,23 @@ end
 
 
 # Sort permutation on Julia threads: sample sort of the indices, comparing the values.
-function _sample_sortperm!(
-    ix::AbstractArray, v::AbstractArray;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    max_tasks=Threads.nthreads(),
-    min_elems=1,
-    temp::Union{Nothing, AbstractArray}=nothing,
-)
-    # Sanity checks
-    @argcheck max_tasks > 0
-    @argcheck length(ix) == length(v)
-
+function sample_sortperm!(ix::AbstractArray, v::AbstractArray, ord::Base.Order.Ordering;
+                          max_tasks, min_elems, temp)
     # Initialise indices that will be sorted by the keys in v
-    _foreachindex(eachindex(ix), HOST_BACKEND; max_tasks, min_elems) do i
+    foreachindex_on(eachindex(ix), HOST_BACKEND; max_tasks, min_elems) do i
         @inbounds ix[i] = i
     end
 
-    # The Order may have a type instability for `rev=true`, so we keep this function barrier
-    ord = Base.Order.ord(lt, by, rev, order)
-    _sample_sort_barrier!(
-        ix, v, ord;
-        max_tasks, min_elems,
-        temp,
-    )
-end
-
-
-function _sample_sort_barrier!(ix, v, ord; max_tasks, min_elems, temp)
-    # Construct custom comparator indexing into global array v for every index comparison
-    comp = (ix, iy) -> Base.Order.lt(ord, v[ix], v[iy])
-    _sample_sort!(
-        ix;
-        lt=comp,
-
-        # Leave defaults - we already have a custom comparator
-        # by=identity, rev=nothing, order=Base.Order.Forward,
-
-        max_tasks, min_elems, temp,
-    )
+    # Not `Base.Order.Perm`, which breaks ties by index with a second comparison (15-40% slower
+    # for 10^7 elements on 4 threads); the sample sort is stable already
+    perm_ord = Base.Order.Lt((i, j) -> Base.Order.lt(ord, v[i], v[j]))
+    sample_sort!(ix, perm_ord; max_tasks, min_elems, temp)
 end
 
 
 # Sort permutation of each slice along `dims`, like Base: sort the linear indices of each slice by
 # the values they point to.
-function _sample_sortperm_dims!(ix, v, ord, dims; max_tasks, min_elems)
+function sample_sortperm_dims!(ix, v, ord, dims; max_tasks, min_elems)
     perm_ord = Base.Order.Perm(ord, vec(v))
     copyto!(ix, LinearIndices(v))
     foreach_slice(ix, dims; max_tasks, min_elems) do slice
@@ -308,21 +206,20 @@ end
 
 # Key/value sort on Julia threads: find the stable sorting permutation of the keys (of each slice
 # along `dims`), then gather keys and values through it.
-function _sample_sort_by_key!(keys, values, ord, dims, bufs; max_tasks, min_elems)
+function sample_sort_by_key!(keys, values, ord, dims, bufs; max_tasks, min_elems)
     ix = bufs.ix
     if dims isa Colon
-        _sample_sortperm!(vec(ix), vec(keys); order=ord, max_tasks, min_elems,
-                          temp=get(bufs.perm, :temp, nothing))
+        sample_sortperm!(vec(ix), vec(keys), ord; max_tasks, min_elems, temp=bufs.perm.temp)
     else
-        _sample_sortperm_dims!(ix, keys, ord, dims; max_tasks, min_elems)
+        sample_sortperm_dims!(ix, keys, ord, dims; max_tasks, min_elems)
     end
-    _gather_through!(keys, ix, bufs.keys; max_tasks, min_elems)
-    _gather_through!(values, ix, bufs.values; max_tasks, min_elems)
+    gather!(keys, ix, bufs.keys; max_tasks, min_elems)
+    gather!(values, ix, bufs.values; max_tasks, min_elems)
     keys, values
 end
 
 # v[i] = v_old[ix[i]] for every linear index i
-function _gather_through!(v, ix, old; max_tasks, min_elems)
+function gather!(v, ix, old; max_tasks, min_elems)
     copyto!(old, v)
     task_partition(length(v), max_tasks, min_elems) do irange
         @inbounds for i in irange
@@ -333,6 +230,6 @@ function _gather_through!(v, ix, old; max_tasks, min_elems)
 end
 
 
-# The scratch of `_sample_sort!` over `n` elements of type `T`: the sorted output when the sort is
+# The scratch of `sample_sort!` over `n` elements of type `T`: the sorted output when the sort is
 # parallel, `Base.sort!`'s scratch when it is not
-_sample_sort_sizes(a::CPUThreads.SampleSort, ::Type{T}, n) where {T} = (; temp=_buffer(T, n))
+sample_sort_scratch(a::CPUThreads.SampleSort, ::Type{T}, n) where {T} = (; temp=scratch(T, n))

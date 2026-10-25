@@ -1,11 +1,11 @@
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_block!(
-    vec, comp, layout, blocks_per_slice,
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_tile_kernel!(
+    v, comp, layout, blocks_per_slice,
 )
 
     @uniform N = @groupsize()[1]
-    s_buf = @localmem eltype(vec) (N * 0x2,)
+    s_buf = @localmem eltype(v) (N * 0x2,)
 
-    T = eltype(vec)
+    T = eltype(v)
     I = typeof(N)
 
     # Use zero-based indices internally and half-open search bounds.
@@ -16,7 +16,7 @@
 
     # Each block sorts a tile of one slice
     islice, iblock = slice_block(layout, iblock, blocks_per_slice)
-    elems = slice(vec, layout, islice)
+    elems = slice(v, layout, islice)
     len = layout.len
 
     i = ithread + iblock * N * 0x2
@@ -27,47 +27,47 @@
 
     @synchronize()
 
-    half_size_group = typeof(ithread)(1)
-    size_group = typeof(ithread)(2)
+    run_len = typeof(ithread)(1)
+    pair_len = typeof(ithread)(2)
 
-    while half_size_group <= N
-        gid = ithread ÷ half_size_group
+    while run_len <= N
+        ipair = ithread ÷ run_len
 
         local v1::T
         local v2::T
         pos1 = typemax(I)
         pos2 = typemax(I)
 
-        i = gid * size_group + half_size_group + iblock * N * 0x2
+        i = ipair * pair_len + run_len + iblock * N * 0x2
         if i < len
-            tid = gid * size_group + ithread % half_size_group
+            tid = ipair * pair_len + ithread % run_len
             v1 = s_buf[tid + 0x1]
 
-            i = (gid + 0x1) * size_group + iblock * N * 0x2
-            n = i < len ? half_size_group : len - iblock * N * 0x2 - gid * size_group - half_size_group
-            lo = gid * size_group + half_size_group
+            i = (ipair + 0x1) * pair_len + iblock * N * 0x2
+            n = i < len ? run_len : len - iblock * N * 0x2 - ipair * pair_len - run_len
+            lo = ipair * pair_len + run_len
             hi = lo + n
-            pos1 = ithread % half_size_group + _lower_bound_s0(s_buf, v1, lo, hi, comp) - lo
+            pos1 = ithread % run_len + lower_bound0(s_buf, v1, lo, hi, comp) - lo
         end
 
-        tid = gid * size_group + half_size_group + ithread % half_size_group
+        tid = ipair * pair_len + run_len + ithread % run_len
         i = tid + iblock * N * 0x2
         if i < len
             v2 = s_buf[tid + 0x1]
-            lo = gid * size_group
-            hi = lo + half_size_group
-            pos2 = ithread % half_size_group + _upper_bound_s0(s_buf, v2, lo, hi, comp) - lo
+            lo = ipair * pair_len
+            hi = lo + run_len
+            pos2 = ithread % run_len + upper_bound0(s_buf, v2, lo, hi, comp) - lo
         end
 
         @synchronize()
 
-        pos1 != typemax(I) && (s_buf[gid * size_group + pos1 + 0x1] = v1)
-        pos2 != typemax(I) && (s_buf[gid * size_group + pos2 + 0x1] = v2)
+        pos1 != typemax(I) && (s_buf[ipair * pair_len + pos1 + 0x1] = v1)
+        pos2 != typemax(I) && (s_buf[ipair * pair_len + pos2 + 0x1] = v2)
 
         @synchronize()
 
-        half_size_group = half_size_group << 0x1
-        size_group = size_group << 0x1
+        run_len = run_len << 0x1
+        pair_len = pair_len << 0x1
     end
 
     i = ithread + iblock * N * 0x2
@@ -78,8 +78,8 @@
 end
 
 
-@kernel inbounds=true cpu=false unsafe_indices=true function _merge_sort_global!(
-    @Const(vec_in), vec_out, comp, half_size_group, layout, blocks_per_slice,
+@kernel inbounds=true cpu=false unsafe_indices=true function merge_pass_kernel!(
+    @Const(v_in), v_out, comp, run_len, layout, blocks_per_slice,
 )
     N = @groupsize()[1]
 
@@ -91,17 +91,17 @@ end
 
     # Merges never cross slice boundaries
     islice, iblock = slice_block(layout, iblock, blocks_per_slice)
-    slice_in = slice(vec_in, layout, islice)
-    slice_out = slice(vec_out, layout, islice)
+    slice_in = slice(v_in, layout, islice)
+    slice_out = slice(v_out, layout, islice)
     len = layout.len
 
     idx = ithread + iblock * N
-    size_group = half_size_group * 0x2
-    gid = idx ÷ half_size_group
+    pair_len = run_len * 0x2
+    ipair = idx ÷ run_len
 
     # Left half
-    pos_in = gid * size_group + idx % half_size_group
-    lo = gid * size_group + half_size_group
+    pos_in = ipair * pair_len + idx % run_len
+    lo = ipair * pair_len + run_len
 
     if lo >= len
         # Incomplete left half, nothing to swap on the right, simply copy elements to be sorted
@@ -109,19 +109,19 @@ end
         pos_in < len && (slice_out[pos_in + 0x1] = slice_in[pos_in + 0x1])
     else
 
-        hi = (gid + 0x1) * size_group
+        hi = (ipair + 0x1) * pair_len
         hi > len && (hi = len)
 
-        pos_out = pos_in + _lower_bound_s0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
+        pos_out = pos_in + lower_bound0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
         slice_out[pos_out + 0x1] = slice_in[pos_in + 0x1]
 
         # Right half
-        pos_in = gid * size_group + half_size_group + idx % half_size_group
+        pos_in = ipair * pair_len + run_len + idx % run_len
 
         if pos_in < len
-            lo = gid * size_group
-            hi = lo + half_size_group
-            pos_out = pos_in - half_size_group + _upper_bound_s0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
+            lo = ipair * pair_len
+            hi = lo + run_len
+            pos_out = pos_in - run_len + upper_bound0(slice_in, slice_in[pos_in + 0x1], lo, hi, comp) - lo
             slice_out[pos_out + 0x1] = slice_in[pos_in + 0x1]
         end
     end
@@ -129,22 +129,12 @@ end
 
 
 # GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
-# `_sort_sizes(::MergeSort, ...)`.
-function _merge_sort!(
-    v::AbstractArray, backend::Backend, bufs::NamedTuple;
-
-    lt=isless,
-    by=identity,
-    rev::Union{Nothing, Bool}=nothing,
-    order::Base.Order.Ordering=Base.Order.Forward,
-
-    block_size::Int=256,
-    dims::Union{Colon, Integer}=Colon(),
+# `sort_plan(::MergeSort, ...)`.
+function merge_sort!(
+    v::AbstractArray, backend::Backend, bufs::NamedTuple, ord::Base.Order.Ordering, by;
+    block_size::Int, dims::Union{Colon, Integer},
 )
-    # Simple sanity checks
-    @argcheck block_size > 0
     layout = slice_layout(v, dims)
-    ord = Base.Order.ord(lt, by, rev, order)
     (isempty(v) || layout.len <= 1) && return v
 
     # Compute keys once instead of evaluating `by` in every comparison, into an array of the
@@ -152,7 +142,7 @@ function _merge_sort!(
     if by !== identity
         keys = bufs.keys
         map!(by, keys, v; backend, block_size)
-        _merge_sort_by_key!(keys, v, backend, bufs; lt, rev, order, block_size, dims)
+        merge_sort_by_key!(keys, v, backend, bufs, ord.order; block_size, dims)
         return v
     end
 
@@ -162,38 +152,36 @@ function _merge_sort!(
     # Block level: each block sorts a tile of one slice in local memory
     len = layout.len
     blocks = (len + block_size * 2 - 1) ÷ (block_size * 2)
-    _merge_sort_block!(backend, block_size)(
+    merge_tile_kernel!(backend, block_size)(
         v, comp, layout, blocks,
         ndrange=(block_size * blocks * slice_count(layout),),
     )
 
     # Global level: merge the sorted tiles of each slice, doubling the run length every pass
     # (an `Int`: in slices of more than 2^30 elements, the run length doubles past `typemax(Int32)`)
-    half_size_group = block_size * 2
-    size_group = half_size_group * 2
-    if len > half_size_group
+    run_len = block_size * 2
+    if len > run_len
         p1 = v
         p2 = bufs.temp
 
-        kernel! = _merge_sort_global!(backend, block_size)
+        kernel! = merge_pass_kernel!(backend, block_size)
 
         niter = 0
-        while len > half_size_group
-            blocks = ((len + half_size_group - 1) ÷ half_size_group + 1) ÷ 2 * (half_size_group ÷ block_size)
+        while len > run_len
+            blocks = ((len + run_len - 1) ÷ run_len + 1) ÷ 2 * (run_len ÷ block_size)
             kernel!(
-                p1, p2, comp, half_size_group, layout, blocks,
+                p1, p2, comp, run_len, layout, blocks,
                 ndrange=(block_size * blocks * slice_count(layout),),
             )
 
-            half_size_group = half_size_group << 1;
-            size_group = size_group << 1;
+            run_len = run_len << 1;
             p1, p2 = p2, p1
 
             niter += 1
         end
 
         if isodd(niter)
-            _copyto!(v, p1, backend)
+            copyto_on!(v, p1, backend)
         end
     end
 

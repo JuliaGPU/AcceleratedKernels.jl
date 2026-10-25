@@ -12,7 +12,8 @@ a scalar finish on the host instead once fewer than `switch_below` values remain
 `block_size * items_per_thread` must be between 2 and `typemax(Int32)`. Reductions along `dims`
 choose among several launch shapes by the sizes and strides of the input and output (into a
 single output, that of whole arrays); `items_per_thread` and `switch_below` cannot be set for
-them, and setting either is an `ArgumentError` there.
+them, and setting either is an `ArgumentError` there (they finish on the device, and those that
+read runs of elements per thread take the tuning's `items_per_thread`).
 
 As CUB's reductions, it requires an associative and commutative operator by default: the
 combination order is fixed for a given setting and shape, but it is not the element order. With
@@ -32,8 +33,8 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 [`reduce_tuning`](@ref).
 
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields;
-  `items_per_thread=nothing` chooses it by the size of the accumulator type (see
-  `_reduce_items_per_thread`).
+  `items_per_thread=nothing` chooses it by the size of the accumulator type, enough elements for
+  64 bytes, from 4 to 16.
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.
@@ -52,8 +53,7 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 `items_per_thread` defaults to the choice by type, and `columns_min_elements` to 2^18, measured
 on CUDA. `segments_lane_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
 (at 512, a Ryzen 9950X's integrated GPU and an Iris Xe take up to twice as long as with a block
-per output); the other defaults reproduce AK's historical settings. Internal: the fields may
-change in any release.
+per output).
 """
 Base.@kwdef struct ReduceTuning
     block_size::Int = 256
@@ -73,10 +73,12 @@ The reduction tuning for accumulator type `T` on `backend`'s current device; see
 [`sort_tuning`](@ref) for the conventions.
 """
 reduce_tuning(::Backend, ::Type) = ReduceTuning()
-# Kernels on the host backend run on the CPU, as with OpenCL's CPU devices (see AK's OpenCL
-# extension)
-reduce_tuning(::HostBackend, ::Type) =
-    ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
+# Kernels on CPU devices (the host backend's, and OpenCL's CPU devices) reduce short runs faster
+# with a thread per output, and long ones faster with groups of threads: with PoCL on a Ryzen
+# 9950X, summing an 8×10^6 matrix along `dims=1` takes half the time, and a 4096×4096 one along
+# `dims=1` also half the time.
+cpu_reduce_tuning() = ReduceTuning(segments_short_runs=false, segments_lane_bytes=512)
+reduce_tuning(::HostBackend, ::Type) = cpu_reduce_tuning()
 
 # Elements each thread loads per tile of a whole-array reduction: enough for 64 bytes of
 # accumulators, from 4 to 16. The first pass launches at most `target_blocks` blocks, so its
@@ -84,73 +86,67 @@ reduce_tuning(::HostBackend, ::Type) =
 # on an RTX 5080 (kernel time of `sum`, 256 blocks): 16 for 4-byte types is within 1% of the best
 # setting from 10^4 to 10^8 elements, while 2 reaches the bandwidth only with many more blocks,
 # and wider accumulators (Float64, ComplexF64, tuples of 4 Float64s) do best at 4 to 8.
-_reduce_items_per_thread(::Type{T}) where {T} =
+default_items_per_thread(::Type{T}) where {T} =
     isbitstype(T) && sizeof(T) > 0 ? clamp(64 ÷ sizeof(T), 4, 16) : 4
 
 
-_whole(dims) = dims === nothing || dims isa Colon
+iswhole(dims) = dims === nothing || dims isa Colon
 
 """
-    _resolve_reduce(alg, backend, T, dims) -> Algorithm
+    resolve_reduce(alg, backend, T, dims) -> Algorithm
 
 Resolve `alg` for a reduction with accumulator type `T` along `dims` (`nothing` or `:` for a
 whole-array reduction) on `backend`. Returns `BlockReduce` or `CPUThreads.Partitioned` with every
 field set, or throws an `ArgumentError`.
 """
-function _resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where {T}
-    _checkdomain(alg)
-    if alg isa BlockReduce && !_whole(dims) &&
+function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where {T}
+    if alg isa BlockReduce && !iswhole(dims) &&
        (alg.items_per_thread !== nothing || alg.switch_below !== nothing)
         throw(ArgumentError("BlockReduce: `items_per_thread` and `switch_below` only apply to " *
                             "whole-array reductions (`dims=:`)"))
     end
     t = reduce_tuning(backend, T)
-    a = alg isa Auto ? _select_reduce(backend) : alg
-    a = _fill(a, t, T)
-    _check_reduce(a, backend, T, dims)
+    a = alg isa Auto ? select_reduce(backend) : alg
+    a = fill_defaults(a, t, T)
+    check_reduce(a, backend, T, dims)
+    a isa BlockReduce && t.target_blocks < 1 && throw(ArgumentError(
+        "the reduction tuning's `target_blocks` must be positive, got $(t.target_blocks)"))
     return a
 end
 
-_select_reduce(backend) = _runs_threads(backend) ? CPUThreads.Partitioned() : BlockReduce()
+select_reduce(backend) = runs_threads(backend) ? CPUThreads.Partitioned() : BlockReduce()
 
-function _checkdomain(a::BlockReduce)
-    _check_pow2(a, :block_size)
-    a.block_size === nothing || a.block_size <= 1024 || throw(ArgumentError(
-        "BlockReduce: `block_size` must be at most 1024, got $(a.block_size)"))
-    _check_positive(a, :items_per_thread)
+function check_fields(a::BlockReduce)
+    check_block_size(a)
+    check_positive(a, :items_per_thread)
     a.switch_below === nothing || a.switch_below >= 0 || throw(ArgumentError(
         "BlockReduce: `switch_below` must be non-negative, got $(a.switch_below)"))
     nothing
 end
 
-_fill(a::BlockReduce, t::ReduceTuning, T) =
+fill_defaults(a::BlockReduce, t::ReduceTuning, T) =
     BlockReduce(something(a.block_size, t.block_size),
-                something(a.items_per_thread, t.items_per_thread, _reduce_items_per_thread(T)),
+                something(a.items_per_thread, t.items_per_thread, default_items_per_thread(T)),
                 something(a.switch_below, t.switch_below))
-_fill(a::CPUThreads.Partitioned, t::ReduceTuning, T) = _fill_threads(a, t)
-_fill(a::Algorithm, t::ReduceTuning, T) =
-    throw(ArgumentError("$(_algname(a)) is not a reduction algorithm"))
+fill_defaults(a::CPUThreads.Partitioned, t::ReduceTuning, T) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::ReduceTuning, T) =
+    throw(ArgumentError("$(algname(a)) is not a reduction algorithm"))
 
-function _check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
-    _checkdomain(a)
-    _require_kernels(a, backend)
+function check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
+    check_fields(a)
+    require_kernels(a, backend)
     # `Union{}`: no accumulator type, which only an empty reduction gets past
     T === Union{} || isbitstype(T) || throw(ArgumentError(
         "BlockReduce: the accumulator type $T is not a bits type; pass an `init` of the type " *
         "to accumulate in, or make `f` and `op` inferable"))
-    if _whole(dims)
-        # Each pass reduces tiles of `block_size * items_per_thread` elements to one value: a tile
-        # of one element never shrinks the input, and the bound keeps the kernels' index
-        # arithmetic far from overflow
-        tile = widemul(a.block_size, a.items_per_thread)
-        2 <= tile <= typemax(Int32) || throw(ArgumentError(
-            "BlockReduce: `block_size * items_per_thread` must be between 2 and $(typemax(Int32)), " *
-            "got $(a.block_size) * $(a.items_per_thread)"))
+    if iswhole(dims)
+        # Each pass reduces a tile to one value, so a tile of one element never shrinks the input
+        check_tile(a; min=2)
     end
     nothing
 end
 
-function _check_reduce(a::CPUThreads.Partitioned, backend, T, dims)
-    _checkdomain(a)
-    _require_threads(a, backend)
+function check_reduce(a::CPUThreads.Partitioned, backend, T, dims)
+    check_fields(a)
+    require_threads(a, backend)
 end

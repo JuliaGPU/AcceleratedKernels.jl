@@ -8,11 +8,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
-Parallel algorithm building blocks for the Julia ecosystem, targeting multithreaded CPUs, and GPUs via Intel oneAPI, AMD ROCm, Apple Metal and Nvidia CUDA (and any future backends added to the [JuliaGPU](https://juliagpu.org/) organisation) from a unified KernelAbstractions.jl codebase.
+Parallel algorithm building blocks for the Julia ecosystem, targeting multithreaded CPUs, and GPUs via Intel oneAPI, AMD ROCm, Apple Metal, Nvidia CUDA and OpenCL (and any future backends added to the [JuliaGPU](https://juliagpu.org/) organisation) from a unified KernelAbstractions.jl codebase.
 
 
 ### A Uniform API, Everywhere
-Offering standard library algorithms (e.g., `sort`, `mapreduce`, `accumulate`), higher-order functions (e.g., `sum`, `cumprod`, `any`), and cross-architecture custom loops (`foreachindex`, `foraxes`), AcceleratedKernels.jl lets you write high-performance code once and run it on all supported architectures — no separate or special-cased kernels needed. It’s the classic “write once, run everywhere” principle, but supercharged for modern parallel CPU and GPU computing.
+AcceleratedKernels.jl provides the parallel primitives that GPU code is built from, in the style of CUB: sorting (`sort`, `sortperm`, `sort_by_key!`), reductions (`reduce`, `mapreduce`, `sum`, `any`, ...), prefix scans (`accumulate`, `cumsum`), stream compaction (`findall`), binary searches, and custom loops (`foreachindex`, `foraxes`). The same code runs on all supported architectures, without separate or special-cased kernels.
+
+The functions take Base's names and arguments but follow a contract of their own, modelled on GPU libraries such as CUB: the sorts, reductions, scans, `findall` and `any`/`all` take an explicit algorithm with its settings and a reusable workspace for their scratch memory, and results have one documented type. AcceleratedKernels.jl is not a reimplementation of Base: packages such as GPUArrays.jl build Base's API on top of it, and code that needs control over the algorithm or its memory calls it directly.
 
 
 <table>
@@ -58,7 +60,7 @@ Julia v1.10
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=CUDA%20-%20Julia%20v1.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=CUDA%20-%20Julia%201.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -66,12 +68,12 @@ Julia v1.10
 <tr>
 <td>
 
-Julia v1.11
+Julia v1.13
 
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=CUDA%20-%20Julia%20v1.11)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=CUDA%20-%20Julia%201.13)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -89,7 +91,7 @@ Julia v1.10
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=AMDGPU%20-%20Julia%20v1.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=AMDGPU%20-%20Julia%201.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -97,12 +99,12 @@ Julia v1.10
 <tr>
 <td>
 
-Julia v1.11
+Julia v1.13
 
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=AMDGPU%20-%20Julia%20v1.11)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=AMDGPU%20-%20Julia%201.13)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -120,7 +122,7 @@ Julia v1.10
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=oneAPI%20-%20Julia%20v1.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=oneAPI%20-%20Julia%201.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -128,12 +130,12 @@ Julia v1.10
 <tr>
 <td>
 
-Julia v1.11
+Julia v1.13
 
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=oneAPI%20-%20Julia%20v1.11)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=oneAPI%20-%20Julia%201.13)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -151,7 +153,7 @@ Julia v1.10
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=Metal%20-%20Julia%20v1.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=Metal%20-%20Julia%201.10)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
 
 </td>
 </tr>
@@ -159,12 +161,30 @@ Julia v1.10
 <tr>
 <td>
 
-Julia v1.11
+Julia v1.13
 
 </td>
 <td>
 
-[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=Metal%20-%20Julia%20v1.11)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+[![Build status](https://badge.buildkite.com/5b8c747451b382a6b1ad0a1b566d565bc851fc59515792c62e.svg?step=Metal%20-%20Julia%201.13)](https://buildkite.com/julialang/acceleratedkernels-dot-jl)
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[OpenCL](https://github.com/JuliaGPU/OpenCL.jl) on [PoCL](https://portablecl.org/)
+
+</td>
+<td>
+
+Julia v1.10 to v1.13
+
+</td>
+<td>
+
+[![CI-CPU](https://github.com/juliagpu/AcceleratedKernels.jl/actions/workflows/CI-CPU.yml/badge.svg)](https://github.com/juliagpu/AcceleratedKernels.jl/actions/workflows/CI-CPU.yml)
 
 </td>
 </tr>
@@ -232,9 +252,9 @@ Again, this is only possible because of the unique Julia compilation model, the 
 
 
 ## 2. Status
-The AcceleratedKernels.jl GPU `sort` and `accumulate` implementations were adopted as the official [AMDGPU algorithms](https://github.com/JuliaGPU/AMDGPU.jl/pull/688)! The API is starting to stabilise; it follows the Julia standard library fairly closely - and additionally exposing all temporary arrays for memory reuse. For any new ideas / requests, please join the conversation on [Julia Discourse](https://discourse.julialang.org/t/ann-acceleratedkernels-jl-cross-architecture-parallel-algorithms-for-julias-gpu-backends/119698/16) or post [an issue](https://github.com/juliagpu/AcceleratedKernels.jl/issues).
+The AcceleratedKernels.jl GPU `sort` and `accumulate` implementations were adopted as the official [AMDGPU algorithms](https://github.com/JuliaGPU/AMDGPU.jl/pull/688)! The API is starting to stabilise; it follows the Julia standard library's names and arguments fairly closely, with a contract of its own where GPU libraries need one (see [Differences from Base](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/differences/)), and reusable workspaces for scratch memory. For any new ideas / requests, please join the conversation on [Julia Discourse](https://discourse.julialang.org/t/ann-acceleratedkernels-jl-cross-architecture-parallel-algorithms-for-julias-gpu-backends/119698/16) or post [an issue](https://github.com/juliagpu/AcceleratedKernels.jl/issues).
 
-We have an extensive randomised test suite that we run on the CPU (single- and multi-threaded) backend on Windows, Ubuntu and MacOS for Julia LTS, Stable, and Pre-Release, plus the CUDA, AMDGPU, oneAPI and Metal backends on the [JuliaGPU buildkite](https://github.com/JuliaGPU/buildkite) - the exact same tests are run on all architectures to ensure uniform interfaces.
+We have an extensive randomised test suite that we run on the CPU (single- and multi-threaded) backend on Windows, Ubuntu and MacOS for Julia LTS, Stable, and Pre-Release, plus OpenCL on PoCL, and the CUDA, AMDGPU, oneAPI and Metal backends on the [JuliaGPU buildkite](https://github.com/JuliaGPU/buildkite) - the exact same tests are run on all architectures to ensure uniform interfaces.
 
 AcceleratedKernels.jl is also a fundamental building block of applications developed at [EvoPhase](https://evophase.co.uk/), so it will see continuous heavy use with industry backing. Long-term stability, performance improvements and support are priorities for us.
 
@@ -244,7 +264,7 @@ Some arithmetic-heavy benchmarks are given below - see [this repository](https:/
 
 ![Arithmetic benchmark](https://github.com/anicusan/AcceleratedKernels-Benchmark/blob/main/ArithmeticBenchmark/ArithmeticBenchmarkTable.png?raw=true)
 
-See `prototype/sort_benchmark.jl` for a small-scale sorting benchmark code and `prototype/thrust_sort` for the Nvidia Thrust wrapper. The results below are from a system with Linux 6.6.30-2-MANJARO, Intel Core i9-10885H CPU, Nvidia Quadro RTX 4000 with Max-Q Design GPU, Thrust 1.17.1-1, Julia Version 1.10.4.
+The sorting results below (from 2024, with the merge sort) are from a system with Linux 6.6.30-2-MANJARO, Intel Core i9-10885H CPU, Nvidia Quadro RTX 4000 with Max-Q Design GPU, Thrust 1.17.1-1, Julia Version 1.10.4.
 
 ![Sorting benchmark](https://github.com/juliagpu/AcceleratedKernels.jl/blob/main/docs/src/assets/sort_benchmark.png?raw=true)
 
@@ -269,24 +289,25 @@ If you need other algorithms in your work that may be of general use, please ope
 | --------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------- |
 | [General Looping](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/foreachindex/) | `foreachindex`, `foraxes`                        | `Kokkos::parallel_for` `RAJA::forall` `thrust::transform` |
 | [Mapping](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/map/) | `map` `map!`                                     | `thrust::transform`                                       |
-| [Sorting](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/sort/) | `sort` `sort!`                                   | `sort` `sort_team` `stable_sort`                          |
+| [Sorting](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/sort/) | `sort` `sort!`                                   | `sort` `sort_team` `stable_sort` `cub::DeviceMergeSort`   |
 |                                               | `sortperm` `sortperm!`                           | `sort_permutation` `index_permutation`                    |
 |                                               | `sort_by_key!`                                   | `sort_by_key` `sort_team_by_key` `cub::DeviceRadixSort::SortPairs` |
-| [Reduction](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reduce/) | `reduce`                                         | `Kokkos:parallel_reduce` `fold` `aggregate`               |
-| [MapReduce](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/mapreduce/) | `mapreduce`                                      | `transform_reduce` `fold`                                 |
-| [Accumulation](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/accumulate/) | `accumulate` `accumulate!`                       | `prefix_sum` `thrust::scan` `cumsum`                      |
-| [Binary Search](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/binarysearch/) | `searchsortedfirst` `searchsortedfirst!`         | `std::lower_bound`                                        |
-|                                               | `searchsortedlast` `searchsortedlast!`           | `thrust::upper_bound`                                     |
+| [Reduction](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reduce/) | `reduce`                                         | `Kokkos::parallel_reduce` `cub::DeviceReduce` `fold` `aggregate` |
+| [MapReduce](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/mapreduce/) | `mapreduce` `mapreducedim!`                      | `transform_reduce` `fold` `cub::DeviceSegmentedReduce`    |
+| [Accumulation](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/accumulate/) | `accumulate` `accumulate!`                       | `prefix_sum` `thrust::scan` `cub::DeviceScan` `cumsum`    |
+| [Binary Search](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/searchsorted/) | `searchsortedfirst!`                             | `std::lower_bound` `thrust::lower_bound`                  |
+|                                               | `searchsortedlast!`                              | `std::upper_bound` `thrust::upper_bound`                  |
 | [Find All](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/findall/) | `findall`                                        | `thrust::copy_if` `cub::DeviceSelect` `nonzero`           |
 | [Reverse](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reverse/) | `reverse` `reverse!`                             | `thrust::reverse` `std::reverse` `flip`                   |
 | [Predicates](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/predicates/) | `all` `any`                                      |                                                           |
 | [Arithmetics](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/arithmetics/) | `sum` `prod` `minimum` `maximum` `count` `cumsum` `cumprod`                                      |                                                           |
+| [Scratch Memory](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/workspace/) | `workspace` `workspace_size`                     | `d_temp_storage` (CUB)                                    |
 
 
 
 ## 5. API and Examples
 
-All publicly-exposed functions are [documented in the Manual](https://juliagpu.github.io/AcceleratedKernels.jl), along with examples to help you get started with AcceleratedKernels.jl. There are also plenty of examples and benchmarks in the `prototype` directory within slightly more involved scripts.
+All publicly-exposed functions are [documented in the Manual](https://juliagpu.github.io/AcceleratedKernels.jl), along with examples to help you get started with AcceleratedKernels.jl.
 
 
 ## 6. Custom Structs
@@ -338,7 +359,7 @@ $> julia -e 'import Pkg; Pkg.test("AcceleratedKernels")'
 
 Start Julia with multiple threads to run the tests on a multithreaded CPU backend:
 ```bash
-$> julia --threads=4 -e 'import Pkg; Pkg.test("AcceleratedKernels.jl")'
+$> julia --threads=4 -e 'import Pkg; Pkg.test("AcceleratedKernels")'
 ```
 
 With KernelAbstractions 0.10, whose host backend runs kernels on PoCL, `--cpu-ka` tests
@@ -358,21 +379,18 @@ For other library-related problems, feel free to post a GitHub issue. For help i
 
 ## 9. Roadmap / Future Plans
 Help is very welcome for any of the below:
-- Automated optimisation / tuning of e.g. `block_size` for a given input; can be made algorithm-agnostic.
-  - Maybe some thing like `AK.@tune reduce(f, src, init=init, block_size=$block_size) block_size=(64, 128, 256, 512, 1024)`. Macro wizards help!
-  - Or make it general like:
+- Automated optimisation / tuning of the algorithms' settings, e.g. `block_size`, per device; the measured values would go into each backend's tunings, from which `Auto` chooses.
+  - Maybe something like:
   ```julia
   AK.@tune begin
-      reduce(f, src, init=init,
-             block_size=$block_size,
-             switch_below=$switch_below)
+      reduce(f, src; init=init,
+             alg=AK.BlockReduce(block_size=$block_size, switch_below=$switch_below))
       block_size=(64, 128, 256, 512, 1024)
       switch_below=(1, 10, 100, 1000, 10000)
   end
   ```
-- Any way to expose the warp-size from the backends? Would be useful in reductions.
-- Add a performance regressions runner.
-- **Other ideas?** Post an issue, or open a discussion on the Julia Discourse.
+- Run the `benchmark` suite in CI to catch performance regressions.
+- Other ideas? Post an issue, or open a discussion on the Julia Discourse.
 
 
 ## 10. References
