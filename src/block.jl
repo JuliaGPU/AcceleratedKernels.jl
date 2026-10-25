@@ -37,7 +37,9 @@ end
 # thread's prefix and the block's total. All threads in the block must call it. Operands are
 # combined in element order (earlier on the left), so `op` need not be commutative. With a
 # sub-group width `W` (see `scan_subgroup_width`), it scans with sub-group operations, else in local
-# memory. It overwrites `totals`.
+# memory. It overwrites `totals`. (It keeps its bounds checks: without them, the carry pass of
+# `slice_tiles_kernel!` took 101 instead of 64 registers on an RTX 5080, and scanned a
+# `(2, 10^7)` array along `dims=2` 72% slower.)
 @inline block_exclusive_scan!(@context, op, totals, seed, block_size, ithread, ::Val{0}) =
     block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
 
