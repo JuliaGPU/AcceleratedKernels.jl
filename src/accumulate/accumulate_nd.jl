@@ -276,9 +276,9 @@ end
 # takes chunk `c` of slice `(i, o)` with `b = c + nchunks * (i + n_inner * o)`, and the chunk's
 # total or carry is at `i + n_inner * (c + nchunks * o)` in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_tiles_kernel!(
-    v, src, load, op, start, seed, carries, totals, inclusive,
+    v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
-) where {ITEMS}
+) where {L, OP, ITEMS}
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (block_size * ITEMS,)
     thread_totals = @localmem typeof(seed) (block_size,)
@@ -297,55 +297,22 @@ end
     running = isnothing(carries) ? start : carries[i + n_inner * (c + nchunks * o) + 1]
     k_tile = c * tiles_per_chunk * tile_len
     while k_tile < k_end
-        # Load the tile in striped order
-        j = 0
-        while j < ITEMS
-            p = j * block_size + ithread
-            k = k_tile + p
-            tile[p + 1] = k < k_end ? lift(seed, load(src[base + k * n_inner + 1])) :
-                                      seed
-            j += 1
-        end
+        index = k -> base + k * n_inner + 1
+        tile_load!(tile, src, load, seed, index, k_tile, k_end, ithread, block_size, Val(ITEMS))
         @synchronize()
 
-        # Scan each thread's run of consecutive elements, then the runs' totals
-        run = ithread * ITEMS
-        acc = seed
-        j = 0
-        while j < ITEMS
-            acc = op(acc, tile[run + j + 1])
-            tile[run + j + 1] = acc
-            j += 1
-        end
-        thread_totals[ithread + 1] = acc
+        # Scan each thread's run, then the runs' totals
         # (the carry is combined with each prefix last, as in a sequential scan from the carry
         # it would be first: a floating-point prefix then rounds at its own magnitude, not at
         # the carry's)
+        thread_scan!(op, tile, thread_totals, seed, ithread, Val(ITEMS))
         thread_prefix, block_total = block_exclusive_scan!(
             @context, op, thread_totals, seed, block_size, ithread, subgroups,
         )
-
         if isnothing(totals)
-            prev = seed
-            j = 0
-            while j < ITEMS
-                r = tile[run + j + 1]
-                tile[run + j + 1] = op(running, op(thread_prefix, inclusive ? r : prev))
-                prev = r
-                j += 1
-            end
+            tile_prefix!(op, tile, thread_prefix, running, seed, inclusive, ithread, Val(ITEMS))
             @synchronize()
-
-            # Store the tile in striped order
-            j = 0
-            while j < ITEMS
-                p = j * block_size + ithread
-                k = k_tile + p
-                if k < k_end
-                    store_partial!(v, base + k * n_inner + 1, tile[p + 1])
-                end
-                j += 1
-            end
+            tile_store!(v, tile, index, k_tile, k_end, ithread, block_size, Val(ITEMS))
         end
         running = op(running, block_total)
 

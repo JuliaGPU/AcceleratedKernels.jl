@@ -92,14 +92,8 @@ end
     ithread = @index(Local, Linear) - 0x1
     block_offset = iblock * block_size * ITEMS
 
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        position = block_offset + p
-        tile[p + 0x1] = position < len ?
-                         UInt8(bools[ordinal_index(input_indices, position + 0x1)]) : 0x0
-        j += 1
-    end
+    tile_load!(tile, bools, b -> UInt8(b), 0x0, k -> ordinal_index(input_indices, k + 0x1),
+               block_offset, len, ithread, block_size, Val(ITEMS))
     @synchronize()
 
     run = ithread * ITEMS
