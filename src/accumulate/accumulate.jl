@@ -241,6 +241,25 @@ ScanLoad{A}(op::OP) where {A, OP} = ScanLoad{A, OP}(op)
 scan_start(v, init, seed) = lift(seed, convert(eltype(v), init))
 scan_start(v, ::NoInit, seed) = seed
 
+# Scan the elements `load(src[index(k)])` for `k in ks` sequentially from `running` into
+# `v[index(k)]`, returning the total, on the host or in a kernel. `op` combines partial results
+# (`Optional`s when `seed` is an unset one); elements are lifted to them and stored lowered.
+Base.@propagate_inbounds function serial_scan!(op, v, src, load, index, ks, running, seed,
+                                               inclusive)
+    for k in ks
+        i = index(k)
+        x = lift(seed, load(src[i]))
+        if inclusive
+            running = op(running, x)
+            store_partial!(v, i, running)
+        else
+            store_partial!(v, i, running)
+            running = op(running, x)
+        end
+    end
+    return running
+end
+
 # The running-value type of a scan of elements of type `T` into an array of element type `D`
 # (`Union{}` for none): `acctype`, else the accumulator type of a reduction from `D` joined with
 # `init`'s type; an exclusive scan's `init` is a running value too. `combines` says whether `op`

@@ -5,11 +5,11 @@
 # the blocks before it; else from `seed`, to receive its carry from another kernel. With
 # `aggregates`, each block stores its total there.
 @kernel cpu=false inbounds=true unsafe_indices=true function scan_tile_kernel!(
-    op, v, src, load, start, seed,
+    op::OP, v, src, load::L, start, seed,
     inclusive,
     aggregates, tile_prefixes,
     ::Val{ITEMS}, subgroups::Val,
-) where ITEMS
+) where {OP, L, ITEMS}
     # `block_size` is a power of two.
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (block_size * ITEMS,)
@@ -22,57 +22,23 @@
     ithread = @index(Local, Linear) - 0x1
     block_offset = iblock * block_size * ITEMS
 
-    # Load a tile in striped order.
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        gi = block_offset + p
-        tile[p + 0x1] = gi < len ? lift(seed, load(src[gi + 0x1])) : seed
-        j += 1
-    end
+    index = k -> k + 0x1
+    tile_load!(tile, src, load, seed, index, block_offset, len, ithread, block_size, Val(ITEMS))
     @synchronize()
 
-    # Scan each thread's blocked run.
-    run = ithread * ITEMS
-    acc = seed
-    k = 0
-    while k < ITEMS
-        acc = op(acc, tile[run + k + 0x1])
-        tile[run + k + 0x1] = acc
-        k += 1
-    end
-    thread_totals[ithread + 0x1] = acc
-
-    # Scan the per-thread totals, from the block's start
+    # Scan each thread's run, then the runs' totals from the block's start
+    thread_scan!(op, tile, thread_totals, seed, ithread, Val(ITEMS))
     block_start = iblock == 0x0 ? start : isnothing(tile_prefixes) ? seed : tile_prefixes[iblock]
     thread_prefix, block_total = block_exclusive_scan!(
         @context, op, thread_totals, block_start, block_size, ithread, subgroups,
     )
-
-    prev = seed
-    k = 0
-    while k < ITEMS
-        r = tile[run + k + 0x1]
-        tile[run + k + 0x1] = inclusive ? op(thread_prefix, r) : op(thread_prefix, prev)
-        prev = r
-        k += 1
-    end
+    tile_prefix!(op, tile, thread_prefix, nothing, seed, inclusive, ithread, Val(ITEMS))
     @synchronize()
 
     if ithread == 0x0 && !isnothing(aggregates)
         aggregates[iblock + 0x1] = block_total
     end
-
-    # Store the tile in striped order.
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        gi = block_offset + p
-        if gi < len
-            store_partial!(v, gi + 0x1, tile[p + 0x1])
-        end
-        j += 1
-    end
+    tile_store!(v, tile, index, block_offset, len, ithread, block_size, Val(ITEMS))
 end
 
 
@@ -156,6 +122,12 @@ end
 
 # Scan `v` in linear order with `ScanPrefixes`, from the elements `load(src[i])`; `prefixes`
 # holds the `prefixes_length` tile totals
+#
+# Reduce-then-scan is `slice_scan!` on one slice, but that is slower: its chunks loop over
+# tiles, and its first pass stages and scans each tile where `tile_aggregates_kernel!` only
+# reduces. Scanning an `(n, 1)` array along `dims=1` took 18.6 instead of 14.6 µs for 1e6
+# `Float32`s and 1794 instead of 1418 µs for 1e8 on an RTX 5080; with one tile per chunk, 17.7
+# and 1423 µs.
 function accumulate_1d_gpu!(
     op, v::AbstractArray, backend, alg::ScanPrefixes;
     src=v,

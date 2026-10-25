@@ -78,32 +78,27 @@ end
 @inline ordinal_index(indices, position) = @inbounds indices[firstindex(indices) + position - 1]
 
 
-# With `out === nothing`, compute block counts. Otherwise, `block_counts` contains their
-# inclusive prefix scan and the kernel scatters the selected items.
+# Scatter the selected elements of each tile, from `block_counts`, the inclusive scan of the
+# tiles' counts. A tile's count fits an `Int32`, so the block scans those.
 @kernel cpu=false inbounds=true unsafe_indices=true function compact_kernel!(
     out, @Const(bools), block_counts, input_indices, output_indices, ::Val{ITEMS},
+    subgroups::Val,
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
     tile = @localmem UInt8 (block_size * ITEMS,)
-    thread_counts = @localmem Int (block_size,)
+    thread_counts = @localmem Int32 (block_size,)
 
     len = length(bools)
     iblock  = @index(Group, Linear) - 0x1
     ithread = @index(Local, Linear) - 0x1
     block_offset = iblock * block_size * ITEMS
 
-    j = 0
-    while j < ITEMS
-        p = j * block_size + ithread
-        position = block_offset + p
-        tile[p + 0x1] = position < len ?
-                         UInt8(bools[ordinal_index(input_indices, position + 0x1)]) : 0x0
-        j += 1
-    end
+    tile_load!(tile, bools, b -> UInt8(b), 0x0, k -> ordinal_index(input_indices, k + 0x1),
+               block_offset, len, ithread, block_size, Val(ITEMS))
     @synchronize()
 
     run = ithread * ITEMS
-    count = 0
+    count = Int32(0)
     k = 0
     while k < ITEMS
         count += tile[run + k + 0x1]
@@ -111,25 +106,19 @@ end
     end
     thread_counts[ithread + 0x1] = count
 
-    seed = (isnothing(out) || iblock == 0x0) ? 0 : block_counts[iblock]
-    pos, block_total = block_exclusive_scan!(
-        @context, +, thread_counts, seed, block_size, ithread,
+    thread_offset, _ = block_exclusive_scan!(
+        @context, +, thread_counts, Int32(0), block_size, ithread, subgroups,
     )
+    pos = (iblock == 0x0 ? 0 : block_counts[iblock]) + thread_offset
 
-    if isnothing(out)
-        if ithread == 0x0
-            block_counts[iblock + 0x1] = block_total
+    k = 0
+    while k < ITEMS
+        if tile[run + k + 0x1] != 0x0
+            pos += 1
+            position = block_offset + run + k + 0x1
+            out[pos] = ordinal_index(output_indices, position)
         end
-    else
-        k = 0
-        while k < ITEMS
-            if tile[run + k + 0x1] != 0x0
-                pos += 1
-                position = block_offset + run + k + 0x1
-                out[pos] = ordinal_index(output_indices, position)
-            end
-            k += 1
-        end
+        k += 1
     end
 end
 
@@ -141,27 +130,31 @@ function compact(
     bools::AbstractArray{Bool}, ::Type{I}, output_indices, backend::Backend, alg::ScanScatter;
     bufs, like,
 ) where I
-    block_size = alg.block_size
-    items_per_thread = alg.items_per_thread
-
     isempty(bools) && return similar_on(backend, like, I, (0,))
+    block_size = alg.block_size
+    compact_tiles(bools, I, output_indices, backend, Val(block_size), Val(alg.items_per_thread),
+                  scan_subgroup_width(backend, Int32, block_size), bufs, like)
+end
 
-    elems_per_block = block_size * items_per_thread
-    num_blocks = cld(length(bools), elems_per_block)
+# (a function barrier on the block size: from KernelAbstractions 0.10, constructing the kernels
+# then infers, which saved 0.5 µs per kernel and call on CUDA)
+function compact_tiles(bools, ::Type{I}, output_indices, backend, ::Val{B}, items::Val{N},
+                       subgroups, bufs, like) where {I, B, N}
+    num_blocks = cld(length(bools), B * N)
     block_counts = bufs.counts
-    input_indices = eachindex(bools)
-    items = Val(items_per_thread)
 
-    kernel! = compact_kernel!(backend, block_size)
-    kernel!(nothing, bools, block_counts, input_indices, output_indices, items;
-            ndrange=num_blocks * block_size)
+    # Count each tile's selected elements, as the scans reduce their tiles, then scan the counts
+    tile_aggregates_kernel!(backend, B)(
+        +, block_counts, one_based(bools), b -> Int32(b), Int32(0), Int32(0), items, subgroups;
+        ndrange=num_blocks * B)
     accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
     n = @allowscalar block_counts[end]
 
     out = similar_on(backend, like, I, (n,))
     if n > 0
-        kernel!(out, bools, block_counts, input_indices, output_indices, items;
-                ndrange=num_blocks * block_size)
+        compact_kernel!(backend, B)(
+            out, bools, block_counts, eachindex(bools), output_indices, items, subgroups;
+            ndrange=num_blocks * B)
     end
     out
 end

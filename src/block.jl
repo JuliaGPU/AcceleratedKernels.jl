@@ -1,5 +1,5 @@
 # Block-level device primitives shared by the algorithm families: reductions and scans of a
-# block's values, and vector loads.
+# block's values, loads, scans and stores of a block's tile, and vector loads.
 
 # Tree-reduce the `@groupsize()[1]` values in `sdata` into `sdata[1]`; the group size must be a power
 # of two. All threads in the group must call it, after writing their value and synchronising.
@@ -37,7 +37,9 @@ end
 # thread's prefix and the block's total. All threads in the block must call it. Operands are
 # combined in element order (earlier on the left), so `op` need not be commutative. With a
 # sub-group width `W` (see `scan_subgroup_width`), it scans with sub-group operations, else in local
-# memory. It overwrites `totals`.
+# memory. It overwrites `totals`. (It keeps its bounds checks: without them, the carry pass of
+# `slice_tiles_kernel!` took 101 instead of 64 registers on an RTX 5080, and scanned a
+# `(2, 10^7)` array along `dims=2` 72% slower.)
 @inline block_exclusive_scan!(@context, op, totals, seed, block_size, ithread, ::Val{0}) =
     block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
 
@@ -104,6 +106,73 @@ end
     @synchronize()
 
     return totals[ithread + 0x1], block_total
+end
+
+
+# A block's tile of `block_size * ITEMS` elements in local memory, as in CUB's BlockLoad,
+# BlockScan and BlockStore: loaded and stored in striped order (thread `t` takes positions `t`,
+# `t + block_size`, ...), so that neighbouring threads access neighbouring elements, and scanned
+# in blocked order (thread `t` takes the run of positions `t * ITEMS` onwards). Position `p` of
+# the tile holds element `k = offset + p` of a sequence of `len` elements, `src[index(k)]`.
+# A kernel that only passes its functions on to these names their types (`op::OP`): Julia does
+# not specialize on a function argument that is not called, and CUDA.jl then specializes the
+# kernel again on every launch (about 150 ns).
+
+# Load `lift(seed, load(src[index(k)]))` into the tile, and `seed` past the sequence's end
+Base.@propagate_inbounds function tile_load!(tile, src, load, seed, index, offset, len, ithread,
+                                             block_size, ::Val{ITEMS}) where {ITEMS}
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        k = offset + p
+        tile[p + 0x1] = k < len ? lift(seed, load(src[index(k)])) : seed
+        j += 1
+    end
+end
+
+# Store the tile's elements into `v[index(k)]`
+Base.@propagate_inbounds function tile_store!(v, tile, index, offset, len, ithread, block_size,
+                                              ::Val{ITEMS}) where {ITEMS}
+    j = 0
+    while j < ITEMS
+        p = j * block_size + ithread
+        k = offset + p
+        if k < len
+            store_partial!(v, index(k), tile[p + 0x1])
+        end
+        j += 1
+    end
+end
+
+# Scan each thread's run in place, as CUB's ThreadScan, and store its total in `thread_totals`
+# for the block scan
+Base.@propagate_inbounds function thread_scan!(op, tile, thread_totals, seed, ithread,
+                                               ::Val{ITEMS}) where {ITEMS}
+    run = ithread * ITEMS
+    acc = seed
+    k = 0
+    while k < ITEMS
+        acc = op(acc, tile[run + k + 0x1])
+        tile[run + k + 0x1] = acc
+        k += 1
+    end
+    thread_totals[ithread + 0x1] = acc
+end
+
+# Combine the thread's scanned run with its `prefix` from the block scan, into the run's
+# inclusive or exclusive scan; with a `carry`, that is combined on the left of each result.
+Base.@propagate_inbounds function tile_prefix!(op, tile, prefix, carry, seed, inclusive,
+                                               ithread, ::Val{ITEMS}) where {ITEMS}
+    run = ithread * ITEMS
+    prev = seed
+    k = 0
+    while k < ITEMS
+        r = tile[run + k + 0x1]
+        x = op(prefix, inclusive ? r : prev)
+        tile[run + k + 0x1] = isnothing(carry) ? x : op(carry, x)
+        prev = r
+        k += 1
+    end
 end
 
 

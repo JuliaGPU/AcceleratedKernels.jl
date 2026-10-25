@@ -26,18 +26,8 @@ function accumulate_nd_threads!(
     n_inner, len, n_outer = slice_extents(size(v), dims)
     foreachindex_on(1:n_inner * n_outer, HOST_BACKEND; max_tasks, min_elems) do islice
         base = (islice - 1) % n_inner + n_inner * len * ((islice - 1) ÷ n_inner) + 1
-        running = start
-        @inbounds for k in 0:len - 1
-            idx = base + k * n_inner
-            x = lift(seed, v[idx])
-            if inclusive
-                running = op(running, x)
-                store_partial!(v, idx, running)
-            else
-                store_partial!(v, idx, running)
-                running = op(running, x)
-            end
-        end
+        @inbounds serial_scan!(op, v, v, identity, k -> base + k * n_inner, 0:len - 1, start,
+                               seed, inclusive)
     end
     v
 end
@@ -192,8 +182,8 @@ end
 # `block_size * len` consecutive elements from `b * block_size * len`, in local memory of `MAX`
 # elements (`slice_rows_max`, the same for every `len`)
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_rows_kernel!(
-    v, src, load, op, start, seed, inclusive, len, nslices, ::Val{MAX},
-) where {MAX}
+    v, src, load, op::OP, start, seed, inclusive, len, nslices, ::Val{MAX},
+) where {OP, MAX}
     @uniform block_size = @groupsize()[1]
     rows = @localmem typeof(seed) (MAX,)
     _, op = seeded_ops(PartialInputs(), op, seed)
@@ -211,17 +201,8 @@ end
     @synchronize()
 
     if ithread * len < n
-        running = start
-        for k in ithread * len:(ithread + 1) * len - 1
-            x = rows[k + 1]
-            if inclusive
-                running = op(running, x)
-                rows[k + 1] = running
-            else
-                rows[k + 1] = running
-                running = op(running, x)
-            end
-        end
+        serial_scan!(op, rows, rows, identity, k -> k + 1, ithread * len:(ithread + 1) * len - 1,
+                     start, seed, inclusive)
     end
     @synchronize()
 
@@ -235,9 +216,9 @@ end
 # One thread per chunk of a slice; thread `t` takes chunk `c` of slice `(i, o)` with
 # `t = i + n_inner * (c + nchunks * o)`, the chunk's position in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_columns_kernel!(
-    v, src, load, op, start, seed, carries, totals, inclusive,
+    v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
-)
+) where {L, OP}
     _, op = seeded_ops(PartialInputs(), op, seed)
     block_size = @groupsize()[1]
     tid = (@index(Group, Linear) - 1) * block_size + (@index(Local, Linear) - 1)
@@ -252,17 +233,8 @@ end
 
         running = isnothing(carries) ? start : carries[tid + 1]
         if isnothing(totals)
-            for k in k0:k1 - 1
-                idx = base + k * n_inner + 1
-                x = lift(seed, load(src[idx]))
-                if inclusive
-                    running = op(running, x)
-                    store_partial!(v, idx, running)
-                else
-                    store_partial!(v, idx, running)
-                    running = op(running, x)
-                end
-            end
+            serial_scan!(op, v, src, load, k -> base + k * n_inner + 1, k0:k1 - 1, running, seed,
+                         inclusive)
         else
             for k in k0:k1 - 1
                 running = op(running, lift(seed, load(src[base + k * n_inner + 1])))
@@ -276,9 +248,9 @@ end
 # takes chunk `c` of slice `(i, o)` with `b = c + nchunks * (i + n_inner * o)`, and the chunk's
 # total or carry is at `i + n_inner * (c + nchunks * o)` in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_tiles_kernel!(
-    v, src, load, op, start, seed, carries, totals, inclusive,
+    v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
-) where {ITEMS}
+) where {L, OP, ITEMS}
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (block_size * ITEMS,)
     thread_totals = @localmem typeof(seed) (block_size,)
@@ -297,55 +269,22 @@ end
     running = isnothing(carries) ? start : carries[i + n_inner * (c + nchunks * o) + 1]
     k_tile = c * tiles_per_chunk * tile_len
     while k_tile < k_end
-        # Load the tile in striped order
-        j = 0
-        while j < ITEMS
-            p = j * block_size + ithread
-            k = k_tile + p
-            tile[p + 1] = k < k_end ? lift(seed, load(src[base + k * n_inner + 1])) :
-                                      seed
-            j += 1
-        end
+        index = k -> base + k * n_inner + 1
+        tile_load!(tile, src, load, seed, index, k_tile, k_end, ithread, block_size, Val(ITEMS))
         @synchronize()
 
-        # Scan each thread's run of consecutive elements, then the runs' totals
-        run = ithread * ITEMS
-        acc = seed
-        j = 0
-        while j < ITEMS
-            acc = op(acc, tile[run + j + 1])
-            tile[run + j + 1] = acc
-            j += 1
-        end
-        thread_totals[ithread + 1] = acc
+        # Scan each thread's run, then the runs' totals
         # (the carry is combined with each prefix last, as in a sequential scan from the carry
         # it would be first: a floating-point prefix then rounds at its own magnitude, not at
         # the carry's)
+        thread_scan!(op, tile, thread_totals, seed, ithread, Val(ITEMS))
         thread_prefix, block_total = block_exclusive_scan!(
             @context, op, thread_totals, seed, block_size, ithread, subgroups,
         )
-
         if isnothing(totals)
-            prev = seed
-            j = 0
-            while j < ITEMS
-                r = tile[run + j + 1]
-                tile[run + j + 1] = op(running, op(thread_prefix, inclusive ? r : prev))
-                prev = r
-                j += 1
-            end
+            tile_prefix!(op, tile, thread_prefix, running, seed, inclusive, ithread, Val(ITEMS))
             @synchronize()
-
-            # Store the tile in striped order
-            j = 0
-            while j < ITEMS
-                p = j * block_size + ithread
-                k = k_tile + p
-                if k < k_end
-                    store_partial!(v, base + k * n_inner + 1, tile[p + 1])
-                end
-                j += 1
-            end
+            tile_store!(v, tile, index, k_tile, k_end, ithread, block_size, Val(ITEMS))
         end
         running = op(running, block_total)
 

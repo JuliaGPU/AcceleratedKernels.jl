@@ -32,11 +32,11 @@ end
 # (1024×1024 to 4096×4096 matrices along `dims=2`).
 @kernel inbounds=true cpu=false unsafe_indices=true function tiled_strided_kernel!(
     @Const(src), dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset, reduce_stride,
     output_size, reduce_size,
     ::Val{rows},
-) where {rows}
+) where {F, OP, rows}
     @uniform N = @groupsize()[1]
     @uniform reduce_threads = N ÷ rows
     sdata = @localmem typeof(seed) (N,)
@@ -87,10 +87,10 @@ end
 # steps.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_lanes_kernel!(
     @Const(src), dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset, outer_strides, outer_sizes,
     output_size, reduce_size, ::Val{lanes},
-) where {lanes}
+) where {F, OP, lanes}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -141,11 +141,11 @@ end
 # consecutive elements.
 @kernel inbounds=true cpu=false unsafe_indices=true function columns_kernel!(
     @Const(src), dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset, reduce_stride,
     output_size, run, runs, run_strides, run_sizes, reduce_size, groups,
     ::Val{cols}, ::Val{ordered},
-) where {cols, ordered}
+) where {F, OP, cols, ordered}
     @uniform N = @groupsize()[1]
     @uniform lanes = N ÷ cols
     sdata = @localmem typeof(seed) (N,)
@@ -240,12 +240,12 @@ end
 # many outputs as elements each, e.g. `dims=1` of a 3×1000 matrix.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_thread_kernel!(
     @Const(src), dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
-)
+) where {F, OP}
     mapf, accop = seeded_ops(f, op, seed)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
@@ -269,12 +269,12 @@ end
 # block reduces the outputs `iblock`, `iblock + num_blocks`, ..., one at a time.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_kernel!(
     @Const(src), dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
-)
+) where {F, OP}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -314,12 +314,12 @@ end
 # elements; `vector_width` checks the alignment and the 32-bit index bound.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_block_vector_kernel!(
     src, dst,
-    f, op, seed, init,
+    f::F, op::OP, seed, init,
     base_offset,
     outer_strides, outer_sizes,
     output_size, reduce_size, num_blocks,
     ::Val{W},
-) where {W}
+) where {F, OP, W}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -367,12 +367,12 @@ end
 # time, in 32 or 64 bits, takes 4 to 9% longer for 3 to 16 outputs on an RTX 5080.
 @kernel inbounds=true cpu=false unsafe_indices=true function multigroup_kernel!(
     @Const(src), partial,
-    f, op, seed,
+    f::F, op::OP, seed,
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
     ::Val{output_size}, reduce_size, groups,
-) where {output_size}
+) where {F, OP, output_size}
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)

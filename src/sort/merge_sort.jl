@@ -10,8 +10,8 @@ setvalue!(::Nothing, i, x) = nothing
 
 
 @kernel inbounds=true cpu=false unsafe_indices=true function merge_tile_kernel!(
-    keys, values, comp, layout, blocks_per_slice,
-)
+    keys, values, comp::C, layout, blocks_per_slice,
+) where {C}
 
     @uniform N = @groupsize()[1]
     s_keys = @localmem eltype(keys) (N * 0x2,)
@@ -116,8 +116,8 @@ end
 
 @kernel inbounds=true cpu=false unsafe_indices=true function merge_pass_kernel!(
     @Const(keys_in), keys_out, @Const(values_in), values_out,
-    comp, run_len, layout, blocks_per_slice,
-)
+    comp::C, run_len, layout, blocks_per_slice,
+) where {C}
 
     N = @groupsize()[1]
 
