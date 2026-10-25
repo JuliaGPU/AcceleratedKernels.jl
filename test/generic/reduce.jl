@@ -1192,6 +1192,31 @@ end
         v = view(p, 2:m + 1, 4:n + 3)
         @test Array(AK.sum(v; dims=2, alg)) == sum(Int.(Array(p)[2:m + 1, 4:n + 3]); dims=2)
     end
+    # (the shape the reduction of `x` along `dims` with accumulator type `A` takes)
+    shape_of(x, dims, A) = AK._mapreduce_nd_shape(
+        length(x) ÷ prod(size(x, d) for d in dims), prod(size(x, d) for d in dims),
+        AK._mapreduce_segments(size(x), AK._mapreduce_layout(x)[3], dims),
+        AK._resolve_reduce(alg, BACKEND, A, dims).block_size, AK.reduce_tuning(BACKEND, A), A)[1]
+    # More outputs than elements each reduces: the tiled kernel, unless tiles of 32 outputs
+    # launch enough blocks, and one thread per output where a row of outputs fills the device
+    for (m, n, A, shape) in ((4096, 1024, Int32, :tiled_strided), (8192, 300, Int32, :columns),
+                             (8192, 300, Int64, :by_thread))
+        h = rand(A(-9):A(9), m, n)
+        a = array_from_host(h)
+        TEST_KERNELS && @test shape_of(a, (2,), A) === shape
+        r = AK.reduce(+, a; dims=2, init=zero(A), alg)
+        @test eltype(r) === A && Array(r) == sum(h; dims=2)
+    end
+    # Runs of contiguous outputs at the offsets of other kept dimensions: the middle dimension of
+    # 3-d and 4-d arrays, and a view at an offset whose kept dimensions are not adjacent in memory
+    h = rand(Int32(-9):Int32(9), 50, 30_000, 7)
+    for (a, ha) in ((array_from_host(rand(Int32(-9):Int32(9), 96, 7000, 10)), nothing),
+                    (array_from_host(rand(Int32(-9):Int32(9), 40, 30_000, 3, 2)), nothing),
+                    (view(array_from_host(h), 3:42, :, 1:2:7), h[3:42, :, 1:2:7]))
+        ha = something(ha, Array(a))
+        TEST_KERNELS && @test shape_of(a, (2,), Int32) === :columns
+        @test Array(AK.reduce(+, a; dims=2, init=Int32(0), alg)) == sum(ha; dims=2)
+    end
 end
 
 
@@ -1616,7 +1641,7 @@ affine_rand(::Type{T}) where {T} = rand(T) | one(T)
              ((40, 5, 30), 3), ((40, 5, 30), (1, 3)), ((9, 4, 3000), (2, 3)), ((8, 300_000), 2),
              ((40, 70_000), 2), ((256, 256), 2), ((300, 300), 2), ((3000, 300), 1),
              ((300_000, 2), 1), ((70_000, 40), 1), ((64, 4000), 1), ((512, 40), 1),
-             ((1, 5000, 2), 2))
+             ((1, 5000, 2), 2), ((40, 3000, 30), 2))
     for (sz, dims) in cases
         if TEST_KERNELS
             segs = AK._mapreduce_segments(sz, AK._mapreduce_dense_strides(sz),
