@@ -72,14 +72,21 @@ function mapreduce_nd!(
     end
 
     # (the kernels below index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`)
-    buffer, dense = kernel_buffer(src, launch.buffer)
+    # (a function barrier: the type of a `LinearBroadcast` buffer depends on the sizes)
+    launch_segments!(shape, f, op, dst, src, kernel_buffer(src, launch.buffer),
+                     isdense_buffer(src, launch.buffer), backend, alg, bufs, init, seed,
+                     launch, dst_size, len)
+    return dst
+end
+
+function launch_segments!(shape, f::F, op::OP, dst, src, buffer, dense, backend, alg, bufs,
+                          init, seed, launch, dst_size, len) where {F, OP}
     with_segments(launch.segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
         ix = (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
               outer_sizes, dst_size, reduce_size=len, dense)
         Base.inferencebarrier(launch!)(shape, f, op, dst, src, buffer, backend, alg, bufs, init,
                                        seed, ix)
     end
-    return dst
 end
 
 # Reductions whose every output reduces a single element, a partial result of the accumulator

@@ -718,6 +718,42 @@ end
 # Correct results do not show which kernel ran: the inputs that the tests above give to reach
 # each launch shape and vector-load path reach them with this backend's tuning
 if TEST_KERNELS
+@testset "reduce: Broadcasted sources" begin
+    # A `Broadcasted` source is indexed linearly, each argument with its own index: arguments of
+    # the broadcast's shape, extruded along the reduced or the kept dimensions, of fewer
+    # dimensions, scalars, `Ref`s and nested broadcasts, through every launch shape
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    lazy(f, xs...) = Base.Broadcast.instantiate(Base.Broadcast.broadcasted(f, xs...))
+    for (sz, dims) in (((300, 70), 1), ((300, 70), 2), ((7, 9000), 2), ((96, 3000, 4), 2),
+                       ((64, 1, 300), 1), ((40, 30, 20), 2), ((40, 30, 20), (1, 3)),
+                       ((16, 8, 4, 50), (2, 4)), ((50, 60, 7), (1, 2, 3)), ((5000, 3), :))
+        rdims = dims isa Colon ? Tuple(1:length(sz)) : dims
+        h = rand(Int32(-9):Int32(9), sz)
+        hm = rand(Int32(-9):Int32(9), ntuple(d -> d in rdims ? 1 : sz[d], length(sz)))
+        hs = rand(Int32(-9):Int32(9), ntuple(d -> d in rdims ? sz[d] : 1, length(sz)))
+        hv = rand(Int32(-9):Int32(9), sz[1])
+        a, m, s, v = array_from_host.((h, hm, hs, hv))
+        expected(x) = (r = sum(x; dims); dims isa Colon ? r : Array(r))
+        result(bc; kw...) =
+            (r = AK.mapreduce(identity, +, bc; dims, init=Int32(0), alg, kw...);
+             dims isa Colon ? r : Array(r))
+        @test result(lazy((x, m, s) -> x * m - s, a, m, s)) == expected(h .* hm .- hs)
+        @test result(lazy((x, v, c, r) -> x - v * c + r[], a, v, Int32(2), Ref(Int32(3)))) ==
+              expected(h .- hv .* 2 .+ 3)
+        @test result(lazy(+, m, lazy(*, a, s))) == expected(hm .+ h .* hs)
+        @test result(lazy(-, a, m); commutative=false) == expected(h .- hm)
+    end
+    # An argument with offset axes, extruded along them, in a broadcast with one-based axes
+    # (preprocessed: Base indexes such an argument out of bounds otherwise)
+    h = rand(Int32(-9):Int32(9), 300, 70)
+    a, o = array_from_host(h), offset_from_host(Int32[5], (-1,))
+    bc = Base.Broadcast.preprocess(nothing, lazy(+, a, o))
+    @test Array(AK.mapreduce(identity, +, bc; dims=1, init=Int32(0), alg)) ==
+          sum(h; dims=1) .+ 5 * 300
+end
+
+
 @testset "reduce: launch paths" begin
     # The launch shape of a reduction of `x` along `dims` with operator `op`, as its setup
     # chooses it

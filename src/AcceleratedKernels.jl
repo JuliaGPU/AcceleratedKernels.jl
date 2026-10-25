@@ -29,6 +29,7 @@ end
 
 # Internal dependencies
 using ArgCheck: @argcheck
+import Adapt
 using GPUArraysCore: @allowscalar, neutral_element
 using KernelAbstractions
 using KernelAbstractions: @context

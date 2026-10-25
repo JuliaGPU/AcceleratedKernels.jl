@@ -53,20 +53,16 @@ firstn(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 # Where the kernels find the elements of the source `src` of a reduction along `dims`, which
 # `select_launch` records so that the run takes them from the source it reduces: `:parent`, the
 # dense buffer `src` wraps (see `strided_layout`); `:linear`, `src` indexed linearly (see
-# `linear_layout`); or `:source`, the source itself, a dense array or a `Broadcasted` object. Before
-# Julia 1.12, a `Broadcasted` source is materialized when the reduction runs (see `kernel_source`).
-function buffer_kind(src, strided)
-    isnothing(strided) && !(src isa Base.Broadcast.Broadcasted) && return :linear
-    return isnothing(strided) || strided.buffer === src ? :source : :parent
-end
+# `linear_layout`), a lazy array or a `Broadcasted` object; or `:source`, the source itself, a
+# dense array.
+buffer_kind(src, strided) =
+    isnothing(strided) ? :linear : strided.buffer === src ? :source : :parent
 
-# The buffer the kernels index, from the source `src` and the `buffer_kind`, and whether it is a
-# dense buffer, which the kernels can read with vector loads
-function kernel_buffer(src, kind::Symbol)
-    kind === :parent && return parent(src), true
-    kind === :linear && return linear_view(src), false
-    return src, src isa AbstractArray
-end
+# The buffer the kernels index, from the source `src` and the `buffer_kind`
+kernel_buffer(src, kind::Symbol) =
+    kind === :parent ? parent(src) : kind === :linear ? linear_view(src) : src
+# ... and whether it is a dense buffer, which the kernels can read with vector loads
+isdense_buffer(src, kind::Symbol) = kind === :parent || kind === :source
 
 # The source of a reduction along `dims` into a single output of a contiguous source, as a
 # linearly indexed collection of its elements for the whole-array kernels (`mapreduce_1d_gpu`):
@@ -80,25 +76,121 @@ dense_strides(sizes::Tuple) = Base.front(tuple_cumprod((1, sizes...)))
 tuple_cumprod(t::Tuple{Any}) = t
 tuple_cumprod(t::Tuple) = (t[1], tuple_cumprod((t[1] * t[2], Base.tail(Base.tail(t))...))...)
 
-# The layout the reduction kernels index `src` with, as `(; buffer, offset, strides)`: the
-# strided layout of a source backed by a dense buffer, else (for a lazy array or a `Broadcasted`
-# object) the source indexed linearly, as a dense array of its size. Indexing a lazy source
-# linearly costs a decode of the index per element, but it gets the launch shapes of a dense
-# array, which can spread a reduction into few outputs across many threads.
-function source_layout(src)
-    layout = strided_layout(src)
-    return isnothing(layout) ? linear_layout(src) : layout
-end
-linear_layout(src) = (; buffer=linear_view(src), offset=0, strides=dense_strides(size(src)))
+# The layout, as `(; offset, strides)`, of a source without a dense buffer (a lazy array or a
+# `Broadcasted` object), which the kernels index linearly (`linear_view`), as a dense array of
+# its size. Indexing a lazy source linearly costs a decode of the index per element, but it gets
+# the launch shapes of a dense array, which can spread a reduction into few outputs across many
+# threads.
+linear_layout(src) = (; offset=0, strides=dense_strides(size(src)))
 # (a reshaped array decodes a linear index with multiplicative inverses rather than divisions)
 linear_view(src::AbstractArray) = vec(src)
-linear_view(src::Base.Broadcast.Broadcasted) = src
+linear_view(src::Base.Broadcast.Broadcasted) =
+    length(src) <= typemax(UInt32) ? LinearBroadcast(src) : src
+
+# A `Broadcasted` object indexed linearly, as a vector of its elements in column-major order.
+# Each array argument is indexed with its own linear index, which takes no division for an
+# argument of the broadcast's shape, and for another (a row of means, say) a division or a
+# remainder by a multiplicative inverse per run of its kept dimensions. (The `Broadcasted`
+# object itself decodes the broadcast's index into Cartesian indices, with a division per
+# dimension, and computes each argument's index from those.) The index is 32-bit: a 64-bit
+# multiplicative inverse takes 128-bit products, which SPIR-V lacks.
+struct LinearBroadcast{T, F, Args <: Tuple} <: AbstractVector{T}
+    f::F
+    args::Args
+    len::Int
+    LinearBroadcast{T}(f::F, args::Args, len::Int) where {T, F, Args <: Tuple} =
+        new{T, F, Args}(f, args, len)
+end
+LinearBroadcast(bc::Base.Broadcast.Broadcasted) = linear_broadcast(source_eltype(bc), bc, size(bc))
+linear_broadcast(::Type{T}, bc, sz) where {T} =
+    LinearBroadcast{T}(bc.f, linear_args(bc.args, sz), Base.prod(sz))
+linear_args(args::Tuple, sz) = (linear_arg(args[1], sz), linear_args(Base.tail(args), sz)...)
+linear_args(::Tuple{}, sz) = ()
+Base.size(a::LinearBroadcast) = (a.len,)
+Base.IndexStyle(::Type{<:LinearBroadcast}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(a::LinearBroadcast, i::Int) = evaluate(a, (i - 1) % UInt32)
+@inline evaluate(a::LinearBroadcast, i::UInt32) = a.f(Base.map(x -> evaluate(x, i), a.args)...)
+Adapt.adapt_structure(to, a::LinearBroadcast{T}) where {T} =
+    LinearBroadcast{T}(Adapt.adapt(to, a.f), Adapt.adapt(to, a.args), a.len)
+
+# An argument `x` of a broadcast, with the runs of consecutive dimensions it is not extruded
+# along: from the broadcast's linear index `i`, a run contributes `rem(div(i, d), m) * stride`
+# to `x`'s linear index, where `nothing` skips a division or remainder that would change
+# nothing. An argument of the broadcast's shape has a single run without either. (The types of
+# the runs depend on the sizes, so the kernels specialize on them: a division by a
+# multiplicative inverse in every load, even one by 1, makes a reduction up to several times
+# slower.) Scalars and `Ref`s have no runs.
+struct LinearArg{X, R <: Tuple}
+    x::X
+    runs::R
+end
+Adapt.adapt_structure(to, a::LinearArg) = LinearArg(Adapt.adapt(to, a.x), a.runs)
+
+linear_arg(bc::Base.Broadcast.Broadcasted, sz) = linear_broadcast(Any, bc, sz)
+linear_arg(x::Base.Broadcast.Extruded, sz) = linear_arg(x.x, sz)
+# (an argument may have offset axes where the broadcast's do not: one extruded along them)
+function linear_arg(x::Union{AbstractArray, Tuple}, sz)
+    runs, n = arg_runs(Base.map(length, axes(x)), sz)
+    return LinearArg(one_based(x), specialize_runs(runs, n))
+end
+linear_arg(x, sz) = LinearArg(x, ())
+
+const IndexInverse = Base.MultiplicativeInverses.UnsignedMultiplicativeInverse{UInt32}
+specialize_runs(runs::Tuple, n) =
+    n == 0 ? () : (specialize_run(runs[1]), specialize_runs(Base.tail(runs), n - 1)...)
+specialize_run((d, m, stride)) =
+    (d == 1 ? nothing : IndexInverse(d % UInt32), m == 0 ? nothing : IndexInverse(m % UInt32),
+     stride)
+
+@inline evaluate(a::LinearArg{<:Union{AbstractArray, Tuple}}, i::UInt32) =
+    @inbounds a.x[arg_index(a.runs, i) + 1]
+@inline evaluate(a::LinearArg, i::UInt32) = a.x[]
+
+@inline arg_index(::Tuple{}, i) = 0
+@inline function arg_index(runs::Tuple, i)
+    d, m, stride = runs[1]
+    return (run_rem(run_div(i, d), m) % Int) * stride + arg_index(Base.tail(runs), i)
+end
+@inline run_div(i, ::Nothing) = i
+@inline run_div(i, d) = div(i, d)
+@inline run_rem(i, ::Nothing) = i
+@inline run_rem(i, m) = rem(i, m)
+
+# The runs of `LinearArg` for an argument of size `asz` in a broadcast of size `sz`, each as
+# `(d, m, stride)` with `m == 0` for no remainder, and their number. Dimensions where the
+# broadcast has size 1 do not split a run.
+function arg_runs(asz::Tuple, sz::NTuple{N, Int}) where {N}
+    runs = ntuple(_ -> (1, 0, 0), Val(cld(N, 2)))
+    kept(d) = sz[d] != 1 && d <= length(asz) && asz[d] != 1
+    len = Base.prod(sz)
+    n = 0
+    before = 1    # the broadcast's elements per step along `d`
+    abefore = 1   # the argument's
+    d = 1
+    while d <= N
+        if !kept(d)
+            before *= sz[d]
+            d += 1
+            continue
+        end
+        span, astride = 1, abefore
+        while d <= N && (sz[d] == 1 || kept(d))
+            span *= sz[d]
+            abefore *= kept(d) ? asz[d] : 1
+            d += 1
+        end
+        n += 1
+        runs = Base.setindex(runs, (before, before * span == len ? 0 : span, astride), n)
+        before *= span
+    end
+    return runs, n
+end
 
 # The layout of a source backed by a single dense column-major buffer, which the kernels index
 # at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`: a dense array, or a strided view, adjoint,
 # permuted-dims array or reshape of one. `nothing` for other sources (lazy arrays, `Broadcasted`
 # objects, complex adjoints, wrappers of wrappers), which are indexed linearly (see
-# `source_layout`).
+# `linear_layout`).
 function strided_layout(src::AbstractArray)
     s = try
         strides(src)

@@ -231,7 +231,8 @@ columns_outputs(dst_size) = min(nextpow(2, dst_size), COLUMNS_OUTPUTS)
 # `ordered_shape` for `commutative=false`, or `Whole` for a single output of a contiguous source;
 # `nothing` where no kernel runs (at most one element per output, no outputs, or no accumulator
 # type). `buffer` is where the kernels find the source's elements (see `buffer_kind`), from
-# `offset` on, and `segs` the segments of its layout (see `source_layout` and `merge_dims`).
+# `offset` on, and `segs` the segments of its layout (see `strided_layout`, `linear_layout` and
+# `merge_dims`).
 struct DimsLaunch{G}
     # (abstract, so that the setups holding it infer; the launch dispatches on it)
     shape::Union{Nothing, ReduceShape}

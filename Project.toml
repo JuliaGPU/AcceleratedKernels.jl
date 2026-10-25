@@ -4,6 +4,7 @@ version = "0.5.9"
 authors = ["Andrei-Leonard Nicusan <leonard@evophase.co.uk> and contributors"]
 
 [deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 ArgCheck = "dce04be8-c92d-5529-be00-80e4d2c0e197"
 Atomix = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
 GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
@@ -23,6 +24,7 @@ OpenCLExt = "OpenCL"
 oneAPIExt = "oneAPI"
 
 [compat]
+Adapt = "4"
 ArgCheck = "2"
 Atomix = "0.1, 1"
 CUDA = "6"
