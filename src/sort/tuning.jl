@@ -130,11 +130,14 @@ Resolve `alg` for sorting `v` (the keys) along `dims` under ordering `ord` on `b
 `sort!` (`perm == pairs == false`), `sortperm!` (`perm`) or `sort_by_key!` (`pairs`). Returns a
 concrete algorithm with every field set, or throws an `ArgumentError`. `merge_eltypes` are the
 element types `MergeSort` holds in local memory: the keys it compares (`by.(v)` with a `by`) and
-the values it moves along with them (`Nothing` for none).
+the values it moves along with them (`Nothing` for none). `perm` and `pairs` are
+constant-propagated so that, with `Auto()`, the algorithm of `sortperm!` and `sort_by_key!` infers
+as the only one they can use on the backend, and their plans and workspaces infer with it.
 """
-function resolve_sort(alg::Algorithm, backend::Backend, v::AbstractArray, dims,
-                      ord::Base.Order.Ordering; perm::Bool=false, pairs::Bool=false,
-                      merge_eltypes::Tuple{Type, Type}=(eltype(v), Nothing))
+Base.@constprop :aggressive function resolve_sort(
+    alg::Algorithm, backend::Backend, v::AbstractArray, dims, ord::Base.Order.Ordering;
+    perm::Bool=false, pairs::Bool=false, merge_eltypes::Tuple{Type, Type}=(eltype(v), Nothing),
+)
     T = eltype(v)
     layout = slice_layout(v, dims)
     t = sort_tuning(backend, T)
