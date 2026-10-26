@@ -57,6 +57,18 @@ forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buff
         sizes = AK.workspace_size(AK.sort!, v; alg=AK.RadixSort())
         @test Base.all(k -> haskey(sizes, k), (:temp, :hist, :scan, :key_range))
         @test sizes.temp == (Float32, (10_000,))
+        # ... the same buffers, without elements, where the slices need no sorting or sort in one
+        # block
+        nelems(s) = s isa NamedTuple ? Base.sum(nelems, values(s); init=0) : Base.prod(s[2])
+        short = AK.workspace_size(AK.sort!, v[1:1]; alg=AK.RadixSort())
+        @test keys(short) == keys(sizes) && nelems(short) == 0
+        @test AK.workspace_size(AK.sort!, fill!(similar(v, ()), 1); alg=AK.RadixSort()) == (;)
+        for (h, dims) in ((rand(Float32, 0), :), (rand(Float32, 1), :), (rand(Float32, 100), :),
+                          (rand(Float32, 10_000), :), (rand(Float32, 100, 3), 1),
+                          (rand(Float32, 3, 3000), 2))
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg=AK.RadixSort(), dims)) ==
+                  (dims isa Colon ? sort(h) : sort(h; dims))
+        end
         @test AK.workspace_size(AK.sort!, v; alg=AK.BitonicSort()) == (;)
         # Merge sort lists the same buffers for every length, empty where the call does not need
         # them: tiles that need no merging need no swap buffers, the low-memory permutation copies
@@ -297,6 +309,9 @@ end
         @test infers((x, dims) -> g(AK.sort!, x; alg=AK.MergeSort(), dims), M, Int)
         @test infers((x, dims, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem), dims),
                      M, Int, Bool)
+        # ... as do radix sort's
+        @test infers(x -> g(AK.sort!, x; alg=AK.RadixSort()), V)
+        @test infers((x, dims) -> g(AK.sort!, x; alg=AK.RadixSort(), dims), M, Int)
     end
 end
 
