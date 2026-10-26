@@ -157,7 +157,7 @@ on_host(x) = x
 
 # (a view of all elements, indexed from 1 also when the source's indices are not)
 mapreduce_1d_view(src::AbstractArray) = @view src[begin:end]
-mapreduce_1d_view(src::Base.Broadcast.Broadcasted) = src
+mapreduce_1d_view(src::Base.Broadcast.Broadcasted) = linear_view(src)
 
 # The number of partial results `mapreduce_1d_gpu` stores over `len` elements into `dst`: one
 # per block of the first pass, or none when one block reduces them all
