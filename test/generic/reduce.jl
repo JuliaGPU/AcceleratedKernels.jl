@@ -297,6 +297,11 @@ end
         mapreduce((x, y) -> x * y, +, vh_a, vh_b; init=Int32(0), dims=())
     @test AK.mapreduce((x, y) -> Float32(x - y) / 3, +, v_a, v_b; alg=REDUCE_ALG, init=0f0) ≈
         mapreduce((x, y) -> Float32(x - y) / 3, +, vh_a, vh_b; init=0f0)
+    for (max_tasks, min_elems) in ((4, 1), (7, 10), (16, 100))
+        @test AK.mapreduce((x, y, z) -> x * (y - z), +, v_a, v_b, v_c;
+                           alg=reduce_alg(; block_size=64, max_tasks, min_elems), init=Int32(3)) ==
+            mapreduce((x, y, z) -> x * (y - z), +, vh_a, vh_b, vh_c; init=Int32(3))
+    end
 
     for (shape, dims) in (((0, 3), 1), ((2, 0), 2), ((0, 0), (1, 2)), ((0, 3), ()))
         h_empty1 = reshape(Int32[], shape...)
