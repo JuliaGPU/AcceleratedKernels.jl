@@ -147,6 +147,9 @@ forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buff
             @test AK.workspace_size(AK.sum, x; dims=1, alg=AK.BlockReduce(),
                                     commutative).partials[2][1] == 4
         end
+        # A scan of slices that fit in one chunk keeps the chunk totals without elements
+        @test AK.workspace_size(AK.accumulate, +, reshape(v, 100, 100); dims=1,
+                                alg=AK.SliceScan()) == (; totals=(Float32, (0,)))
         # A reduction of one element needs none
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
         # `acctype` sets the partial results' type
@@ -312,6 +315,8 @@ end
         # ... as do radix sort's
         @test infers(x -> g(AK.sort!, x; alg=AK.RadixSort()), V)
         @test infers((x, dims) -> g(AK.sort!, x; alg=AK.RadixSort(), dims), M, Int)
+        # ... and the scans' along `dims`, with or without chunk totals
+        @test infers((x, dims) -> g(AK.accumulate, +, x; dims), M, Int)
     end
 end
 

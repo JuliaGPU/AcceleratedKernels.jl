@@ -149,9 +149,9 @@ function scan_setup(
     prefixes = if a isa ScanPrefixes
         (; prefixes=scratch(typeof(seed), prefixes_length(n, a)))
     elseif a isa SliceScan
-        # The chunk totals of slices split into chunks
+        # The chunk totals of slices split into chunks (none for slices in one chunk)
         m = slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
-        m == 0 ? (;) : (; totals=scratch(typeof(seed), m))
+        (; totals=scratch(typeof(seed), m))
     else
         (;)
     end
