@@ -9,7 +9,10 @@ struct Scratch{T, N}
     dims::NTuple{N, Int}
 end
 scratch(::Type{T}, dims::Integer...) where {T} = Scratch{T, length(dims)}(Int.(dims))
-scratch(::Type{T}, dims::Tuple) where {T} = Scratch{T, length(dims)}(Int.(dims))
+# (a buffer that is not `needed` for this call keeps its place without elements, so that an
+# operation lists the same buffers for every length, and its plan infers)
+scratch(::Type{T}, dims::Tuple; needed::Bool=true) where {T} =
+    Scratch{T, length(dims)}(needed ? Int.(dims) : Base.map(_ -> 0, dims))
 
 # An operation's scratch: its backend, its resolved algorithm (which the operation runs with),
 # and its buffers, as a `NamedTuple` of `Scratch` requirements and of the plans of the

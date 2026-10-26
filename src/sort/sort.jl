@@ -89,17 +89,20 @@ function sort_setup(
 end
 
 # The plan of `sort!` with each algorithm
+# (merge sort lists the same buffers for every length, without elements where the call does not
+# need them, so that its plans infer: the swap buffer of the global passes, or the keys `by`
+# computes, sorted carrying the elements along. A zero-dimensional array, whose one element needs
+# no sorting, has no empty buffers of its shape, and gets none.)
 function sort_plan(a::MergeSort, v, backend, dims, by)
-    layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return Plan(backend, a, (;))
+    ndims(v) == 0 && return Plan(backend, a, (;))
+    len = slice_layout(v, dims).len
     if by !== identity
         K = Base.promote_op(by, eltype(v))
-        sizes = (; keys=scratch(K, size(v)),
-                 merge_by_key_scratch(a, layout, size(v), K, size(v), eltype(v))...)
+        sizes = (; keys=scratch(K, size(v); needed=len > 1),
+                 merge_by_key_scratch(a, len, size(v), K, size(v), eltype(v))...)
         return Plan(backend, a, sizes)
     end
-    layout.len > 2 * a.block_size || return Plan(backend, a, (;))
-    return Plan(backend, a, (; temp=scratch(eltype(v), size(v))))
+    return Plan(backend, a, (; temp=scratch(eltype(v), size(v); needed=len > 2 * a.block_size)))
 end
 sort_plan(a::RadixSort, v, backend, dims, by) = radix_plan(a, v, backend, dims)
 sort_plan(a::BitonicSort, v, backend, dims, by) = Plan(backend, a, (;))
@@ -246,13 +249,18 @@ end
 
 # The scratch of `sortperm!` with each algorithm
 function sortperm_scratch(a::MergeSort, ix, v, dims, by)
-    layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return (;)
-    a.lowmem && return layout.len > 2 * a.block_size ? (; temp=scratch(eltype(ix), size(ix))) : (;)
-    # The keys `by.(v)` are sorted in a copy, carrying the indices along
+    (ndims(ix) == 0 || ndims(v) == 0) && return (;)
+    len = slice_layout(v, dims).len
+    merges = len > 2 * a.block_size
+    # The keys `by.(v)` are sorted in a copy, carrying the indices along (`merge_by_key_scratch`).
+    # The low-memory path sorts the indices alone: it lists the same buffers, without keys, so that
+    # the plan infers whatever `lowmem` is, except for keys of a non-bits type (a union), which
+    # some backends cannot allocate even empty.
     K = Base.promote_op(by, eltype(v))
-    return (; keys=scratch(K, size(v)),
-            merge_by_key_scratch(a, layout, size(v), K, size(ix), eltype(ix))...)
+    temp_values = scratch(eltype(ix), size(ix); needed=merges)
+    a.lowmem && !isbitstype(K) && return (; temp_values)
+    return (; keys=scratch(K, size(v); needed=!a.lowmem && len > 1),
+            temp_keys=scratch(K, size(v); needed=!a.lowmem && merges), temp_values)
 end
 sortperm_scratch(a::CPUThreads.SampleSort, ix, v, dims, by) =
     dims isa Colon ? sample_sort_scratch(a, eltype(ix), length(ix)) : (;)
@@ -376,9 +384,9 @@ function sort_by_key_setup(
 end
 
 function sort_by_key_scratch(a::MergeSort, keys, values, dims)
-    layout = slice_layout(keys, dims)
-    (isempty(keys) || layout.len <= 1) && return (;)
-    return merge_by_key_scratch(a, layout, size(keys), eltype(keys), size(values), eltype(values))
+    (ndims(keys) == 0 || ndims(values) == 0) && return (;)
+    return merge_by_key_scratch(a, slice_layout(keys, dims).len, size(keys), eltype(keys),
+                                size(values), eltype(values))
 end
 function sort_by_key_scratch(a::CPUThreads.SampleSort, keys, values, dims)
     # The sorting permutation (sorted by `sample_sortperm!` for `dims=:`), and the old keys and
