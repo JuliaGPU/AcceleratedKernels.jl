@@ -1,5 +1,6 @@
 using AcceleratedKernels
 using Documenter
+using DocumenterCodeBlocks: CodeBlocks
 
 include("DocHelpers.jl")
 
@@ -8,6 +9,9 @@ makedocs(;
     modules=[AcceleratedKernels],
     authors="Andrei-Leonard Nicusan <a.l.nicusan@gmail.com> and contributors",
     sitename="AcceleratedKernels.jl",
+    plugins=[
+        CodeBlocks(; line_counter=:named),
+    ],
     format=Documenter.HTML(;
         canonical="https://juliagpu.github.io/AcceleratedKernels.jl/",
         edit_link="main",
