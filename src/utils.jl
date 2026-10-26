@@ -12,12 +12,57 @@ struct NoInit end
 @inline unval(::Val{V}) where {V} = V
 
 
-# An array for an operation's result: `similar(v, ...)`, unless `v` has no backend (a range, for
-# instance), which gives a new array on `backend`
+# The array that holds the memory behind `v`: `v` itself unless it wraps others, else the first of
+# the arrays it wraps that holds memory; `nothing` if there is none (a range, or a lazy array over
+# one)
+storage(v::Tuple) = storage_first(v...)
+function storage(v::AbstractArray)
+    backendless(v) && return nothing
+    p = parent(v)
+    p === v ? v : storage(p)
+end
+storage(_) = nothing
+storage_first() = nothing
+storage_first(x, xs...) = (s = storage(x); s === nothing ? storage_first(xs...) : s)
+
+# Whether `v` gets Base's `similar` fallback, a host `Array`, although it wraps the memory `s` of
+# another array type (a lazy array without a `similar` method of its own, for instance). Checked on
+# an empty result.
+similar_falls_back(v, s) =
+    s !== v && !(s isa Array) && similar(v, eltype(v), Base.map(zero, size(v))) isa Array
+
+# Whether results of operations on `v` are allocated on `backend` rather than with `similar(v)`:
+# where `v` holds no memory (a range, or a lazy array over one), or gets Base's fallback
+function allocates_on_backend(v)
+    s = storage(v)
+    s === nothing || similar_falls_back(v, s)
+end
+
+# An array for an operation's result
 similar_on(backend, v, ::Type{T}=eltype(v), dims=size(v)) where {T} =
-    backendless(v) ? KernelAbstractions.allocate(backend, T, dims) : similar(v, T, dims)
-# A copy of `v`, likewise
-copy_on(backend, v) = backendless(v) ? copyto!(similar_on(backend, v), collect(v)) : copy(v)
+    allocates_on_backend(v) ? KernelAbstractions.allocate(backend, T, dims) : similar(v, T, dims)
+# A copy of `v`, likewise: its own `copy`, unless its results are allocated on `backend` (where
+# Base's copy would give a host `Array`)
+function copy_on(backend, v)
+    allocates_on_backend(v) && copies_by_kernel(backend, v) &&
+        return copyto_on!(similar_on(backend, v), v, backend)
+    backendless(v) ? copyto!(similar_on(backend, v), collect(v)) : copy(v)
+end
+# A copy of `v` in host memory
+host_array(backend, v) = copies_by_kernel(backend, v) ?
+    Array(copyto_on!(KernelAbstractions.allocate(backend, eltype(v), size(v)), v, backend)) :
+    Array(v)
+
+# Whether copies of `v` on `backend` use a kernel. Its own arrays, Base's wrappers of arrays in
+# host memory and GPUArrays' wrappers of its arrays are copied by Base or GPUArrays, backendless
+# arrays after collecting them on the host, and everything on the host backend. Base's copies of
+# other wrappers index device memory element by element on the host, and lazy arrays over ranges
+# may read device arrays their function captures.
+function copies_by_kernel(backend, v)
+    (runs_threads(backend) || backendless(v) || parent(v) === v || v isa AnyGPUArray) &&
+        return false
+    !(storage(v) isa Union{Array, BitArray})
+end
 
 # The destination of an operation (`what`, for the messages) that writes the elements of `src`
 # to `dst`: `src` itself where the operation runs in place, else an array that does not overlap
@@ -55,9 +100,11 @@ has_offset_parent(A) =
 
 # `copyto!(dst, src)` of arrays of the same size
 function copyto_on!(dst, src, backend)
-    has_offset_parent(dst) || has_offset_parent(src) || return copyto!(dst, src)
+    has_offset_parent(dst) || has_offset_parent(src) || copies_by_kernel(backend, src) ||
+        return copyto!(dst, backendless(src) ? collect(src) : src)
+    d0, s0 = firstindex(dst), firstindex(src)
     foreachindex_on(Base.OneTo(length(dst)), backend) do i
-        @inbounds dst[i] = src[i]
+        @inbounds dst[d0 + i - 1] = src[s0 + i - 1]
     end
     return dst
 end

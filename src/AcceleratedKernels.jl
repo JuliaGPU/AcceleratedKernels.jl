@@ -30,7 +30,7 @@ end
 # Internal dependencies
 using ArgCheck: @argcheck
 import Adapt
-using GPUArraysCore: @allowscalar, neutral_element
+using GPUArraysCore: AnyGPUArray, @allowscalar, neutral_element
 using KernelAbstractions
 using KernelAbstractions: @context
 # Sub-group operations, with KernelAbstractions 0.10
