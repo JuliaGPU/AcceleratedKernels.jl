@@ -271,8 +271,7 @@ function merge_sortperm!(
     end
     (isempty(v) || layout.len <= 1) && return ix
     if by === identity
-        # (a range, for instance, has no backend: collected on the host first)
-        keys = copyto_on!(bufs.keys, backendless(v) ? collect(v) : v, backend)
+        keys = copyto_on!(bufs.keys, v, backend)
         merge_sort_by_key!(keys, ix, backend, bufs, ord; block_size, dims)
     else
         # Evaluated once instead of in every comparison; `ord` is `By(by, ord.order)`

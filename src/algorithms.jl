@@ -235,12 +235,22 @@ backendless(x::BaseWrapper) = backendless(parent(x))
 
 # Values that never determine the backend: backendless arrays, scalars, and any other value that
 # is not an array. Every other array votes with `get_backend`, which throws for array types that
-# do not implement it (and forwards Base's wrappers to the array they wrap).
+# do not implement it (and forwards wrappers to the array they wrap).
 backend_vote(_) = nothing
-backend_vote(x::AbstractArray) = backendless(x) ? nothing : get_backend(x)
+backend_vote(x::AbstractArray) = backendless(x) ? nothing : wrapper_vote(x, parent(x))
 backend_vote(x::Tuple) = backend_votes(x...)
 backend_vote(bc::Base.Broadcast.Broadcasted) = backend_votes(bc.args...)
 backend_vote(x::Base.Broadcast.Extruded) = backend_vote(x.x)
+
+# A wrapper whose `parent` is not an array with memory (a range, or a tuple of arrays for a lazy
+# array over several, like `mappedarray(+, A, B)`), where `get_backend` throws, votes like the
+# arrays it wraps instead, so that a lazy array over ranges does not vote either
+wrapper_vote(x, p) = p === x || wraps_storage(p) ? get_backend(x) : backend_vote(p)
+
+# Whether `x` is an array with memory, or a chain of wrappers ending in one
+wraps_storage(::IndexCollection) = false
+wraps_storage(x::AbstractArray) = (p = parent(x); p === x || wraps_storage(p))
+wraps_storage(_) = false
 
 backend_votes() = nothing
 backend_votes(x, xs...) = merge_backends(backend_vote(x), backend_votes(xs...))
@@ -259,10 +269,10 @@ end
     resolve_backend(backend, args...)
 
 The backend an operation runs on: `backend` if given, else the one every array in `args`
-(destination first) agrees on, recursing into `Broadcasted` trees; ranges, `CartesianIndices`,
-`LinearIndices`, Base's views, reshapes and permutations of them, and non-array values do not
-count. Arguments on different backends are an `ArgumentError`. If no argument determines it, the
-host backend is used.
+(destination first) agrees on, recursing into `Broadcasted` trees and into the arrays that
+wrappers wrap; ranges, `CartesianIndices`, `LinearIndices`, wrappers of only those, and non-array
+values do not count. Arguments on different backends are an `ArgumentError`. If no argument
+determines it, the host backend is used.
 """
 resolve_backend(backend::Backend, args...) = backend
 function resolve_backend(::Nothing, args...)
