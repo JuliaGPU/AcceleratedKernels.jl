@@ -18,11 +18,11 @@
 
 GPU merge sort: stable, for every element type and ordering, whole arrays and `dims`, and the only
 kernel algorithm for `sortperm!` and [`sort_by_key!`](@ref). Each block of `block_size` threads
-(any positive number) sorts a tile of `2 * block_size` elements in local memory, then global
-passes merge the tiles. A tile, with the values moved along, must fit in 32 KiB; for large
-elements, the default `block_size` shrinks to fit. `lowmem=true` selects a `sortperm!` path that
-does not copy the keys, at the cost of reading them from global memory in every comparison; other
-operations reject it.
+(a power of two) sorts a tile of `2 * block_size` elements in local memory, then global passes
+merge the tiles. A tile, with the values moved along, must fit in 32 KiB; for large elements, the
+default `block_size` shrinks to fit. `lowmem=true` selects a `sortperm!` path that does not copy
+the keys, at the cost of reading them from global memory in every comparison; other operations
+reject it.
 """
 Base.@kwdef struct MergeSort <: SortAlgorithm
     block_size::Union{Nothing, Int} = nothing
@@ -179,7 +179,7 @@ radix_supports_ordering(ord) = ord === Base.Order.Forward || ord === Base.Order.
 
 # Domain checks of the fields
 
-check_fields(a::MergeSort) = check_positive(a, :block_size)
+check_fields(a::MergeSort) = check_pow2(a, :block_size)
 
 function check_fields(a::RadixSort)
     # Bounded, so that the local-memory footprints computed from them cannot overflow
