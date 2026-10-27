@@ -77,6 +77,17 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     @test_throws MethodError AK.any(x->x<0, v; alg, bad=:kwarg)
 end
 
+# With `Auto()`, a GPU's algorithm comes from its tuning, which inference does not see; `any` and
+# `all` still infer as `Bool`, with `Auto` (as Base's `any` and `all` of a GPU array call them),
+# with each algorithm, and with an algorithm whose type inference does not know
+@testset "any and all: infer Bool" begin
+    V = typeof(array_from_host(rand(Float32, 10)))
+    for A in unique([AK.Auto; typeof.(PRED_ALGS); AK.Algorithm])
+        @test only(Base.return_types((x, alg) -> AK.any(isnan, x; alg), (V, A))) === Bool
+        @test only(Base.return_types((x, alg) -> AK.all(isfinite, x; alg), (V, A))) === Bool
+    end
+end
+
 # Julia does not specialize a method on a function argument that it only passes on. A call then
 # runs code compiled for any `Function`, which for `any`, `all` and `findall` inferred the
 # predicate's result type at run time, on every call. The methods that take the predicate name
