@@ -174,8 +174,8 @@ end
 
 
 # Sort the slices `layout` of `keys` in place under `comp`, moving `values` (or `nothing`) along.
-# `temp_keys` and `temp_values` are swap buffers like `keys` and `values`, used only when the slices
-# are longer than a tile (`nothing` otherwise).
+# `temp_keys` and `temp_values` are swap buffers like `keys` and `values` (`nothing` for none), used
+# only when the slices are longer than a tile.
 function merge_sort_slices!(keys, values, temp_keys, temp_values, comp, layout, backend, block_size)
     # Block level: each block sorts a tile of one slice in local memory
     len = layout.len
@@ -230,8 +230,7 @@ function merge_sort!(
     end
 
     comp = (x, y) -> Base.Order.lt(ord, x, y)
-    merge_sort_slices!(v, nothing, get(bufs, :temp, nothing), nothing, comp, layout, backend,
-                       block_size)
+    merge_sort_slices!(v, nothing, bufs.temp, nothing, comp, layout, backend, block_size)
     v
 end
 
@@ -245,17 +244,19 @@ function merge_sort_by_key!(
     layout = slice_layout(keys, dims)
     (isempty(keys) || layout.len <= 1) && return keys, values
     comp = (x, y) -> Base.Order.lt(ord, x, y)
-    merge_sort_slices!(keys, values, get(bufs, :temp_keys, nothing),
-                       get(bufs, :temp_values, nothing), comp, layout, backend, block_size)
+    merge_sort_slices!(keys, values, bufs.temp_keys, bufs.temp_values, comp, layout, backend,
+                       block_size)
     keys, values
 end
 
 
-# The scratch of `merge_sort_by_key!` over slices `layout` of keys of size `ksize` and type `K`,
-# with values of size `vsize` and type `V`: swap buffers, if the tiles need merging
-merge_by_key_scratch(a, layout, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V} =
-    layout.len > 2 * a.block_size ?
-        (; temp_keys=scratch(K, ksize), temp_values=scratch(V, vsize)) : (;)
+# The scratch of `merge_sort_by_key!` over slices of `len` keys, of size `ksize` and type `K`,
+# with values of size `vsize` and type `V`: swap buffers, used if the tiles need merging
+function merge_by_key_scratch(a, len, ksize, ::Type{K}, vsize, ::Type{V}) where {K, V}
+    merges = len > 2 * a.block_size
+    return (; temp_keys=scratch(K, ksize; needed=merges),
+            temp_values=scratch(V, vsize; needed=merges))
+end
 
 
 # GPU merge sort permutation: sorts a copy of the keys, `by.(v)`, carrying the indices along.
@@ -298,7 +299,6 @@ function merge_sortperm_lowmem!(
     (isempty(ix) || layout.len <= 1) && return ix
 
     comp = (ix, iy) -> Base.Order.lt(ord, v[ix], v[iy])
-    merge_sort_slices!(ix, nothing, get(bufs, :temp, nothing), nothing, comp, layout, backend,
-                       block_size)
+    merge_sort_slices!(ix, nothing, bufs.temp_values, nothing, comp, layout, backend, block_size)
     ix
 end

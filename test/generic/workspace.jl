@@ -57,7 +57,78 @@ forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buff
         sizes = AK.workspace_size(AK.sort!, v; alg=AK.RadixSort())
         @test Base.all(k -> haskey(sizes, k), (:temp, :hist, :scan, :key_range))
         @test sizes.temp == (Float32, (10_000,))
+        # ... the same buffers, without elements, where the slices need no sorting or sort in one
+        # block
+        nelems(s) = s isa NamedTuple ? Base.sum(nelems, values(s); init=0) : Base.prod(s[2])
+        short = AK.workspace_size(AK.sort!, v[1:1]; alg=AK.RadixSort())
+        @test keys(short) == keys(sizes) && nelems(short) == 0
+        @test AK.workspace_size(AK.sort!, fill!(similar(v, ()), 1); alg=AK.RadixSort()) == (;)
+        for (h, dims) in ((rand(Float32, 0), :), (rand(Float32, 1), :), (rand(Float32, 100), :),
+                          (rand(Float32, 10_000), :), (rand(Float32, 100, 3), 1),
+                          (rand(Float32, 3, 3000), 2))
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg=AK.RadixSort(), dims)) ==
+                  (dims isa Colon ? sort(h) : sort(h; dims))
+        end
         @test AK.workspace_size(AK.sort!, v; alg=AK.BitonicSort()) == (;)
+        # Merge sort lists the same buffers for every length, empty where the call does not need
+        # them: tiles that need no merging need no swap buffers, the low-memory permutation copies
+        # no keys
+        alg = AK.MergeSort(block_size=64)
+        @test AK.workspace_size(AK.sort!, v[1:100]; alg) == (; temp=(Float32, (0,)))
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int, 100), v[1:100]; alg) ==
+              (; keys=(Float32, (100,)), temp_keys=(Float32, (0,)), temp_values=(Int, (0,)))
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int), v; alg=AK.MergeSort(lowmem=true)) ==
+              (; keys=(Float32, (0,)), temp_keys=(Float32, (0,)), temp_values=(Int, (10_000,)))
+        # (of the array's shape along `dims`)
+        @test AK.workspace_size(AK.sort!, reshape(v, 100, 100); alg, dims=1) ==
+              (; temp=(Float32, (0, 0)))
+        # (none for a zero-dimensional array, which has no empty buffers of its shape, or for the
+        # keys of a low-memory permutation if they are of a union type, which backends may not
+        # allocate)
+        z = fill!(similar(v, ()), 1)
+        @test AK.workspace_size(AK.sort!, z; alg) == (;)
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int, ()), z; alg) == (;)
+        @test AK.workspace_size(AK.sort_by_key!, z, similar(v, Int, ()); alg) == (;)
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int, ()), v[1:1]; alg) == (;)
+        @test AK.workspace_size(AK.sort_by_key!, v[1:1], similar(v, Int, ()); alg) == (;)
+        by = x -> x < 0.5f0 ? Int16(1) : x
+        @test AK.workspace_size(AK.sortperm!, similar(v, Int), v; alg=AK.MergeSort(lowmem=true),
+                                by) == (; temp_values=(Int, (10_000,)))
+        @test Array(with_workspace(AK.sortperm!, similar(v, Int), v; alg=AK.MergeSort(lowmem=true),
+                                   by)) == sortperm(Array(v); by)
+        # ... with which the calls run, of empty arrays too
+        for n in (0, 1, 100, 1000)
+            h = rand(Float32, n)
+            hk = rand(Int32(1):Int32(9), n)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg)) == sort(h)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, by=x -> -x)) ==
+                  sort(h; rev=true)
+            for lowmem in (false, true)
+                x = array_from_host(h)
+                a = AK.MergeSort(; block_size=64, lowmem)
+                @test Array(with_workspace(AK.sortperm!, similar(x, Int), x; alg=a)) == sortperm(h)
+            end
+            ks, vs = with_workspace(AK.sort_by_key!, array_from_host(hk), array_from_host(1:n, Int);
+                                    alg)
+            @test Array(ks) == sort(hk) && Array(vs) == sortperm(hk)
+        end
+        # ... and along `dims`, with slices that need no merging and slices that do
+        for (shape, dims) in (((100, 3), 1), ((3, 300), 2))
+            h = rand(Float32, shape)
+            hk = rand(Int32(1):Int32(9), shape)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, dims)) == sort(h; dims)
+            @test Array(with_workspace(AK.sort!, array_from_host(h); alg, dims, by=x -> -x)) ==
+                  sort(h; dims, rev=true)
+            for lowmem in (false, true)
+                x = array_from_host(h)
+                a = AK.MergeSort(; block_size=64, lowmem)
+                @test Array(with_workspace(AK.sortperm!, similar(x, Int), x; alg=a, dims)) ==
+                      sortperm(h; dims)
+            end
+            ks, vs = with_workspace(AK.sort_by_key!, array_from_host(hk),
+                                    array_from_host(reshape(1:length(hk), shape), Int); alg, dims)
+            @test Array(ks) == sort(hk; dims) && Array(vs) == sortperm(hk; dims)
+        end
         # A whole-array reduction keeps the partial results of its first pass, at most
         # `target_blocks`, and a slot for the last one
         @test haskey(AK.workspace_size(AK.sum, v; alg=AK.BlockReduce()), :partials)
@@ -76,6 +147,9 @@ forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buff
             @test AK.workspace_size(AK.sum, x; dims=1, alg=AK.BlockReduce(),
                                     commutative).partials[2][1] == 4
         end
+        # A scan of slices that fit in one chunk keeps the chunk totals without elements
+        @test AK.workspace_size(AK.accumulate, +, reshape(v, 100, 100); dims=1,
+                                alg=AK.SliceScan()) == (; totals=(Float32, (0,)))
         # A reduction of one element needs none
         @test AK.workspace_size(AK.sum, v[1:1]; alg=AK.BlockReduce()) == (; partials=(Float32, (0,)))
         # `acctype` sets the partial results' type
@@ -216,7 +290,34 @@ end
     @test only(Base.return_types(x -> AK.sum(x), (V,))) === Float32
     @test only(Base.return_types(x -> AK.reduce(+, x), (V,))) === Float32
     @test only(Base.return_types(x -> AK.sum(x; dims=1), (V,))) <: AbstractVector{Float32}
-    @test only(Base.return_types(x -> AK.accumulate(+, x), (V,))) <: AbstractVector{Float32}
+    # ... and so do merge sort's plans, whatever the length and `lowmem`, and its workspaces where
+    # the backend's allocations infer (OpenCL.jl chooses their memory at run time)
+    infers(f, types...) = isconcretetype(only(Base.return_types(f, types)))
+    I = typeof(similar(v, Int))
+    M = typeof(reshape(v, 100, 100))
+    allocates = infers(b -> KernelAbstractions.allocate(b, Float32, (1,)), typeof(BACKEND))
+    for g in (allocates ? (AK.plan, AK.workspace) : (AK.plan,))
+        # (as are those of `Auto()` for a permutation or a key/value sort, on every backend)
+        @test infers((ix, x) -> g(AK.sortperm!, ix, x), I, V)
+        @test infers((k, x) -> g(AK.sort_by_key!, k, x), V, I)
+        TEST_KERNELS || continue
+        @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort()), V)
+        @test infers(x -> g(AK.sort!, x; alg=AK.MergeSort(), by=abs), V)
+        @test infers((ix, x, lowmem) -> g(AK.sortperm!, ix, x; alg=AK.MergeSort(; lowmem)),
+                     I, V, Bool)
+        @test infers((ix, x, lowmem) -> g(AK.sortperm!, ix, x; alg=AK.MergeSort(; lowmem), by=abs),
+                     I, V, Bool)
+        @test infers((x, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem)), V, Bool)
+        @test infers((k, x) -> g(AK.sort_by_key!, k, x; alg=AK.MergeSort()), V, I)
+        @test infers((x, dims) -> g(AK.sort!, x; alg=AK.MergeSort(), dims), M, Int)
+        @test infers((x, dims, lowmem) -> g(AK.sortperm, x; alg=AK.MergeSort(; lowmem), dims),
+                     M, Int, Bool)
+        # ... as do radix sort's
+        @test infers(x -> g(AK.sort!, x; alg=AK.RadixSort()), V)
+        @test infers((x, dims) -> g(AK.sort!, x; alg=AK.RadixSort(), dims), M, Int)
+        # ... and the scans' along `dims`, with or without chunk totals
+        @test infers((x, dims) -> g(AK.accumulate, +, x; dims), M, Int)
+    end
 end
 
 

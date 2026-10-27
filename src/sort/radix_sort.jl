@@ -437,17 +437,20 @@ radix_blocks(layout, tile) = Base.checked_mul(slice_count(layout), cld(layout.le
 
 # The plan of `radix_sort!`: the output of every other pass, the digit histograms of every
 # block, and the plans of the histograms' scan and the key range reduction
+# (the same buffers for every length, so that the plan infers, without elements where the slices
+# sort in one block or need no sorting; none for a zero-dimensional array, as for merge sort)
 function radix_plan(a, v::AbstractArray{T}, backend, dims) where T
+    ndims(v) == 0 && return Plan(backend, a, (;))
     layout = slice_layout(v, dims)
-    (isempty(v) || layout.len <= 1) && return Plan(backend, a, (;))
     c = radix_config(T, layout.len, backend, a.block_size, a.items_per_thread, a.chunk_size)
-    c.one_block && return Plan(backend, a, (;))
-    hist_len = Base.checked_mul(Int(RADIX_DIGITS), radix_blocks(layout, a.block_size * c.items))
+    needed = !isempty(v) && layout.len > 1 && !c.one_block
+    hist_len = needed ?
+        Base.checked_mul(Int(RADIX_DIGITS), radix_blocks(layout, a.block_size * c.items)) : 0
     scan = scan_setup(+, UInt32, UInt32, (hist_len,), backend; init=UInt32(0),
                       inclusive=false).plan
     key_range = first(radix_key_range_setup(v, backend)).plan
-    return Plan(backend, a, (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan,
-                             key_range))
+    sizes = (; temp=scratch(T, size(v)), hist=scratch(UInt32, hist_len), scan, key_range)
+    return Plan(backend, a, needed ? sizes : no_elements(sizes))
 end
 
 

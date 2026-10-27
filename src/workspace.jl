@@ -9,7 +9,12 @@ struct Scratch{T, N}
     dims::NTuple{N, Int}
 end
 scratch(::Type{T}, dims::Integer...) where {T} = Scratch{T, length(dims)}(Int.(dims))
-scratch(::Type{T}, dims::Tuple) where {T} = Scratch{T, length(dims)}(Int.(dims))
+# (a buffer that is not `needed` for this call keeps its place without elements, so that an
+# operation lists the same buffers for every length, and its plan infers)
+function scratch(::Type{T}, dims::Tuple; needed::Bool=true) where {T}
+    b = Scratch{T, length(dims)}(Int.(dims))
+    return needed ? b : no_elements(b)
+end
 
 # An operation's scratch: its backend, its resolved algorithm (which the operation runs with),
 # and its buffers, as a `NamedTuple` of `Scratch` requirements and of the plans of the
@@ -19,6 +24,12 @@ struct Plan{B <: Backend, A, S <: NamedTuple}
     alg::A
     sizes::S
 end
+
+# The same buffers, and those of the nested plans, without elements: the scratch of a call that
+# needs none of it, listed like that of one that does
+no_elements(sizes::NamedTuple) = Base.map(no_elements, sizes)
+no_elements(p::Plan) = Plan(p.backend, p.alg, no_elements(p.sizes))
+no_elements(b::Scratch{T, N}) where {T, N} = Scratch{T, N}(ntuple(_ -> 0, Val(N)))
 
 # `plan(op, args...; kwargs...)` has one method per operation that takes a workspace, with the
 # operation's arguments (without `workspace`)
