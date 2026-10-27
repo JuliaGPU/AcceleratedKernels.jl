@@ -8,6 +8,8 @@ function mapreduce_1d_cpu(
     min_elems::Int,
 ) where {F, OP}
     f, accop = seeded_ops(f, op, seed)
+    # (a `Broadcasted` object has no views; one too long for `LinearBroadcast` is reduced serially)
+    src isa Base.Broadcast.Broadcasted && (src = linear_view(src))
     if src isa Base.Broadcast.Broadcasted || task_count(length(src), max_tasks, min_elems) == 1
         return finish(op, init, nothing, 0, Base.mapreduce(f, accop, src; init=seed))
     end
