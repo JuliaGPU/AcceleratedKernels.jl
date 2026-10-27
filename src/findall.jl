@@ -31,6 +31,7 @@ The `findall` tuning for element type `T` (the input's) on `backend`'s current d
 [`sort_tuning`](@ref) for the conventions.
 """
 findall_tuning(::Backend, ::Type) = FindallTuning()
+tuning_type(::typeof(findall_tuning)) = FindallTuning
 
 """
     resolve_findall(alg, backend, T) -> Algorithm
@@ -39,7 +40,7 @@ Resolve `alg` for `findall` over elements of type `T` on `backend`: `ScanScatter
 `CPUThreads.Partitioned` with every field set, or an `ArgumentError`.
 """
 function resolve_findall(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    t = findall_tuning(backend, T)
+    t = tuning(findall_tuning, backend, T)
     a = alg isa Auto ? (runs_threads(backend) ? CPUThreads.Partitioned() : ScanScatter()) : alg
     a = fill_defaults(a, t, T)
     check_findall(a, backend)

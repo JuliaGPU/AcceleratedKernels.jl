@@ -255,7 +255,7 @@ function select_launch(src, backend, alg::BlockReduce, ::Type{A}, rdims, dst_siz
     if dst_size == 1 && (isnothing(strided) || nr == 1 && rstrides[1] == 1)
         return launch(Whole(!commutative))
     end
-    shape = reduce_shape(dst_size, len, segs, alg.block_size, reduce_tuning(backend, A), A)
+    shape = reduce_shape(dst_size, len, segs, alg.block_size, tuning(reduce_tuning, backend, A), A)
     commutative || (shape = ordered_shape(shape, dst_size, len, alg.block_size))
     return launch(shape)
 end
@@ -270,7 +270,7 @@ function launch_scratch(launch::DimsLaunch, src, backend, alg, ::Type{A}, seed, 
     if shape isa Whole
         len = Base.prod(size(src)[d] for d in rdims; init=1)
         n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
-                                  reduce_tuning(backend, A).target_blocks)
+                                  tuning(reduce_tuning, backend, A).target_blocks)
         return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
     end
     groups = split_groups(shape)

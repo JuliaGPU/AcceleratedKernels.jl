@@ -150,7 +150,7 @@ function scan_setup(
         (; prefixes=scratch(typeof(seed), prefixes_length(n, a)))
     elseif a isa SliceScan
         # The chunk totals of slices split into chunks (none for slices in one chunk)
-        m = slice_scratch(sz, Int(dims), a, scan_tuning(backend, A), typeof(seed))
+        m = slice_scratch(sz, Int(dims), a, tuning(scan_tuning, backend, A), typeof(seed))
         (; totals=scratch(typeof(seed), m))
     else
         (;)

@@ -47,6 +47,7 @@ The `any`/`all` tuning for element type `T` (the input's) on `backend`'s current
 [`sort_tuning`](@ref) for the conventions.
 """
 predicate_tuning(::Backend, ::Type) = PredicateTuning()
+tuning_type(::typeof(predicate_tuning)) = PredicateTuning
 
 """
     resolve_predicate(alg, backend, T) -> Algorithm
@@ -56,7 +57,7 @@ Resolve `alg` for `any`/`all` over elements of type `T` on `backend`: `Concurren
 `ArgumentError`.
 """
 function resolve_predicate(alg::Algorithm, backend::Backend, ::Type{T}) where {T}
-    t = predicate_tuning(backend, T)
+    t = tuning(predicate_tuning, backend, T)
     a = alg isa Auto ? select_predicate(backend, t) : alg
     a = fill_defaults(a, t, backend)
     check_predicate(a, backend)
