@@ -945,3 +945,47 @@ end
               mapreduce(code, max, hm; dims)
     end
 end
+
+
+# A source that cannot be viewed, to check that the whole-array kernels read a source indexed
+# linearly from 1 as it is: a view of a GPU array can be a new array sharing its memory, which
+# `unsafe_free!` of the source then no longer frees (see `mapreduce_1d_view`)
+struct Unviewable{T, N, A <: AbstractArray{T, N}} <: AbstractArray{T, N}
+    data::A
+end
+Base.size(a::Unviewable) = size(a.data)
+Base.IndexStyle(::Type{<:Unviewable}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(a::Unviewable, i::Int) = a.data[i]
+Base.view(::Unviewable, I...) = error("the source of a reduction was viewed")
+Adapt.adapt_structure(to, a::Unviewable) = Unviewable(adapt(to, a.data))
+KernelAbstractions.get_backend(a::Unviewable) = get_backend(a.data)
+
+@testset "reduce: sources read as they are" begin
+    Random.seed!(0)
+    alg = REDUCE_ALG
+    TEST_KERNELS && for shape in ((10_000,), (100, 100)), commutative in (true, false)
+        h = rand(Int32(-9):Int32(9), shape...)
+        s = Unviewable(array_from_host(h))
+        @test AK.reduce(+, s; alg, commutative) == sum(h)
+        @test AK.mapreduce(abs, max, s; alg, commutative) == maximum(abs, h)
+        # ... and into a single output on the device
+        dims = Tuple(1:length(shape))
+        @test Array(AK.reduce(+, s; dims, alg, commutative)) == sum(h; dims)
+    end
+
+    # Freeing a reduced source returns its memory to the pool at once, not once a view of it is
+    # garbage-collected (measured where the backend's pool counts it)
+    if @isdefined(CUDACore) && BACKEND isa CUDACore.CUDABackend &&
+       CUDACore.used_memory() !== missing
+        for (shape, kw) in (((1_000_000,), (;)), ((1000, 1000), (;)),
+                            ((1000, 1000), (; dims=(1, 2))), ((1_000_000,), (; commutative=false)))
+            a = array_from_host(rand(Float32, shape...))
+            AK.reduce(+, a; kw...)
+            CUDACore.synchronize()
+            used = CUDACore.used_memory()
+            CUDACore.unsafe_free!(a)
+            CUDACore.synchronize()
+            @test used - CUDACore.used_memory() >= sizeof(a)
+        end
+    end
+end

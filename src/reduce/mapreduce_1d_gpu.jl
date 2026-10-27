@@ -88,7 +88,7 @@ function mapreduce_1d_gpu(
         end
     end
 
-    # (later passes see the source as a view, so use one for the first pass too)
+    # (the kernels index the source linearly, from 1)
     src_view = mapreduce_1d_view(src)
     blocks = mapreduce_1d_blocks(len, block_size, items_per_thread, max_blocks)
 
@@ -156,8 +156,12 @@ on_host(x::AbstractArray, backend) = host_array(backend, x)
 on_host(x::AbstractRange, _) = x
 on_host(x, _) = x
 
-# (a view of all elements, indexed from 1 also when the source's indices are not)
-mapreduce_1d_view(src::AbstractArray) = @view src[begin:end]
+# The source as the kernels index it, linearly from 1: the array itself where it is indexed so
+# already, else a view of all its elements. (A view of a GPU array can be a new array sharing the
+# source's memory, so that `unsafe_free!` of the source no longer frees that memory until the
+# view is garbage-collected.)
+mapreduce_1d_view(src::AbstractArray) =
+    IndexStyle(src) isa IndexLinear && !Base.has_offset_axes(src) ? src : @view src[begin:end]
 mapreduce_1d_view(src::Base.Broadcast.Broadcasted) = linear_view(src)
 
 # The number of partial results `mapreduce_1d_gpu` stores over `len` elements into `dst`: one
