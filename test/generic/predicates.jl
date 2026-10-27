@@ -76,3 +76,30 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.any(x->x<0, v; alg, bad=:kwarg)
 end
+
+# Julia does not specialize a method on a function argument that it only passes on, so the
+# methods that take the predicate name its type. Otherwise they run code compiled for any
+# `Function`, in which `check_bool_result` infers the predicate's result type on every call.
+# (Called by dynamic dispatch, as an inferred caller may inline past the entry point.)
+@testset "predicates: no inference at run time" begin
+    # The compilation time of the fastest of a few warm calls (other tasks may compile once)
+    function compile_time(f, args...; kwargs...)
+        invokelatest(f, args...; kwargs...)
+        minimum(1:3) do _
+            Base.cumulative_compile_timing(true)
+            try
+                t = Base.cumulative_compile_time_ns()[1]
+                invokelatest(f, args...; kwargs...)
+                Base.cumulative_compile_time_ns()[1] - t
+            finally
+                Base.cumulative_compile_timing(false)
+            end
+        end
+    end
+    v = array_from_host(rand(Float32, 1000))
+    for alg in PRED_ALGS
+        @test compile_time(AK.any, isnan, v; alg) == 0
+        @test compile_time(AK.all, isfinite, v; alg) == 0
+    end
+    @test compile_time(AK.findall, isnan, v; alg=FINDALL_ALG) == 0
+end
