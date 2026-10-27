@@ -116,6 +116,7 @@ task would launch on). AK defines this generic method; AK's package extensions a
 per backend type, which may choose different values per device.
 """
 sort_tuning(::Backend, ::Type) = SortTuning()
+tuning_type(::typeof(sort_tuning)) = SortTuning
 
 
 # The operation an algorithm is resolved for, for error messages
@@ -140,7 +141,7 @@ Base.@constprop :aggressive function resolve_sort(
 )
     T = eltype(v)
     layout = slice_layout(v, dims)
-    t = sort_tuning(backend, T)
+    t = tuning(sort_tuning, backend, T)
     a = alg isa Auto ? select_sort(alg, backend, t, T, layout, ord; perm, pairs) : alg
     a = fill_defaults(a, t, T, merge_eltypes)
     check_sort(a, backend, T, layout, ord; perm, pairs, merge_eltypes)

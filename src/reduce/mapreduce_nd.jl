@@ -65,7 +65,7 @@ function mapreduce_nd!(
         Base.inferencebarrier(mapreduce_1d_gpu)(
             f, op, linear_source(src, launch.buffer, launch.offset), backend; init, seed,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
-            max_blocks=reduce_tuning(backend, A).target_blocks,
+            max_blocks=tuning(reduce_tuning, backend, A).target_blocks,
             partials=get(bufs, :partials, nothing), switch_below=0,
             commutative=!shape.ordered, dst)
         return dst

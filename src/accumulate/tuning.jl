@@ -93,6 +93,7 @@ The scan tuning for element type `T` (the running-value type the scan computes i
 conventions.
 """
 scan_tuning(::Backend, ::Type) = ScanTuning()
+tuning_type(::typeof(scan_tuning)) = ScanTuning
 # CPU devices (the host backend's, and OpenCL's CPU devices) implement sub-group operations with
 # barriers of the whole block, and keep a scanned tile in their caches for adding its prefix
 cpu_scan_tuning() = ScanTuning(reduce_then_scan=false, subgroups=false)
@@ -109,7 +110,7 @@ or `CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
 function resolve_scan(alg::Algorithm, backend::Backend, ::Type{T}, dims,
                       ::Type{S}=T) where {T, S}
-    t = scan_tuning(backend, T)
+    t = tuning(scan_tuning, backend, T)
     a = alg isa Auto ? select_scan(backend, dims) : alg
     a = fill_defaults(a, t, S)
     check_scan(a, backend, S, dims)

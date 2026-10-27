@@ -156,7 +156,7 @@ function accumulate_1d_gpu!(
     scan_totals!() =
         accumulate_1d_gpu!(op, totals, backend, alg; init=NoInit(), seed, inclusive=true,
                            prefixes=view(prefixes, num_blocks+1:length(prefixes)))
-    if scan_tuning(backend, eltype(v)).reduce_then_scan
+    if tuning(scan_tuning, backend, eltype(v)).reduce_then_scan
         # Reduce the tiles, then scan them from their prefix: this reads the source twice and
         # writes the result once
         tile_aggregates_kernel!(backend, block_size)(op, totals, src, load, start, seed,

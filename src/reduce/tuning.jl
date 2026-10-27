@@ -73,6 +73,7 @@ The reduction tuning for accumulator type `T` on `backend`'s current device; see
 [`sort_tuning`](@ref) for the conventions.
 """
 reduce_tuning(::Backend, ::Type) = ReduceTuning()
+tuning_type(::typeof(reduce_tuning)) = ReduceTuning
 # Kernels on CPU devices (the host backend's, and OpenCL's CPU devices) reduce short runs faster
 # with a thread per output, and long ones faster with groups of threads: with PoCL on a Ryzen
 # 9950X, summing an 8×10^6 matrix along `dims=1` takes half the time, and a 4096×4096 one along
@@ -105,7 +106,7 @@ function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where
         throw(ArgumentError("BlockReduce: `items_per_thread` and `switch_below` only apply to " *
                             "whole-array reductions (`dims=:`)"))
     end
-    t = reduce_tuning(backend, T)
+    t = tuning(reduce_tuning, backend, T)
     a = alg isa Auto ? select_reduce(backend) : alg
     a = fill_defaults(a, t, T)
     check_reduce(a, backend, T, dims)

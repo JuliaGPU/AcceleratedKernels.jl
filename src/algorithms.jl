@@ -150,6 +150,14 @@ runs_kernels(::Backend) = true
 runs_kernels(::HostBackend) = nameof(HostBackend) !== :CPU
 
 
+# Tunings: values chosen per device by the `*_tuning(backend, T)` hooks, to which AK's package
+# extensions add their backends' methods. They are looked up with `tuning(hook, backend, T)`,
+# hidden from inference: backend packages precompile AK's operations, and code that depends on
+# a hook's generic method is invalidated when the extension that adds the backend's method is
+# loaded. Each hook declares the type it returns with `tuning_type`.
+tuning(hook, backend, T) = Base.inferencebarrier(hook)(backend, T)::tuning_type(hook)
+
+
 # Checks shared by the algorithm families
 
 # Algorithm names in error messages

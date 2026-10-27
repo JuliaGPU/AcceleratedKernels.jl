@@ -193,7 +193,7 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         # (the buffer's name does not depend on the length, so that results infer)
         sizes = if a isa BlockReduce && seed !== nothing
             n = mapreduce_1d_host_partials(length(src), a.block_size, a.items_per_thread,
-                                           reduce_tuning(backend, A).target_blocks,
+                                           tuning(reduce_tuning, backend, A).target_blocks,
                                            a.switch_below)
             (; partials=scratch(typeof(seed), n))
         else
@@ -409,7 +409,7 @@ function mapreduce_whole(f::F, op::OP, src, backend, alg, ::Type{A}; init, seed,
             f, op, src, backend;
             init, seed,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
-            max_blocks=reduce_tuning(backend, A).target_blocks,
+            max_blocks=tuning(reduce_tuning, backend, A).target_blocks,
             partials, switch_below=alg.switch_below, commutative,
         )
     else

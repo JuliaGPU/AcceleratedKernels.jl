@@ -23,7 +23,7 @@ end
 # sub-group scans the sub-groups' totals.
 @static if isdefined(KernelAbstractions, :KernelInterface)
     function scan_subgroup_width(backend, ::Type{T}, block_size) where {T}
-        scan_tuning(backend, T).subgroups || return Val(0)
+        tuning(scan_tuning, backend, T).subgroups || return Val(0)
         KI.supports_linear_subgroups(backend) && KI.supports_shuffle(backend, T) || return Val(0)
         W = KI.sub_group_size(backend)
         return ispow2(W) && W <= block_size <= W * W ? Val(W) : Val(0)

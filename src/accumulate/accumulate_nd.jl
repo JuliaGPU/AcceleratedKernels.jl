@@ -9,7 +9,7 @@ function accumulate_nd!(
     totals::Union{Nothing, AbstractVector}=nothing,
 ) where {OP}
     n_inner, len, n_outer = slice_extents(size(v), dims)
-    t = scan_tuning(backend, eltype(v))
+    t = tuning(scan_tuning, backend, eltype(v))
     slice_scan!(op, v, backend, alg, t; src, load, start=scan_start(v, init, seed), seed,
                 inclusive, n_inner, len, n_outer, totals)
     return v
