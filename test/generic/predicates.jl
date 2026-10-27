@@ -76,3 +76,38 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.any(x->x<0, v; alg, bad=:kwarg)
 end
+
+# Julia does not specialize a method on a function argument that it only passes on. A call then
+# runs code compiled for any `Function`, which for `any`, `all` and `findall` inferred the
+# predicate's result type at run time, on every call. The methods that take the predicate name
+# its type; after calls of each form, none of their specializations may have been widened to
+# `Function`.
+@testset "predicates: specialized on the predicate" begin
+    v = array_from_host(rand(Float32, 1000))
+    for alg in PRED_ALGS
+        AK.any(isnan, v; alg); AK.all(x -> x < 2f0, v; alg)
+        with_workspace(AK.any, isnan, v; alg); with_workspace(AK.all, x -> x < 2f0, v; alg)
+    end
+    AK.count(isnan, v; alg=REDUCE_ALG); with_workspace(AK.count, isnan, v; alg=REDUCE_ALG)
+    AK.findall(isnan, v; alg=FINDALL_ALG); with_workspace(AK.findall, isnan, v; alg=FINDALL_ALG)
+
+    # The method instances that name one of the operations (their methods, keyword bodies and
+    # sorters, and plans), and those of the internal methods that take the predicate
+    ops = (AK.any, AK.all, AK.count, AK.findall)
+    internal = (AK.check_bool_result, AK.predicate_setup, AK.any_run, AK.all_run,
+                AK.findall_run)
+    fs = Any[Core.kwcall]
+    for name in names(AK; all=true)
+        isdefined(AK, name) && getfield(AK, name) isa Function && push!(fs, getfield(AK, name))
+    end
+    widened = String[]
+    for f in unique(fs), m in methods(f)
+        parentmodule(m) === AK || continue
+        for mi in Base.specializations(m)
+            params = Base.unwrap_unionall(mi.specTypes).parameters
+            f in internal || Base.any(op -> typeof(op) in params, ops) || continue
+            Function in params && push!(widened, string(mi.specTypes))
+        end
+    end
+    @test isempty(widened)
+end
