@@ -1,5 +1,5 @@
-# Tests on GPU back-ends. The CPU tests on GitHub Actions cover every supported Julia version,
-# so the back-ends are only tested on the oldest and newest release. Draft pull requests skip
+# Tests on GPU back-ends, on the oldest and newest supported Julia release only: the CPU tests
+# on GitHub Actions cover the releases in between (on branch builds). Draft pull requests skip
 # them, unless selected by name in the last commit message: `[only cuda]`, `[only metal, oneapi]`
 # or `[only tests]` for all of them. `[skip amdgpu]` or `[skip tests]` does the opposite.
 steps:

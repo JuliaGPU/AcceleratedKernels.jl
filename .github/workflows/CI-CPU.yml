@@ -26,11 +26,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - '1.10'
-          - '1.11'
-          - '1.12'
-          - '1.13'
+        # pull requests only test the oldest and newest supported release
+        version: ${{ fromJSON(github.event_name == 'pull_request' && '["1.10", "1.13"]' ||
+                              '["1.10", "1.11", "1.12", "1.13"]') }}
         os:
           - ubuntu-latest
           - macOS-latest
@@ -49,6 +47,11 @@ jobs:
           - { env: { JULIA_NUM_THREADS: 1 }, os: macOS-15-intel }
           - { env: { JULIA_NUM_THREADS: 1 }, os: windows-latest }
           - { env: { JULIA_NUM_THREADS: 1 }, arch: x86 }
+          # the Intel macOS runners are slow and scarce, so pull requests only use them for
+          # the newest release (on other events, this matches the excluded x86 variant)
+          - os: macOS-15-intel
+            version: '1.10'
+            arch: ${{ github.event_name == 'pull_request' && 'x64' || 'x86' }}
           - os: macOS-15-intel
             arch: x86
           - os: macOS-15-intel
@@ -64,10 +67,12 @@ jobs:
           # PoCL, KernelAbstractions' host back-end, isn't built for 32-bit Windows
           - os: windows-latest
             arch: x86
-        include:
-          - { version: nightly, os: ubuntu-latest, arch: x64, env: { JULIA_NUM_THREADS: 2 } }
-          - { version: nightly, os: macOS-latest, arch: aarch64, env: { JULIA_NUM_THREADS: 2 } }
-          - { version: nightly, os: windows-latest, arch: x64, env: { JULIA_NUM_THREADS: 2 } }
+        # nightly is not tested on pull requests
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[
+          {"version": "nightly", "os": "ubuntu-latest", "arch": "x64", "env": {"JULIA_NUM_THREADS": 2}},
+          {"version": "nightly", "os": "macOS-latest", "arch": "aarch64", "env": {"JULIA_NUM_THREADS": 2}},
+          {"version": "nightly", "os": "windows-latest", "arch": "x64", "env": {"JULIA_NUM_THREADS": 2}}]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
@@ -89,11 +94,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - '1.10'
-          - '1.11'
-          - '1.12'
-          - '1.13'
+        version: ${{ fromJSON(github.event_name == 'pull_request' && '["1.10", "1.13"]' ||
+                              '["1.10", "1.11", "1.12", "1.13"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
