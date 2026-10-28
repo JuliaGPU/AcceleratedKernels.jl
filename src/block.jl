@@ -117,6 +117,25 @@ end
 # A kernel that only passes its functions on to these names their types (`op::OP`): Julia does
 # not specialize on a function argument that is not called, and CUDA.jl then specializes the
 # kernel again on every launch (about 150 ns).
+#
+# In local memory, the runs are `tile_stride` elements apart. The threads of a sub-group access
+# their runs at once, so with an even stride they hit the same few banks: 8 `Optional{Float32}`
+# partials, 64 bytes apart, made 11 wavefronts per access on CUDA (RTX 5080). An odd stride
+# pads each run by one element, as CUB pads its BlockExchange tiles, and spreads the runs over
+# the banks. Runs of primitive types of up to 4 bytes keep their length: at the default 8 items,
+# LLVM accesses them as 16-byte vectors, which conflict at most 2-way, and padding broke the
+# vectors' alignment. The scalar accesses took more registers, which cost an occupancy step on
+# Metal (M1) and AMDGPU (gfx1036) and made a `Float32` scan along `dims=1` 6-16% slower.
+
+# The stride of runs of `items` positions of type `T`, and the local-memory length of a tile
+tile_stride(::Type{T}, items) where {T} =
+    isprimitivetype(T) && sizeof(T) <= 4 ? items : items | 1
+tile_length(::Type{T}, block_size, items) where {T} = block_size * tile_stride(T, items)
+
+# The local-memory index of position `p` of a tile of `T`
+@inline function tile_slot(::Type{T}, p, items) where {T}
+    return (tile_stride(T, items) == items ? p : p + p ÷ items) + 0x1
+end
 
 # Load `lift(seed, load(src[index(k)]))` into the tile, and `seed` past the sequence's end
 Base.@propagate_inbounds function tile_load!(tile, src, load, seed, index, offset, len, ithread,
@@ -125,7 +144,7 @@ Base.@propagate_inbounds function tile_load!(tile, src, load, seed, index, offse
     while j < ITEMS
         p = j * block_size + ithread
         k = offset + p
-        tile[p + 0x1] = k < len ? lift(seed, load(src[index(k)])) : seed
+        tile[tile_slot(eltype(tile), p, ITEMS)] = k < len ? lift(seed, load(src[index(k)])) : seed
         j += 1
     end
 end
@@ -138,7 +157,7 @@ Base.@propagate_inbounds function tile_store!(v, tile, index, offset, len, ithre
         p = j * block_size + ithread
         k = offset + p
         if k < len
-            store_partial!(v, index(k), tile[p + 0x1])
+            store_partial!(v, index(k), tile[tile_slot(eltype(tile), p, ITEMS)])
         end
         j += 1
     end
@@ -148,7 +167,7 @@ end
 # for the block scan
 Base.@propagate_inbounds function thread_scan!(op, tile, thread_totals, seed, ithread,
                                                ::Val{ITEMS}) where {ITEMS}
-    run = ithread * ITEMS
+    run = ithread * tile_stride(eltype(tile), ITEMS)
     acc = seed
     k = 0
     while k < ITEMS
@@ -163,7 +182,7 @@ end
 # inclusive or exclusive scan; with a `carry`, that is combined on the left of each result.
 Base.@propagate_inbounds function tile_prefix!(op, tile, prefix, carry, seed, inclusive,
                                                ithread, ::Val{ITEMS}) where {ITEMS}
-    run = ithread * ITEMS
+    run = ithread * tile_stride(eltype(tile), ITEMS)
     prev = seed
     k = 0
     while k < ITEMS
