@@ -66,6 +66,7 @@ returned by [`scan_tuning`](@ref).
 - `subgroups`: whether the kernel algorithms scan the values of a block with sub-group
   operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
   memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
+- `wide_optional_flag`: as for [`ReduceTuning`](@ref).
 
 The `SliceScan` settings were measured on CUDA (RTX 5080 and 2070).
 """
@@ -83,6 +84,7 @@ Base.@kwdef struct ScanTuning
     slice_split_tiles::Int = 4
     reduce_then_scan::Bool = true
     subgroups::Bool = true
+    wide_optional_flag::Bool = true
 end
 
 """
@@ -96,7 +98,7 @@ scan_tuning(::Backend, ::Type) = ScanTuning()
 tuning_type(::typeof(scan_tuning)) = ScanTuning
 # CPU devices (the host backend's, and OpenCL's CPU devices) implement sub-group operations with
 # barriers of the whole block, and keep a scanned tile in their caches for adding its prefix
-cpu_scan_tuning() = ScanTuning(reduce_then_scan=false, subgroups=false)
+cpu_scan_tuning(; kwargs...) = ScanTuning(; reduce_then_scan=false, subgroups=false, kwargs...)
 scan_tuning(::HostBackend, ::Type) = cpu_scan_tuning()
 
 

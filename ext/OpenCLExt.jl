@@ -3,11 +3,16 @@ module OpenCLExt
 using OpenCL
 import AcceleratedKernels as AK
 
-# CPU devices (e.g. PoCL) get the tunings of the host backend's kernels
+# CPU devices (e.g. PoCL) get the tunings of the host backend's kernels. Partial results flag
+# whether they are set with a `Bool`: with the wider flag, PoCL vectorizes the accesses to
+# partials in local memory with AVX-512 gathers and scatters, and scans of 10^4 to 10^7 Float32s
+# without a neutral element take 1.0-1.4x as long.
 AK.reduce_tuning(::OpenCLBackend, ::Type) =
-    cl.device().device_type === :cpu ? AK.cpu_reduce_tuning() : AK.ReduceTuning()
+    cl.device().device_type === :cpu ? AK.cpu_reduce_tuning(wide_optional_flag=false) :
+                                       AK.ReduceTuning(wide_optional_flag=false)
 AK.scan_tuning(::OpenCLBackend, ::Type) =
-    cl.device().device_type === :cpu ? AK.cpu_scan_tuning() : AK.ScanTuning()
+    cl.device().device_type === :cpu ? AK.cpu_scan_tuning(wide_optional_flag=false) :
+                                       AK.ScanTuning(wide_optional_flag=false)
 
 # Sorting random keys with PoCL on a Ryzen 9 9950X. `BitonicSort` sorts whole arrays of up to 128
 # elements 1.4-1.9x faster than `MergeSort`, and slices of up to 1024 elements along `dims`
