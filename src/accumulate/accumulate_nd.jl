@@ -213,6 +213,24 @@ end
     end
 end
 
+# The elements a thread of the columns kernel loads at a time
+const SLICE_COLUMNS_ITEMS = 8
+
+# The elements `load(src[i + j * stride])` for `j` in `0:N-1`
+@inline load_step(src, load, seed, i, stride, ::Val{N}) where {N} =
+    ntuple(j -> lift(seed, load(@inbounds src[i + (j - 1) * stride])), Val(N))
+
+# Combine the elements `xs`, at positions `k` onwards of a slice, into `running` in turn, storing
+# each prefix in `v` unless it is `nothing` (recursing over the tuple keeps it in registers, where
+# a loop indexing it can leave it in a stack slot)
+@inline scan_step!(op, v, index, k, running, inclusive, ::Tuple{}) = running
+@inline function scan_step!(op, v, index, k, running, inclusive, xs::Tuple)
+    isnothing(v) || inclusive || store_partial!(v, index(k), running)
+    running = op(running, first(xs))
+    isnothing(v) || !inclusive || store_partial!(v, index(k), running)
+    return scan_step!(op, v, index, k + 1, running, inclusive, Base.tail(xs))
+end
+
 # One thread per chunk of a slice; thread `t` takes chunk `c` of slice `(i, o)` with
 # `t = i + n_inner * (c + nchunks * o)`, the chunk's position in the array of totals
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_columns_kernel!(
@@ -232,12 +250,23 @@ end
         k1 = min(k0 + chunk_len, len)
 
         running = isnothing(carries) ? start : carries[tid + 1]
+        index = k -> base + k * n_inner + 1
+        # (a thread's loads don't depend on each other, but they are only issued together in
+        # unrolled steps, which load before they store as the scan may be in place. Split slices
+        # take them: a split launches too few threads to hide the latency of one load at a time.
+        # Unsplit slices have enough threads, and there the steps are slower on an RTX 6000 Ada)
+        k = k0
+        while nchunks > 1 && k + (SLICE_COLUMNS_ITEMS - 1) < k1
+            xs = load_step(src, load, seed, index(k), n_inner, Val(SLICE_COLUMNS_ITEMS))
+            running = scan_step!(op, isnothing(totals) ? v : nothing, index, k, running,
+                                 inclusive, xs)
+            k += SLICE_COLUMNS_ITEMS
+        end
         if isnothing(totals)
-            serial_scan!(op, v, src, load, k -> base + k * n_inner + 1, k0:k1 - 1, running, seed,
-                         inclusive)
+            serial_scan!(op, v, src, load, index, k:k1 - 1, running, seed, inclusive)
         else
-            for k in k0:k1 - 1
-                running = op(running, lift(seed, load(src[base + k * n_inner + 1])))
+            for j in k:k1 - 1
+                running = op(running, lift(seed, load(src[index(j)])))
             end
             totals[tid + 1] = running
         end
