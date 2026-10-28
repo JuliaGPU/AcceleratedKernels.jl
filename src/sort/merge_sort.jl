@@ -215,9 +215,9 @@ end
 # GPU merge sort of `v` (or of each slice along `dims`), in place, with the scratch buffers of
 # `sort_plan(::MergeSort, ...)`.
 function merge_sort!(
-    v::AbstractArray, backend::Backend, bufs::NamedTuple, ord::Base.Order.Ordering, by;
+    v::AbstractArray, backend::Backend, bufs::NamedTuple, ord::Base.Order.Ordering, by::B;
     block_size::Int, dims::Union{Colon, Integer},
-)
+) where {B}
     layout = slice_layout(v, dims)
     (isempty(v) || layout.len <= 1) && return v
 
@@ -262,8 +262,8 @@ end
 # GPU merge sort permutation: sorts a copy of the keys, `by.(v)`, carrying the indices along.
 function merge_sortperm!(
     ix::AbstractArray, v::AbstractArray, backend::Backend, bufs::NamedTuple,
-    ord::Base.Order.Ordering, by; block_size::Int, dims::Union{Colon, Integer},
-)
+    ord::Base.Order.Ordering, by::B; block_size::Int, dims::Union{Colon, Integer},
+) where {B}
     layout = slice_layout(v, dims)
 
     # Initialise the linear indices that will be sorted by the keys in v

@@ -76,6 +76,17 @@ end
           sort(vh; by=x -> (x % 2, x))
 end
 
+# Julia does not specialize a method on a function argument that it only passes on, so the
+# methods that take `by` or `lt` name its type. Otherwise they run code compiled for any
+# `Function`, in which the setup infers the type of the keys `by` computes on every call.
+@testset "sort: no inference at run time" begin
+    v = array_from_host(randn(Float32, 1000))
+    for alg in unique([SORT_ALG, sort_alg()])
+        @test warm_compile_time(AK.sort!, v; alg, by=abs) == 0
+        @test warm_compile_time(AK.sort!, reshape(v, 10, :); alg, dims=1, by=abs) == 0
+    end
+end
+
 
 @testset "sort: rejected algorithms" begin
     # The entry points reject what resolution does (see test/algorithms.jl), before sorting

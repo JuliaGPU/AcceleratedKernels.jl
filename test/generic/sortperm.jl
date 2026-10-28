@@ -172,6 +172,16 @@ end
           sortperm(1:1000; by=x -> x % 10)
 end
 
+# As for `sort!` (see "sort: no inference at run time")
+@testset "sortperm: no inference at run time" begin
+    v = array_from_host(randn(Float32, 1000))
+    ix = array_from_host(zeros(Int, 1000))
+    for alg in unique([SORT_ALG, sort_alg()])
+        @test warm_compile_time(AK.sortperm!, ix, v; alg, by=abs) == 0
+        @test warm_compile_time(AK.sortperm!, ix, v; alg, lt=(>)) == 0
+    end
+end
+
 
 @testset "sortperm: dims" begin
     Random.seed!(0)
