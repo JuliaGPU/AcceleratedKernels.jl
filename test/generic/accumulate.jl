@@ -211,7 +211,8 @@ end
     # short slices, or many neighbouring ones) and a block per slice scanning tiles of it, each
     # with the slices whole or (for the largest arrays) split into chunks whose totals are scanned
     # in turn. Tiles of exactly one and two blocks' worth, and one element more, for both block
-    # sizes.
+    # sizes. Slices split into chunks of a length that isn't a multiple of the columns kernel's
+    # step.
     for neutral in (I2, nothing), inclusive in (true, false), block_size in (64, 256)
         S = neutral === nothing ? AK.Optional{Mat2} : Mat2
         tile = !TEST_KERNELS ? 2 * block_size :
@@ -222,7 +223,7 @@ end
                            ((3, tile), 2), ((3, tile + 1), 2), ((3, 2tile), 2), ((2tile + 1, 3), 1),
                            ((32, 20_000), 2), ((64, 3, 500), 2), ((9, 4, 3000), 3), ((3, 70_000), 2),
                            ((8, 6), 2), ((1, 5000, 2), 2), ((3, 200_000), 2), ((600_000, 1), 1),
-                           ((40, 300), 1))
+                           ((40, 300), 1), ((32, 12_345), 2))
             xh = [randmat2() for _ in CartesianIndices(sz)]
             init = randmat2()
             y = array_from_host(xh)
