@@ -84,17 +84,33 @@ resolve_acctype(op, ::Type, ::Type, acctype) =
 # gives the same result as seeding with a neutral element.
 #
 # An unset `Optional` of a bits type (every one kernels see) holds zero bits; one of another type
-# leaves the value undefined, which is how it is recognised.
-struct Optional{T}
+# leaves the value undefined, which is how it is recognised. The flag `F` is `flag_type(T)`.
+struct Optional{T, F}
     value::T
-    isset::Bool
-    Optional{T}() where {T} = isinline(T) ? new{T}(zero_bits(T), false) : new{T}()
-    Optional{T}(value) where {T} = new{T}(value, true)
-    Optional{T}(value, isset::Bool) where {T} = new{T}(value, isset)
+    isset::F
+    Optional{T, F}() where {T, F} = new{T, F}()
+    Optional{T, F}(value, isset::Bool) where {T, F} = new{T, F}(value, isset)
+end
+Optional{T}() where {T} =
+    isinline(T) ? Optional{T, flag_type(T)}(zero_bits(T), false) : Optional{T, flag_type(T)}()
+Optional{T}(value) where {T} = Optional{T, flag_type(T)}(value, true)
+Optional{T}(value, isset::Bool) where {T} = Optional{T, flag_type(T)}(value, isset)
+
+# The flag of an `Optional{T}`: for a bits type, the unsigned integer as wide as `T`'s alignment.
+# A size is a multiple of the alignment, so this flag fills the bytes after the value, which a
+# `Bool` would leave as padding that no store writes. Kernels load whole elements (an
+# `Optional{Float64}` in one 16-byte load) and the host copies them, so they would read that
+# padding (Compute Sanitizer's initcheck reports it). Other types keep a `Bool`.
+@generated function flag_type(::Type{T}) where {T}
+    isbitstype(T) || return Bool
+    for U in (UInt8, UInt16, UInt32, UInt64, UInt128)
+        sizeof(U) == Base.datatype_alignment(T) && return U
+    end
+    return Bool
 end
 
 isinline(::Type{T}) where {T} = isbitstype(T) || Base.isbitsunion(T)
-@inline isset(l::Optional{T}) where {T} = isinline(T) ? l.isset : isdefined(l, :value)
+@inline isset(l::Optional{T}) where {T} = isinline(T) ? !iszero(l.isset) : isdefined(l, :value)
 
 # A value of the bits type or bits union `T` with all-zero bits
 function zero_bits(::Type{T}) where {T}

@@ -945,3 +945,36 @@ end
               mapreduce(code, max, hm; dims)
     end
 end
+
+
+@testset "reduce: partial results without a neutral element" begin
+    # Such partial results are `Optional`s, which kernels load whole and the host copies, so a
+    # partial must hold no bytes that its stores leave unwritten (Compute Sanitizer's initcheck
+    # reports reading them). An `Optional` adds no padding to its value's type.
+    for T in (Bool, Int8, Int32, Float32, Float64, ComplexF32, NTuple{3, Int32},
+              Tuple{Float64, Float64})
+        @test !Base.datatype_haspadding(typeof(AK.reduce_seed((a, b) -> a, T, nothing)))
+    end
+    # Every partial result a reduction stores is written in all its bytes or in none (a slot that
+    # this length leaves unused), whatever its buffer held before
+    if TEST_KERNELS
+        alg = REDUCE_ALG
+        max2(a, b) = max(a, b)
+        pairmax(p, q) = (max(p[1], q[1]), max(p[2], q[2]))
+        h = rand(Float32, 100_000)
+        for (f, op, src, dims) in ((identity, max2, h, :), (identity, max2, h[1:100], :),
+                                   (x -> (x, -x), pairmax, h, :),
+                                   (identity, max2, reshape(h, :, 2), 1))
+            v = array_from_host(src)
+            ws = AK.workspace(AK.mapreduce, f, op, v; dims, alg)
+            p = ws.buffers.partials
+            b0, b1 = map((0x00, 0xff)) do poison
+                fill!(reinterpret(UInt8, vec(p)), poison)
+                AK.mapreduce(f, op, v; dims, alg, workspace=ws)
+                reshape(Array(reinterpret(UInt8, vec(p))), sizeof(eltype(p)), :)
+            end
+            @test all(j -> allequal(b0[:, j] .== b1[:, j]), axes(b0, 2))
+            @test any(j -> b0[:, j] == b1[:, j], axes(b0, 2))
+        end
+    end
+end
