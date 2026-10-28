@@ -165,7 +165,8 @@ complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 function any(pred::F, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing) where {F}
     p = predicate_setup(pred, |, false, v, backend, alg).plan
-    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    # (asserted, as `Auto()` picks a GPU's algorithm from its tuning, which inference does not see)
+    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))::Bool
 end
 
 plan(::typeof(any), pred::F, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) where {F} =
@@ -255,7 +256,7 @@ complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 function all(pred::F, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
              alg::Algorithm=Auto(), workspace=nothing) where {F}
     p = predicate_setup(pred, &, true, v, backend, alg).plan
-    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))::Bool    # (as in `any`)
 end
 
 plan(::typeof(all), pred::F, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) where {F} =

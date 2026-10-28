@@ -22,6 +22,10 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     @test AK.all(x->x>0, v; alg) === true
     @test AK.all(x->x<100, v; alg) === false
 
+    # The result infers, also where `Auto()` picks the algorithm from a GPU's tuning
+    @test @inferred(AK.any(x->x<0, v; alg)) === false
+    @test @inferred(AK.all(x->x>0, v; alg)) === true
+
     for _ in 1:100
         num_elems = rand(1:100_000)
         v = array_from_host(rand(Float32, num_elems))
