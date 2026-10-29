@@ -533,6 +533,15 @@ end
     @test_throws ArgumentError resolve_reduce(AK.Auto(); T=Union{Missing, Int32})
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); T=String)
     @test resolve_reduce(AK.Auto(); T=String, backend=HOST) isa AK.CPUThreads.Partitioned
+
+    # Partial results of an operator without a neutral element are `Optional`s, which kernels load
+    # whole and the host copies: for these types, they have no padding that stores leave unwritten
+    for T in (Bool, Int8, Int32, Float32, Float64, ComplexF32, NTuple{3, Int32},
+              Tuple{Float64, Float64})
+        @test !Base.datatype_haspadding(typeof(AK.reduce_seed((a, b) -> a, T, nothing)))
+    end
+    # (but their flag is no wider than 64 bits, which OpenCL's SPIR-V can't go beyond)
+    @test AK.flag_type(NTuple{4, VecElement{Float32}}) === UInt64
 end
 
 
@@ -594,13 +603,13 @@ end
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); dims=1)
     @test_throws ArgumentError resolve_scan(AK.SliceScan())
 
-    # Tiles of partial results: lanes (a Bool and a value) are wider than elements, so fewer fit.
+    # Tiles of partial results: lanes (a value and a flag) are wider than elements, so fewer fit.
     # NTuple{3, Int32} is 4-byte aligned everywhere, so its lanes take 16 bytes on every platform
     # (Int64 lanes take 12 on 32-bit x86)
     with_tuning(AK.ScanTuning(block_size=256, local_mem_bytes=32 * 1024, max_items=8)) do
         @test resolve_scan(AK.Auto(); T=NTuple{3, Int32}) === AK.ScanPrefixes(256, 8)
         @test AK.resolve_scan(AK.Auto(), FAKE, NTuple{3, Int32}, nothing,
-                              AK.Optional{NTuple{3, Int32}}) === AK.ScanPrefixes(256, 7)
+                              typeof(AK.Optional{NTuple{3, Int32}}())) === AK.ScanPrefixes(256, 7)
     end
 
     # Kernels need a bits-type element
