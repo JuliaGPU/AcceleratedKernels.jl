@@ -67,8 +67,12 @@ isdense_buffer(src, kind::Symbol) = kind === :parent || kind === :source
 # The source of a reduction along `dims` into a single output of a contiguous source, as a
 # linearly indexed collection of its elements for the whole-array kernels (`mapreduce_1d_gpu`):
 # the source itself, or the range of its elements in the dense buffer it wraps, from `offset` on
-linear_source(src, kind::Symbol, offset::Int) =
-    kind === :parent ? view(parent(src), offset + 1:offset + length(src)) : src
+# (that buffer itself where the range covers it: see `mapreduce_1d_view`)
+function linear_source(src, kind::Symbol, offset::Int)
+    kind === :parent || return src
+    p = parent(src)
+    return offset == 0 && length(p) == length(src) ? p : view(p, offset + 1:offset + length(src))
+end
 
 # (the strides of a dense column-major array: 1 and the running products of the sizes)
 dense_strides(sizes::Tuple{}) = ()

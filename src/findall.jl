@@ -257,9 +257,9 @@ function findall(values::AbstractArray; items::AbstractArray=keys(values),
     findall_run(identity, values, items, s, scratch_buffers(s.plan, workspace, values, items))
 end
 
-function findall(pred, v::AbstractArray; items::AbstractArray=keys(v),
+function findall(pred::F, v::AbstractArray; items::AbstractArray=keys(v),
                  backend::Union{Nothing, Backend}=nothing, alg::Algorithm=Auto(),
-                 workspace=nothing)
+                 workspace=nothing) where {F}
     check_bool_result(pred, v)
     s = findall_setup(v, items, true, backend, alg)
     findall_run(pred, v, items, s, scratch_buffers(s.plan, workspace, v, items))
@@ -268,8 +268,8 @@ end
 plan(::typeof(findall), values::AbstractArray; items::AbstractArray=keys(values),
      backend=nothing, alg::Algorithm=Auto()) =
     findall_setup(values, items, false, backend, alg).plan
-plan(::typeof(findall), pred, v::AbstractArray; items::AbstractArray=keys(v), backend=nothing,
-     alg::Algorithm=Auto()) =
+plan(::typeof(findall), pred::F, v::AbstractArray; items::AbstractArray=keys(v),
+     backend=nothing, alg::Algorithm=Auto()) where {F} =
     findall_setup(v, items, true, backend, alg).plan
 
 # The plan of `findall` over `v`: its scratch is a mask of `pred(v[i])` for the predicate form
@@ -291,7 +291,7 @@ function findall_setup(v, items, predicate::Bool, backend, alg)
     return (; plan=Plan(backend, a, merge(mask, counts)))
 end
 
-function findall_run(pred, v, items, s, bufs)
+function findall_run(pred::F, v, items, s, bufs) where {F}
     backend, a = s.plan.backend, s.plan.alg
     bools = if haskey(bufs, :mask)
         findall_mask!(bufs.mask, pred, v, backend, a)

@@ -945,3 +945,31 @@ end
               mapreduce(code, max, hm; dims)
     end
 end
+
+
+# A reduction keeps no reference to its source, so `unsafe_free!` frees the source's memory at
+# once (measured where the backend's pool counts it)
+if @isdefined(CUDACore) && BACKEND isa CUDACore.CUDABackend && CUDACore.used_memory() !== missing
+    @testset "reduce: unsafe_free! of the source" begin
+        for (shape, kw, wrap) in (((1_000_000,), (;), identity),
+                                  ((1000, 1000), (; dims=(1, 2)), identity),
+                                  ((1_000_000,), (; commutative=false), identity),
+                                  ((1_000_000,), (; dims=2), transpose))
+            a = array_from_host(rand(Float32, shape...))
+            # (without a collection in between, which could free a view of `a`, or other arrays)
+            GC.gc()
+            gc_enabled = GC.enable(false)
+            freed = try
+                AK.reduce(+, wrap(a); kw...)
+                CUDACore.synchronize()
+                used = CUDACore.used_memory()
+                CUDACore.unsafe_free!(a)
+                CUDACore.synchronize()
+                used - CUDACore.used_memory()
+            finally
+                GC.enable(gc_enabled)
+            end
+            @test freed >= sizeof(a)
+        end
+    end
+end
