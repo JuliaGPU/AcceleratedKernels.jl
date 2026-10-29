@@ -109,7 +109,7 @@ c = AK.count(CuArray(rand(Bool, 10, 100_000)); init=Int32(0), dims=2)
 ```
 """
 count(src::AbstractArray; kwargs...) = count(identity, src; kwargs...)
-count(f, src::AbstractArray; init=0, kwargs...) =
+count(f::F, src::AbstractArray; init=0, kwargs...) where {F} =
     mapreduce(BoolResult(f), Base.add_sum, src; init, kwargs...)
 
 plan(::typeof(sum), src::AbstractArray; kwargs...) = plan(reduce, Base.add_sum, src; kwargs...)
@@ -117,5 +117,5 @@ plan(::typeof(prod), src::AbstractArray; kwargs...) = plan(reduce, Base.mul_prod
 plan(::typeof(maximum), src::AbstractArray; kwargs...) = plan(reduce, max, src; kwargs...)
 plan(::typeof(minimum), src::AbstractArray; kwargs...) = plan(reduce, min, src; kwargs...)
 plan(::typeof(count), src::AbstractArray; kwargs...) = plan(count, identity, src; kwargs...)
-plan(::typeof(count), f, src::AbstractArray; init=0, kwargs...) =
+plan(::typeof(count), f::F, src::AbstractArray; init=0, kwargs...) where {F} =
     plan(mapreduce, BoolResult(f), Base.add_sum, src; init, kwargs...)

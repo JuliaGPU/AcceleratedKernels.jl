@@ -162,19 +162,20 @@ end
 complex_any(CuArray(rand(Float32, 100)), CuArray(rand(Float32, 100)))
 ```
 """
-function any(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
-             alg::Algorithm=Auto(), workspace=nothing)
+function any(pred::F, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
+             alg::Algorithm=Auto(), workspace=nothing) where {F}
     p = predicate_setup(pred, |, false, v, backend, alg).plan
-    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    # (asserted, as `Auto()` picks a GPU's algorithm from its tuning, which inference does not see)
+    any_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))::Bool
 end
 
-plan(::typeof(any), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+plan(::typeof(any), pred::F, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) where {F} =
     predicate_setup(pred, |, false, v, backend, alg).plan
 
 # The predicate must return a `Bool`, as in Base. Where inference shows it cannot, the call fails
 # on the host, before launching, with an `ArgumentError` instead of an exception from the kernel
 # (which GPU backends report without Base's `TypeError`).
-function check_bool_result(pred, v)
+function check_bool_result(pred::F, v) where {F}
     isempty(v) && return nothing        # (Base never calls the predicate then)
     R = Base.promote_op(pred, eltype(v))
     R === Union{} || Bool <: R || throw(ArgumentError(
@@ -184,7 +185,7 @@ end
 
 # The plan of `any`/`all` (whose `ViaReduce` reduces with `op` from `init`): the flag of
 # `ConcurrentWrite`, or the scratch of the reduction
-function predicate_setup(pred, op, init, v, backend, alg)
+function predicate_setup(pred::F, op::OP, init, v, backend, alg) where {F, OP}
     check_bool_result(pred, v)
     backend = resolve_backend(backend, v)
     a = resolve_predicate(alg, backend, eltype(v))
@@ -199,7 +200,7 @@ function predicate_setup(pred, op, init, v, backend, alg)
     return (; plan=Plan(backend, a, sizes))
 end
 
-function any_run(pred, v, backend, alg::ConcurrentWrite, bufs)
+function any_run(pred::F, v, backend, alg::ConcurrentWrite, bufs) where {F}
     # `ndrange` must not be zero
     isempty(v) && return false
     out = bufs.flag
@@ -208,10 +209,10 @@ function any_run(pred, v, backend, alg::ConcurrentWrite, bufs)
     return @allowscalar(out[1]) != 0
 end
 
-any_run(pred, v, backend, alg::ViaReduce, bufs) =
+any_run(pred::F, v, backend, alg::ViaReduce, bufs) where {F} =
     mapreduce_nested(BoolResult(pred), |, v, bufs.reduce; backend, init=false, alg=alg.reduce)
 
-function any_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs)
+function any_run(pred::F, v, backend, alg::CPUThreads.Partitioned, bufs) where {F}
     found = Threads.Atomic{Bool}(false)
     first_index = firstindex(v)
     task_partition(length(v), alg.max_tasks, alg.min_elems) do irange
@@ -252,17 +253,18 @@ end
 complex_all(MtlArray(rand(Float32, 100)), MtlArray(rand(Float32, 100)))
 ```
 """
-function all(pred, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
-             alg::Algorithm=Auto(), workspace=nothing)
+function all(pred::F, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
+             alg::Algorithm=Auto(), workspace=nothing) where {F}
     p = predicate_setup(pred, &, true, v, backend, alg).plan
-    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))
+    all_run(pred, v, p.backend, p.alg, scratch_buffers(p, workspace, v))::Bool    # (as in `any`)
 end
 
-plan(::typeof(all), pred, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) =
+plan(::typeof(all), pred::F, v::AbstractArray; backend=nothing, alg::Algorithm=Auto()) where {F} =
     predicate_setup(pred, &, true, v, backend, alg).plan
 
-all_run(pred, v, backend, alg::ConcurrentWrite, bufs) = !any_run(!pred, v, backend, alg, bufs)
-all_run(pred, v, backend, alg::ViaReduce, bufs) =
+all_run(pred::F, v, backend, alg::ConcurrentWrite, bufs) where {F} =
+    !any_run(!pred, v, backend, alg, bufs)
+all_run(pred::F, v, backend, alg::ViaReduce, bufs) where {F} =
     mapreduce_nested(BoolResult(pred), &, v, bufs.reduce; backend, init=true, alg=alg.reduce)
-all_run(pred, v, backend, alg::CPUThreads.Partitioned, bufs) =
+all_run(pred::F, v, backend, alg::CPUThreads.Partitioned, bufs) where {F} =
     !any_run(!pred, v, backend, alg, bufs)
