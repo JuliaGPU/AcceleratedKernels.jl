@@ -129,12 +129,14 @@ function check_fields(a::Union{ScanPrefixes, SliceScan})
 end
 
 # The largest number of items per thread whose tile fits the tuning's local-memory budget, next
-# to the block's `block_size` per-thread totals (hence the `- 1`). Types without a definite size
-# and block sizes that `check_scan` rejects get a placeholder.
+# to the block's `block_size` per-thread totals (hence the `- 1`), with the runs padded to
+# `tile_stride`. Types without a definite size and block sizes that `check_scan` rejects get a
+# placeholder.
 function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
-    clamp(t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1,
-          1, max(t.max_items, 1))
+    slots = t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1
+    items = clamp(slots, 1, max(t.max_items, 1))
+    return tile_stride(T, items) <= slots ? items : max(items - 1, 1)
 end
 
 function fill_defaults(a::A, t::ScanTuning,

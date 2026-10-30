@@ -545,6 +545,8 @@ resolve_scan(alg; T=Float32, dims=nothing, backend=FAKE) = AK.resolve_scan(alg, 
     with_tuning(AK.ScanTuning(block_size=256, local_mem_bytes=32 * 1024, max_items=8)) do
         @test resolve_scan(AK.Auto()) === AK.ScanPrefixes(256, 8)
         @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
+        # (4 items would fit, but they are padded to 5)
+        @test resolve_scan(AK.Auto(); T=NTuple{3, Float64}) === AK.ScanPrefixes(256, 3)
         @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
         @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
     end
