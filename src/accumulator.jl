@@ -84,17 +84,33 @@ resolve_acctype(op, ::Type, ::Type, acctype) =
 # gives the same result as seeding with a neutral element.
 #
 # An unset `Optional` of a bits type (every one kernels see) holds zero bits; one of another type
-# leaves the value undefined, which is how it is recognised.
-struct Optional{T}
+# leaves the value undefined, which is how it is recognised. The flag `F` is `flag_type(T)`, or
+# `Bool` on backends whose tuning asks for it (see `with_flag_layout`); kernels take it from the
+# seed, so every `Optional` they make has the seed's type.
+struct Optional{T, F}
     value::T
-    isset::Bool
-    Optional{T}() where {T} = isinline(T) ? new{T}(zero_bits(T), false) : new{T}()
-    Optional{T}(value) where {T} = new{T}(value, true)
-    Optional{T}(value, isset::Bool) where {T} = new{T}(value, isset)
+    isset::F
+    Optional{T, F}() where {T, F} = new{T, F}()
+    Optional{T, F}(value, isset::Bool) where {T, F} = new{T, F}(value, isset)
+end
+Optional{T}() where {T} =
+    isinline(T) ? Optional{T, flag_type(T)}(zero_bits(T), false) : Optional{T, flag_type(T)}()
+Optional{T}(value) where {T} = Optional{T, flag_type(T)}(value, true)
+Optional{T}(value, isset::Bool) where {T} = Optional{T, flag_type(T)}(value, isset)
+
+# The flag of an `Optional{T}`. A `Bool` would leave the bytes up to `T`'s alignment as padding,
+# which stores of an `Optional` don't write but kernels load (partials are loaded whole) and the
+# host copies, so Compute Sanitizer's initcheck reports reading them. For a bits type, the flag is
+# the unsigned integer that fills those bytes, up to 8 of them: OpenCL's SPIR-V has no wider
+# integers, so an `Optional` of a 16-byte aligned type keeps some padding (as does a `T` with
+# padding of its own).
+@generated function flag_type(::Type{T}) where {T}
+    isbitstype(T) || return Bool
+    return (UInt8, UInt16, UInt32, UInt64)[trailing_zeros(min(Base.datatype_alignment(T), 8)) + 1]
 end
 
 isinline(::Type{T}) where {T} = isbitstype(T) || Base.isbitsunion(T)
-@inline isset(l::Optional{T}) where {T} = isinline(T) ? l.isset : isdefined(l, :value)
+@inline isset(l::Optional{T}) where {T} = isinline(T) ? !iszero(l.isset) : isdefined(l, :value)
 
 # A value of the bits type or bits union `T` with all-zero bits
 function zero_bits(::Type{T}) where {T}
@@ -104,20 +120,32 @@ function zero_bits(::Type{T}) where {T}
     return GC.@preserve bytes unsafe_load(Ptr{T}(pointer(bytes)))
 end
 
-struct OptionalMap{F, OP, T}
+# A set `Optional` of the type `S` of another one
+@inline set_like(::Type{S}, value) where {S <: Optional} = S(value, true)
+
+struct OptionalMap{F, OP, S}
     f::F
     op::OP
 end
-OptionalMap{T}(f::F, op::OP) where {T, F, OP} = OptionalMap{F, OP, T}(f, op)
-@inline (m::OptionalMap{F, OP, T})(x) where {F, OP, T} = Optional{T}(Base.mapreduce_first(m.f, m.op, x))
+OptionalMap{S}(f::F, op::OP) where {S, F, OP} = OptionalMap{F, OP, S}(f, op)
+@inline (m::OptionalMap{F, OP, S})(x) where {F, OP, S} =
+    set_like(S, Base.mapreduce_first(m.f, m.op, x))
 
 struct OptionalOp{OP}
     op::OP
 end
-@inline function (o::OptionalOp)(a::Optional{T}, b::Optional{T}) where {T}
-    isset(a) || return b
-    isset(b) || return a
-    return Optional{T}(o.op(a.value, b.value))
+@inline function (o::OptionalOp)(a::S, b::S) where {T, S <: Optional{T}}
+    if !isprimitivetype(T)
+        isset(a) || return b
+        isset(b) || return a
+        return set_like(S, o.op(a.value, b.value))
+    end
+    # One result built from the operands' fields: returning either operand made the compiler
+    # merge the possible results through stack slots. (Only for primitive types: Julia selects
+    # between other values, e.g. tuples, through stack slots too, once per combine.)
+    sa, sb = isset(a), isset(b)
+    value = sa & sb ? convert(T, o.op(a.value, b.value)) : ifelse(sa, a.value, b.value)
+    return S(value, sa | sb)
 end
 
 # The map `f` of a reduction pass whose inputs are already partial results.
@@ -137,7 +165,7 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
 # Kernels call this on the device, so the wrappers never need to be converted for a backend.
 @inline seeded_ops(f, op, seed::A) where {A} = (f, AccOp{A}(op))
 @inline seeded_ops(::PartialInputs, op, seed::A) where {A} = (identity, AccOp{A}(op))
-@inline seeded_ops(f, op, ::Optional{T}) where {T} = (OptionalMap{T}(f, op), OptionalOp(op))
+@inline seeded_ops(f, op, seed::Optional) = (OptionalMap{typeof(seed)}(f, op), OptionalOp(op))
 @inline seeded_ops(::PartialInputs, op, ::Optional) = (identity, OptionalOp(op))
 
 @inline unwrap(x) = x
@@ -147,8 +175,8 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
 # representation with `lift` (partials pass through), and a partial is stored in an array of
 # element type `E` with `lower` (as an `Optional` only in arrays of them).
 @inline lift(seed, x) = x
-@inline lift(::Optional{T}, x) where {T} = Optional{T}(x)
-@inline lift(::Optional{T}, x::Optional{T}) where {T} = x
+@inline lift(seed::Optional, x) = set_like(typeof(seed), x)
+@inline lift(::S, x::S) where {S <: Optional} = x
 @inline lower(::Type{E}, p) where {E} = unwrap(p)
 @inline lower(::Type{E}, p) where {E <: Optional} = p
 
@@ -160,6 +188,22 @@ AccOp{A}(op::OP) where {A, OP} = AccOp{A, OP}(op)
     end
     return nothing
 end
+
+# Run `body(seed, bufs)` with the flag layout of `Optional` partials that the backend's tuning
+# (`hook`) asks for. Plans size the buffers of partials as `typeof(seed)`, with the flag of
+# `flag_type`, so that plans and workspaces don't depend on the tuning; with a `Bool` flag (of
+# the same size), `body` gets the seed and those buffers in that layout. Either way it returns
+# the same type.
+@inline function with_flag_layout(body::B, seed, bufs, hook, backend, ::Type{A}) where {B, A}
+    seed isa Optional && !tuning(hook, backend, A).wide_optional_flag || return body(seed, bufs)
+    return body(bool_flag(seed), bool_flag(bufs))
+end
+bool_flag(x) = x
+bool_flag(x::Optional{T, Bool}) where {T} = x
+bool_flag(x::Optional{T}) where {T} = Optional{T, Bool}(x.value, isset(x))
+bool_flag(bufs::NamedTuple) = Base.map(bool_flag, bufs)
+bool_flag(b::AbstractArray{Optional{T, Bool}}) where {T} = b
+bool_flag(b::AbstractArray{Optional{T, F}}) where {T, F} = reinterpret(Optional{T, Bool}, b)
 
 # The seed of every partial result with accumulator type `A`: the caller's `neutral`, else
 # GPUArraysCore's neutral element for `op` when it has one, else an unset `Optional`. A seed that

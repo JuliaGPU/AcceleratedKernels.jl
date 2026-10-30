@@ -3,11 +3,27 @@ module OpenCLExt
 using OpenCL
 import AcceleratedKernels as AK
 
-# CPU devices (e.g. PoCL) get the tunings of the host backend's kernels
-AK.reduce_tuning(::OpenCLBackend, ::Type) =
-    cl.device().device_type === :cpu ? AK.cpu_reduce_tuning() : AK.ReduceTuning()
-AK.scan_tuning(::OpenCLBackend, ::Type) =
-    cl.device().device_type === :cpu ? AK.cpu_scan_tuning() : AK.ScanTuning()
+# CPU devices (e.g. PoCL) get the tunings of the host backend's kernels.
+#
+# Partial results flag whether they are set with a `Bool` on PoCL: with the wider flag, its
+# work-group vectorizer accesses partials in local memory with AVX-512 gathers and scatters, and
+# scans of 10^4 to 10^7 Float32s without a neutral element take 1.0-1.4x as long. Other drivers
+# keep the wider flag. Intel's CPU runtime (2026.21) vectorizes those accesses with gathers too,
+# but scans along `dims=1` of Float32 matrices take 0.81-0.85x the time they take with a `Bool`
+# (0.98-1.3x along `dims=2` of 8-row matrices), and it crashes compiling `accumulate!` with one.
+# On an Arc A770, scans take 0.73-1.0x as long with the wider flag; NVIDIA's runtime runs both
+# alike.
+is_pocl(dev::cl.Device) = dev.platform.name == "Portable Computing Language"
+function AK.reduce_tuning(::OpenCLBackend, ::Type)
+    dev = cl.device()
+    dev.device_type === :cpu || return AK.ReduceTuning()
+    return AK.cpu_reduce_tuning(wide_optional_flag=!is_pocl(dev))
+end
+function AK.scan_tuning(::OpenCLBackend, ::Type)
+    dev = cl.device()
+    dev.device_type === :cpu || return AK.ScanTuning()
+    return AK.cpu_scan_tuning(wide_optional_flag=!is_pocl(dev))
+end
 
 # Sorting random keys with PoCL on a Ryzen 9 9950X. `BitonicSort` sorts whole arrays of up to 128
 # elements 1.4-1.9x faster than `MergeSort`, and slices of up to 1024 elements along `dims`

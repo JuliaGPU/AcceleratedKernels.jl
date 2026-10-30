@@ -161,9 +161,13 @@ end
 
 # Scan `src` into `v` (which may be `src`), as set up by `scan_setup`, with the plan's
 # scratch buffers `bufs`
-function scan_run!(op, v, src, s, bufs)
+scan_run!(op, v, src, s, bufs) =
+    with_flag_layout(s.seed, bufs, scan_tuning, s.plan.backend, unval(s.A)) do seed, bufs
+        scan_run!(op, v, src, s, bufs, seed)
+    end
+function scan_run!(op, v, src, s, bufs, seed)
     backend, a = s.plan.backend, s.plan.alg
-    init, seed, dims, inclusive = s.init, s.seed, s.dims, s.inclusive
+    init, dims, inclusive = s.init, s.dims, s.inclusive
     A = unval(s.A)
 
     # As Base, scan in the accumulator type and convert to `v`'s element type only when storing:
