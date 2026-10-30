@@ -115,9 +115,17 @@ struct OptionalOp{OP}
     op::OP
 end
 @inline function (o::OptionalOp)(a::Optional{T}, b::Optional{T}) where {T}
-    isset(a) || return b
-    isset(b) || return a
-    return Optional{T}(o.op(a.value, b.value))
+    if !isprimitivetype(T)
+        isset(a) || return b
+        isset(b) || return a
+        return Optional{T}(o.op(a.value, b.value))
+    end
+    # One result built from the operands' fields: returning either operand made the compiler
+    # merge the possible results through stack slots. (Only for primitive types: Julia selects
+    # between other values, e.g. tuples, through stack slots too, once per combine.)
+    sa, sb = isset(a), isset(b)
+    value = sa & sb ? convert(T, o.op(a.value, b.value)) : ifelse(sa, a.value, b.value)
+    return Optional{T}(value, sa | sb)
 end
 
 # The map `f` of a reduction pass whose inputs are already partial results.
