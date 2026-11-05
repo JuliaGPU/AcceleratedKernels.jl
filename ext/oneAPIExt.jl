@@ -3,6 +3,7 @@ module oneAPIExt
 
 using oneAPI
 import AcceleratedKernels as AK
+using PrecompileTools: @setup_workload, @compile_workload
 
 
 # Some Intel GPUs (reportedly Intel UHD Graphics) hang when many threads write one global location,
@@ -27,6 +28,31 @@ AK.sort_tuning(::oneAPIBackend, ::Type{T}) where {T} =
     AK.SortTuning(bitonic_max_len=128, radix_min_len=1 << 21, bitonic_max_slice_len=128,
                   radix_min_slice_len=1 << 15) :
     AK.SortTuning(bitonic_max_len=128, bitonic_max_slice_len=128)
+
+
+# oneAPI's own workload can't cache these operations: this extension isn't loaded while oneAPI
+# precompiles, so the kernels it would compile use the default tunings, not the ones above. The
+# sizes are large enough for the kernels that arrays of millions of elements use. Before Julia
+# 1.12, compiling GPU code while precompiling can leak device code into the image.
+@static if VERSION >= v"1.12-"
+@setup_workload begin
+    # (`can_precompile` checks that the GPU can be used while precompiling)
+    if isdefined(oneAPI, :can_precompile) && oneAPI.can_precompile()
+        @compile_workload begin
+            m = oneArray(ones(Float32, 4096, 64))
+            v = vec(m)
+            sum(v)
+            sum(m; dims=1)
+            sum(m; dims=2)
+            cumsum(v)
+            any(iszero, v)
+            all(iszero, v)
+            sum(oneArray(ones(Int, 4096)))
+            oneAPI.synchronize()
+        end
+    end
+end
+end
 
 
 end   # module oneAPIExt
