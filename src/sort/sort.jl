@@ -59,12 +59,12 @@ function sort!(
     backend::Union{Nothing, Backend}=nothing,
     alg::Algorithm=Auto(),
     dims::Union{Colon, Integer}=Colon(),
-    lt=isless,
-    by=identity,
+    lt::L=isless,
+    by::B=identity,
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
-)
+) where {L, B}
     s = sort_setup(v; backend, alg, dims, lt, by, rev, order)
     p = s.plan
     sort_run!(p.alg, one_based(v), p.backend, dims, s.ord, by, scratch_buffers(p, workspace, v))
@@ -75,9 +75,9 @@ plan(::typeof(sort!), v::AbstractArray; kwargs...) = sort_setup(v; kwargs...).pl
 
 function sort_setup(
     v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
-    lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+    lt::L=isless, by::B=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
-)
+) where {L, B}
     backend = resolve_backend(backend, v)
     v = one_based(v)
     ord = sort_ordering(lt, by, rev, order)
@@ -93,7 +93,7 @@ end
 # need them, so that its plans infer: the swap buffer of the global passes, or the keys `by`
 # computes, sorted carrying the elements along. A zero-dimensional array, whose one element needs
 # no sorting, has no empty buffers of its shape, and gets none.)
-function sort_plan(a::MergeSort, v, backend, dims, by)
+function sort_plan(a::MergeSort, v, backend, dims, by::B) where {B}
     ndims(v) == 0 && return Plan(backend, a, (;))
     len = slice_layout(v, dims).len
     if by !== identity
@@ -111,12 +111,12 @@ sort_plan(a::CPUThreads.SampleSort, v, backend, dims, by) =
 
 # The ordering of the sorting keywords, as `Base.Order.ord` makes it but with a `by` always
 # outermost, so that MergeSort can sort the keys `by.(v)` under `ord.order` instead
-function sort_ordering(lt, by, rev, order)
+function sort_ordering(lt::L, by::B, rev, order) where {L, B}
     ord = Base.Order.ord(lt, identity, rev, order)
     return by === identity ? ord : Base.Order.By(by, ord)
 end
 
-function sort_run!(a::MergeSort, v, backend, dims, ord, by, bufs)
+function sort_run!(a::MergeSort, v, backend, dims, ord, by::B, bufs) where {B}
     merge_sort!(v, backend, bufs, ord, by; block_size=a.block_size, dims)
 end
 
@@ -189,12 +189,12 @@ function sortperm!(
     backend::Union{Nothing, Backend}=nothing,
     alg::Algorithm=Auto(),
     dims::Union{Colon, Integer}=Colon(),
-    lt=isless,
-    by=identity,
+    lt::L=isless,
+    by::B=identity,
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
-)
+) where {L, B}
     check_sortperm_shape(ix, v, dims)
     sortperm_unchecked!(ix, v; backend, alg, dims, lt, by, rev, order, workspace)
 end
@@ -215,9 +215,10 @@ end
 
 # `sortperm!` without the check of `ix`'s shape
 function sortperm_unchecked!(ix, v; backend=nothing, alg::Algorithm=Auto(),
-                             dims::Union{Colon, Integer}=Colon(), lt=isless, by=identity,
+                             dims::Union{Colon, Integer}=Colon(), lt::L=isless, by::B=identity,
                              rev::Union{Nothing, Bool}=nothing,
-                             order::Base.Order.Ordering=Base.Order.Forward, workspace=nothing)
+                             order::Base.Order.Ordering=Base.Order.Forward,
+                             workspace=nothing) where {L, B}
     s = sortperm_setup(ix, v; backend, alg, dims, lt, by, rev, order)
     p = s.plan
     bufs = scratch_buffers(p, workspace, ix, v)
@@ -236,9 +237,9 @@ end
 
 function sortperm_setup(
     ix, v; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
-    lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+    lt::L=isless, by::B=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
-)
+) where {L, B}
     backend = resolve_backend(backend, ix, v)
     ix, v = one_based(ix), one_based(v)
     ord = sort_ordering(lt, by, rev, order)
@@ -248,7 +249,7 @@ function sortperm_setup(
 end
 
 # The scratch of `sortperm!` with each algorithm
-function sortperm_scratch(a::MergeSort, ix, v, dims, by)
+function sortperm_scratch(a::MergeSort, ix, v, dims, by::B) where {B}
     (ndims(ix) == 0 || ndims(v) == 0) && return (;)
     len = slice_layout(v, dims).len
     merges = len > 2 * a.block_size
@@ -265,7 +266,7 @@ end
 sortperm_scratch(a::CPUThreads.SampleSort, ix, v, dims, by) =
     dims isa Colon ? sample_sort_scratch(a, eltype(ix), length(ix)) : (;)
 
-function sortperm_run!(a::MergeSort, ix, v, backend, dims, ord, by, bufs)
+function sortperm_run!(a::MergeSort, ix, v, backend, dims, ord, by::B, bufs) where {B}
     if a.lowmem
         merge_sortperm_lowmem!(ix, v, backend, bufs, ord; block_size=a.block_size, dims)
     else
@@ -347,12 +348,12 @@ function sort_by_key!(
     backend::Union{Nothing, Backend}=nothing,
     alg::Algorithm=Auto(),
     dims::Union{Colon, Integer}=Colon(),
-    lt=isless,
-    by=identity,
+    lt::L=isless,
+    by::B=identity,
     rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
     workspace=nothing,
-)
+) where {L, B}
     s = sort_by_key_setup(keys, values; backend, alg, dims, lt, by, rev, order)
     p = s.plan
     sort_by_key_run!(p.alg, one_based(keys), one_based(values), p.backend, dims, s.ord,
@@ -365,9 +366,9 @@ plan(::typeof(sort_by_key!), keys::AbstractArray, values::AbstractArray; kwargs.
 
 function sort_by_key_setup(
     keys, values; backend=nothing, alg::Algorithm=Auto(), dims::Union{Colon, Integer}=Colon(),
-    lt=isless, by=identity, rev::Union{Nothing, Bool}=nothing,
+    lt::L=isless, by::B=identity, rev::Union{Nothing, Bool}=nothing,
     order::Base.Order.Ordering=Base.Order.Forward,
-)
+) where {L, B}
     backend = resolve_backend(backend, keys, values)
     ord = sort_ordering(lt, by, rev, order)
     if dims isa Colon

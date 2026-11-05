@@ -16,6 +16,22 @@ end
 with_workspace(op, args...; kwargs...) =
     op(args...; kwargs..., workspace=AK.workspace(op, args...; kwargs...))
 
+# The compilation time of the fastest of a few warm calls by dynamic dispatch (other tasks may
+# compile once; an inferred caller could inline past the entry point)
+function warm_compile_time(f, args...; kwargs...)
+    invokelatest(f, args...; kwargs...)
+    minimum(1:3) do _
+        Base.cumulative_compile_timing(true)
+        try
+            t = Base.cumulative_compile_time_ns()[1]
+            invokelatest(f, args...; kwargs...)
+            Base.cumulative_compile_time_ns()[1] - t
+        finally
+            Base.cumulative_compile_timing(false)
+        end
+    end
+end
+
 # The algorithms of tests that do not choose one: `Auto()`, except where `HOST_KERNELS`, whose
 # point is to run AK's kernels on the host backend, on which `Auto()` picks the threaded algorithms
 default_alg(kernel_alg) = HOST_KERNELS ? kernel_alg : AK.Auto()
