@@ -933,10 +933,9 @@ end
         @test Array(AK.reduce(+, rr; dims, alg)) == sum(hrr; dims)
     end
 
-    # A source of a bits-union element type, with every kernel shape (where the backend's arrays
-    # can hold one)
+    # A source of a bits-union element type, with every kernel shape
     code(x) = x === missing ? 0x01 : x ? 0x02 : 0x00
-    TEST_BITS_UNIONS && for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
+    for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
                           ((20_000, 2), (1, 2)), ((5, 3), 3))
         hm = rand([true, false, missing], shape...)
         dm = array_from_host(hm)

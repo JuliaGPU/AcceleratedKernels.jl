@@ -67,15 +67,13 @@ HOST_KERNELS || pushfirst!(PRED_ALGS, AK.Auto())
     @test AK.any(x -> x > 8, vr; alg) === any(x -> x > 8, vec(view(hr, 1:40, 1:30)))
     @test AK.all(x -> x < 10, vr; alg) === true
 
-    # A source of a bits-union element type (where the backend's arrays can hold one)
-    if TEST_BITS_UNIONS
-        hm = rand([true, false, missing], 10_000)
-        dm = array_from_host(hm)
-        @test AK.any(ismissing, dm; alg) === true
-        @test AK.all(x -> x !== true, dm; alg) === false
-        @test AK.any(x -> x === true, array_from_host(Union{Missing, Bool}[missing, false]); alg) ===
-              false
-    end
+    # A source of a bits-union element type
+    hm = rand([true, false, missing], 10_000)
+    dm = array_from_host(hm)
+    @test AK.any(ismissing, dm; alg) === true
+    @test AK.all(x -> x !== true, dm; alg) === false
+    @test AK.any(x -> x === true, array_from_host(Union{Missing, Bool}[missing, false]); alg) ===
+          false
 
     # Test that undefined kwargs are not accepted
     @test_throws MethodError AK.any(x->x<0, v; alg, bad=:kwarg)

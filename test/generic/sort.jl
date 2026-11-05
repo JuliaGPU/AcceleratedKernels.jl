@@ -417,10 +417,9 @@ end
 end
 
 
-if TEST_KERNELS && TEST_BITS_UNIONS
+if TEST_KERNELS
 @testset "sort: bits-union elements" begin
-    # Merge sort's kernels read such elements through `@Const` (where the backend's arrays can
-    # hold them)
+    # Merge sort's kernels read such elements through `@Const`
     Random.seed!(0)
     h = rand(Union{Missing, Int32}[missing, 1, 2, 3], 3000)
     @test isequal(Array(AK.sort!(array_from_host(h); alg=AK.MergeSort())), sort(h))

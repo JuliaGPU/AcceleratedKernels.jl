@@ -66,10 +66,6 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
 # The element types the backend supports
 valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
 
-# Whether the backend's arrays can hold bits unions such as `Union{Missing, Bool}` (Metal.jl's,
-# oneAPI.jl's and OpenCL.jl's cannot yet)
-const TEST_BITS_UNIONS = nameof(typeof(BACKEND)) ∉ (:MetalBackend, :oneAPIBackend, :OpenCLBackend)
-
 using Adapt: Adapt, adapt
 
 # An array whose axes start at `1 + offsets[d]`, like an `OffsetArray`
