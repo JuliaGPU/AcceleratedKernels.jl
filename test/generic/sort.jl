@@ -417,15 +417,19 @@ end
 end
 
 
-if TEST_KERNELS
 @testset "sort: bits-union elements" begin
-    # Merge sort's kernels read such elements through `@Const`
+    # Merge sort's kernels read such elements through `@Const`; on the host, a sort in one task
+    # is Base's, with the plan's scratch
     Random.seed!(0)
-    h = rand(Union{Missing, Int32}[missing, 1, 2, 3], 3000)
-    @test isequal(Array(AK.sort!(array_from_host(h); alg=AK.MergeSort())), sort(h))
-    k = rand(Int32(1):Int32(50), 3000)
-    kd, vd = array_from_host(k), array_from_host(h)
-    AK.sort_by_key!(kd, vd; alg=AK.MergeSort())
-    @test Array(kd) == sort(k) && isequal(Array(vd), h[sortperm(k)])
-end
+    alg = sort_alg(; max_tasks=1)
+    for h in (rand(Union{Missing, Int32}[missing, 1, 2, 3], 3000), some_missing(3000),
+              mixed_numbers(3000))
+        @test isequal(Array(AK.sort!(array_from_host(h); alg)), sort(h))
+        @test isequal(Array(AK.sort!(array_from_host(h); rev=true, alg)), sort(h; rev=true))
+        @test Array(AK.sortperm(array_from_host(h); alg)) == sortperm(h)
+        k = rand(Int32(1):Int32(50), 3000)
+        kd, vd = array_from_host(k), array_from_host(h)
+        AK.sort_by_key!(kd, vd; alg)
+        @test Array(kd) == sort(k) && isequal(Array(vd), h[sortperm(k)])
+    end
 end

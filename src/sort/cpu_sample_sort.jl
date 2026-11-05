@@ -147,8 +147,11 @@ function sample_sort!(v::AbstractArray, ord::Base.Order.Ordering; max_tasks, min
     end
     max_tasks = min(max_tasks, num_elements ÷ min_elems)
     if max_tasks <= 1 || num_elements < oversampling_factor * max_tasks
-        # `temp` (a workspace's) is Base's scratch then
-        return temp isa Vector{eltype(v)} && length(temp) >= num_elements ?
+        # `temp` (a workspace's) is Base's scratch then, except for elements of a bits union:
+        # Base's radix sort of their values without `missing` reinterprets the scratch, which
+        # fails for a union
+        return temp isa Vector{eltype(v)} && !Base.isbitsunion(eltype(v)) &&
+               length(temp) >= num_elements ?
             Base.sort!(v; order=ord, scratch=temp) : Base.sort!(v; order=ord)
     end
 
