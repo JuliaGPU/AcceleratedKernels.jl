@@ -2,6 +2,7 @@ module MetalExt
 
 using Metal
 import AcceleratedKernels as AK
+using PrecompileTools: @setup_workload, @compile_workload
 
 # Scan tiles fit half of the 32 KiB of threadgroup memory. Metal's shader validation doubles every
 # kernel's threadgroup memory, so larger tiles can't run under it, and they aren't faster: on an
@@ -30,5 +31,32 @@ AK.sort_tuning(::MetalBackend, ::Type{T}) where {T} =
     AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 17, bitonic_max_slice_len=1024,
                   radix_min_slice_len=1 << 15) :
     AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 18, bitonic_max_slice_len=1024)
+
+
+# Metal's own workload can't cache AcceleratedKernels' operations as they run with the tunings
+# above: this extension isn't loaded while Metal precompiles, so the kernels compiled there use
+# the default tunings. Before Julia 1.11, GPU code cached in a package image shadows the host
+# versions of the methods it shares with host code (see Metal's workload).
+@static if VERSION >= v"1.11"
+@setup_workload begin
+    # only when Metal's own workload launches kernels too (older versions of Metal can't tell,
+    # and implement some of these operations differently, so skip the workload there)
+    can_launch = isdefined(Metal, :can_precompile_launches) && Metal.can_precompile_launches()
+    @compile_workload if can_launch
+        # the vector spans several blocks, so that whole-array reductions take both passes, and
+        # the matrix is large enough for the kernels that reduce large matrices along dims
+        let m = MtlArray(ones(Float32, 256, 32)), v = vec(m)
+            sum(v)
+            sum(m; dims=1)
+            sum(m; dims=2)
+            cumsum(v)
+            any(iszero, v)
+            all(iszero, v)
+        end
+        sum(MtlArray(ones(Int, 1024)))
+        synchronize()
+    end
+end
+end
 
 end
