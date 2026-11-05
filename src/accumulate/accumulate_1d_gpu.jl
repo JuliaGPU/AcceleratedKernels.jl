@@ -14,7 +14,7 @@
     # `block_size` is a power of two.
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (tile_length(typeof(seed), block_size, ITEMS),)
-    thread_totals = @localmem typeof(seed) (block_size,)
+    sdata = @localmem typeof(seed) (block_slots(block_size, subgroups),)
     _, op = seeded_ops(PartialInputs(), op, seed)
 
     # Internal indices are zero-based; add one only when indexing arrays.
@@ -28,10 +28,10 @@
     @synchronize()
 
     # Scan each thread's run, then the runs' totals from the block's start
-    thread_scan!(op, tile, thread_totals, seed, ithread, Val(ITEMS))
+    thread_total = thread_scan!(op, tile, seed, ithread, Val(ITEMS))
     block_start = iblock == 0x0 ? start : isnothing(tile_prefixes) ? seed : tile_prefixes[iblock]
-    thread_prefix, block_total = block_exclusive_scan!(
-        @context, op, thread_totals, block_start, block_size, ithread, subgroups,
+    thread_prefix, block_total = block_exclusive_scan(
+        @context, op, sdata, thread_total, block_start, block_size, ithread, subgroups,
     )
     tile_prefix!(op, tile, thread_prefix, nothing, seed, inclusive, ithread, Val(ITEMS))
     @synchronize()
@@ -51,7 +51,7 @@ end
 ) where ITEMS
     seed, start = kernel_value(seed), kernel_value(start)
     @uniform block_size = @groupsize()[1]
-    thread_totals = @localmem typeof(seed) (block_size,)
+    sdata = @localmem typeof(seed) (block_slots(block_size, subgroups),)
     _, op = seeded_ops(PartialInputs(), op, seed)
 
     len = length(src)
@@ -68,11 +68,9 @@ end
         end
         k += 1
     end
-    thread_totals[ithread + 0x1] = acc
 
-    _, block_total = block_exclusive_scan!(
-        @context, op, thread_totals, iblock == 0x0 ? start : seed, block_size, ithread,
-        subgroups,
+    _, block_total = block_exclusive_scan(
+        @context, op, sdata, acc, iblock == 0x0 ? start : seed, block_size, ithread, subgroups,
     )
     if ithread == 0x0
         totals[iblock + 0x1] = block_total

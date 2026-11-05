@@ -264,6 +264,46 @@ end
 end
 
 
+# CPU devices scan without sub-groups (`cpu_scan_tuning`), so on the host backend the tuning
+# turns them on, to check the sub-group block scans under PoCL, which runs sub-group operations
+# as barriers of the whole block: whole arrays reduced or scanned first (`reduce_then_scan`),
+# slices of a block each over several tiles, split or not, and `findall`'s compaction; with and
+# without a neutral element, and in element order
+function subgroup_scans()
+    for reduce_then_scan in (true, false)
+        @eval AK.scan_tuning(::typeof(BACKEND), ::Type) =
+            AK.ScanTuning(; subgroups=true, reduce_then_scan=$reduce_then_scan)
+        Base.invokelatest() do
+            @test AK.scan_subgroup_width(BACKEND, Int32, 256) !== Val(0)
+            for (sz, dims) in (((100_000,), nothing), ((3, 6200), 2), ((3, 70_000), 2))
+                xh = rand(Int32(-9):Int32(9), sz...)
+                alg = dims === nothing ? scan_alg() : slice_alg()
+                for op in (+, (a, b) -> a + b)
+                    res = AK.accumulate(op, array_from_host(xh); dims, alg)
+                    @test Array(res) == accumulate(+, xh; dims=something(dims, 1))
+                end
+                mh = [randmat2() for _ in CartesianIndices(sz)]
+                res = AK.accumulate(matmul2, array_from_host(mh); dims, alg)
+                @test Array(res) == scan_reference(mh, something(dims, 1); init=I2,
+                                                   inclusive=true)
+            end
+            xh = rand(Int32(-9):Int32(9), 100_000)
+            @test Array(AK.findall(>(0), array_from_host(xh); alg=FINDALL_ALG)) ==
+                  findall(>(0), xh)
+        end
+    end
+end
+if HOST_KERNELS
+    @testset "accumulate: sub-groups on the host backend" begin
+        try
+            subgroup_scans()
+        finally
+            @eval AK.scan_tuning(::typeof(BACKEND), ::Type) = AK.cpu_scan_tuning()
+        end
+    end
+end
+
+
 if TEST_KERNELS
 @testset "accumulate: dims, tiles of one element" begin
     # Tiles of a single element: splitting a slice still shortens it

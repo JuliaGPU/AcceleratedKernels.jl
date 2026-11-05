@@ -256,7 +256,7 @@ end
     seed, start = kernel_value(seed), kernel_value(start)
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (tile_length(typeof(seed), block_size, ITEMS),)
-    thread_totals = @localmem typeof(seed) (block_size,)
+    sdata = @localmem typeof(seed) (block_slots(block_size, subgroups),)
     _, op = seeded_ops(PartialInputs(), op, seed)
 
     iblock = @index(Group, Linear) - 1
@@ -280,9 +280,9 @@ end
         # (the carry is combined with each prefix last, as in a sequential scan from the carry
         # it would be first: a floating-point prefix then rounds at its own magnitude, not at
         # the carry's)
-        thread_scan!(op, tile, thread_totals, seed, ithread, Val(ITEMS))
-        thread_prefix, block_total = block_exclusive_scan!(
-            @context, op, thread_totals, seed, block_size, ithread, subgroups,
+        thread_total = thread_scan!(op, tile, seed, ithread, Val(ITEMS))
+        thread_prefix, block_total = block_exclusive_scan(
+            @context, op, sdata, thread_total, seed, block_size, ithread, subgroups,
         )
         if isnothing(totals)
             tile_prefix!(op, tile, thread_prefix, running, seed, inclusive, ithread, Val(ITEMS))
