@@ -124,6 +124,7 @@ function launch_ordered!(
                   seed, Unfinished(), base_offset, outer_strides, outer_sizes,
                   reduce_strides, reduce_sizes, output_size, reduce_size, groups;
                   dense_buffer)
-    combine_groups!(backend, partials, dst, op, seed, init, output_size, groups, true)
+    combine_groups!(backend, partials, dst, op, seed, init, output_size, groups, true,
+                    block_size)
     return nothing
 end

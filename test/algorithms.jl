@@ -479,6 +479,31 @@ end
 end
 
 
+@testset "reduce resolution: local memory" begin
+    # An unset block size is the largest power of two up to the tuning's whose partial results,
+    # of type `S`, fit the tuning's local memory; an explicit one is kept
+    with_tuning(AK.ReduceTuning(block_size=512, local_mem_bytes=32 * 1024)) do
+        for (S, block_size) in ((Float32, 512), (NTuple{16, Float64}, 256),
+                                (NTuple{17, Float64}, 128), (NTuple{81, Float64}, 32),
+                                (NTuple{4096, Float64}, 1), (NTuple{8192, Float64}, 1))
+            for dims in (:, 1)
+                @test AK.resolve_reduce(AK.Auto(), FAKE, Float32, dims, S).block_size ==
+                      block_size
+            end
+        end
+        # (an `Optional` partial result of an operator without a neutral element is larger)
+        @test resolve_reduce(AK.Auto(); T=NTuple{16, Float64}).block_size == 256
+        @test AK.resolve_reduce(AK.Auto(), FAKE, NTuple{16, Float64}, :,
+                                typeof(AK.Optional{NTuple{16, Float64}}())).block_size == 128
+        @test AK.resolve_reduce(AK.BlockReduce(block_size=512), FAKE, Float32, :,
+                                NTuple{81, Float64}).block_size == 512
+    end
+    with_tuning(AK.ReduceTuning(block_size=512, local_mem_bytes=64 * 1024)) do
+        @test resolve_reduce(AK.Auto(); T=NTuple{17, Float64}).block_size == 256
+    end
+end
+
+
 @testset "reduce resolution: tuning values" begin
     # A tuning cannot make a reduction launch nothing
     with_tuning(AK.ReduceTuning(target_blocks=0)) do

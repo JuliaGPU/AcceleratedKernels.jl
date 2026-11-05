@@ -35,6 +35,9 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields;
   `items_per_thread=nothing` chooses it by the size of the accumulator type, enough elements for
   64 bytes, from 4 to 16.
+- `local_mem_bytes`: the kernels hold a partial result per thread in local memory, so an unset
+  `block_size` is lowered, to a power of two, until a block's partial results fit in this many
+  bytes; an explicit `block_size` is kept.
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.
@@ -63,6 +66,7 @@ Base.@kwdef struct ReduceTuning
     block_size::Int = 256
     items_per_thread::Union{Nothing, Int} = nothing
     switch_below::Int = 0
+    local_mem_bytes::Int = LOCAL_MEMORY_BUDGET
     target_blocks::Int = 256
     columns_split_min_elems::Int = 1 << 18
     threads_min_elems::Int = 1
@@ -99,13 +103,15 @@ default_items_per_thread(::Type{T}) where {T} =
 iswhole(dims) = dims === nothing || dims isa Colon
 
 """
-    resolve_reduce(alg, backend, T, dims) -> Algorithm
+    resolve_reduce(alg, backend, T, dims, S=T) -> Algorithm
 
 Resolve `alg` for a reduction with accumulator type `T` along `dims` (`nothing` or `:` for a
-whole-array reduction) on `backend`. Returns `BlockReduce` or `CPUThreads.Partitioned` with every
-field set, or throws an `ArgumentError`.
+whole-array reduction) on `backend`, whose kernels hold partial results of type `S` in local
+memory (an `Optional` when the operator has no known neutral element). Returns `BlockReduce` or
+`CPUThreads.Partitioned` with every field set, or throws an `ArgumentError`.
 """
-function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where {T}
+function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims,
+                        ::Type{S}=T) where {T, S}
     if alg isa BlockReduce && !iswhole(dims) &&
        (alg.items_per_thread !== nothing || alg.switch_below !== nothing)
         throw(ArgumentError("BlockReduce: `items_per_thread` and `switch_below` only apply to " *
@@ -113,7 +119,7 @@ function resolve_reduce(alg::Algorithm, backend::Backend, ::Type{T}, dims) where
     end
     t = tuning(reduce_tuning, backend, T)
     a = alg isa Auto ? select_reduce(backend) : alg
-    a = fill_defaults(a, t, T)
+    a = fill_defaults(a, t, T, S)
     check_reduce(a, backend, T, dims)
     a isa BlockReduce && t.target_blocks < 1 && throw(ArgumentError(
         "the reduction tuning's `target_blocks` must be positive, got $(t.target_blocks)"))
@@ -130,13 +136,20 @@ function check_fields(a::BlockReduce)
     nothing
 end
 
-fill_defaults(a::BlockReduce, t::ReduceTuning, T) =
-    BlockReduce(something(a.block_size, t.block_size),
+fill_defaults(a::BlockReduce, t::ReduceTuning, T, S) =
+    BlockReduce(something(a.block_size, default_block_size(t, S)),
                 something(a.items_per_thread, t.items_per_thread, default_items_per_thread(T)),
                 something(a.switch_below, t.switch_below))
-fill_defaults(a::CPUThreads.Partitioned, t::ReduceTuning, T) = fill_threads(a, t)
-fill_defaults(a::Algorithm, t::ReduceTuning, T) =
+fill_defaults(a::CPUThreads.Partitioned, t::ReduceTuning, T, S) = fill_threads(a, t)
+fill_defaults(a::Algorithm, t::ReduceTuning, T, S) =
     throw(ArgumentError("$(algname(a)) is not a reduction algorithm"))
+
+# The tuning's block size, lowered to a power of two whose partial results of type `S` fit in
+# its local-memory budget (as CUB's `MemBoundScaling`); at least 1
+function default_block_size(t::ReduceTuning, ::Type{S}) where {S}
+    n = t.local_mem_bytes ÷ max(local_sizeof(S), 1)
+    return n < 1 ? 1 : min(t.block_size, prevpow(2, n))
+end
 
 function check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
     check_fields(a)

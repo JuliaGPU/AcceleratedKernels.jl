@@ -134,3 +134,12 @@ const I2 = Mat2(1, 0, 0, 1)
 const MAT2_GENERATORS = (Mat2(1, 1, 0, 1), Mat2(1, 0, 1, 1),
                          Mat2(1, typemax(UInt32), 0, 1), Mat2(1, 0, typemax(UInt32), 1))
 randmat2() = foldl(matmul2, rand(MAT2_GENERATORS, 3); init=I2)
+
+# An element too large for a block of the default size to hold a partial result per thread in
+# local memory. (Its operations use `ntuple`: `map` over more than 32 elements allocates.)
+struct Large{N}
+    x::NTuple{N, UInt32}
+end
+Large{N}(i::Integer) where {N} = Large{N}(ntuple(j -> UInt32(i * j), Val(N)))
+Base.zero(::Type{Large{N}}) where {N} = Large{N}(0)
+large_add(a::Large{N}, b::Large{N}) where {N} = Large{N}(ntuple(j -> a.x[j] + b.x[j], Val(N)))
