@@ -221,10 +221,14 @@ function mapreduce_dims_setup(f::F, op::OP, src, backend, init, neutral, ::Type{
 end
 
 # Run the reduction set up by `mapreduce_setup`, with the plan's scratch buffers `bufs`
-function mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
+mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP} =
+    with_flag_layout(s.seed, bufs, reduce_tuning, s.plan.backend, unval(s.A)) do seed, bufs
+        mapreduce_run(f, op, src, s, init, bufs, seed)
+    end
+function mapreduce_run(f::F, op::OP, src, s, init, bufs, seed) where {F, OP}
     backend, a = s.plan.backend, s.plan.alg
     if !haskey(s, :rdims)
-        return mapreduce_whole(f, op, src, backend, a, unval(s.A); init, seed=s.seed,
+        return mapreduce_whole(f, op, src, backend, a, unval(s.A); init, seed,
                                empty=s.empty, partials=get(bufs, :partials, nothing),
                                commutative=s.commutative)
     end
@@ -237,7 +241,7 @@ function mapreduce_run(f::F, op::OP, src, s, init, bufs) where {F, OP}
     end
     dst = KernelAbstractions.allocate(backend, unval(s.R), s.dst_sizes)
     return mapreduce_nd!(f, op, dst, src, backend, a, unval(s.A);
-                         init, seed=s.seed, rdims=s.rdims, bufs, launch=s.launch)
+                         init, seed, rdims=s.rdims, bufs, launch=s.launch)
 end
 
 # A reduction nested in another operation, with the scratch buffers of its plan in the outer one
@@ -337,10 +341,12 @@ end
 
 # (a function barrier: the type of `s` depends on the number of reduced dimensions)
 function mapreducedim_run!(f::F, op::OP, R, src, s, workspace) where {F, OP}
-    bufs = scratch_buffers(s.plan, workspace, R, src)
     backend = s.plan.backend
-    mapreduce_nd!(f, op, s.dst, kernel_source(s.src, backend), backend, s.plan.alg, unval(s.A);
-                  init=s.init, seed=s.seed, rdims=s.rdims, bufs, launch=s.launch)
+    with_flag_layout(s.seed, scratch_buffers(s.plan, workspace, R, src), reduce_tuning,
+                     backend, unval(s.A)) do seed, bufs
+        mapreduce_nd!(f, op, s.dst, kernel_source(s.src, backend), backend, s.plan.alg,
+                      unval(s.A); init=s.init, seed, rdims=s.rdims, bufs, launch=s.launch)
+    end
 end
 
 plan(::typeof(mapreducedim!), f::F, op::OP, R::AbstractArray, src::MapReduceSource;
