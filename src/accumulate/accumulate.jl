@@ -201,9 +201,24 @@ function scan_run!(op, v, src, s, bufs, seed)
     else
         scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims, inclusive)
     end
-    w === v || copyto_on!(v, w, backend)
+    w === v || copy_stored!(v, w, backend)
     return v
 end
+
+# Copy the running values in the scratch array `w` to `v`, converting them. A member of a
+# bits-union running-value type that `eltype(v)` has no conversion from is one the stored values
+# need not take (a one-element partial result's, without the `init` that outputs include): it is
+# an `InexactError` when one does, rather than a dynamic `MethodError`, which kernels cannot throw.
+function copy_stored!(v, w, backend)
+    Base.isbitsunion(eltype(w)) || return copyto_on!(v, w, backend)
+    foreachindex_on(Base.OneTo(length(v)), backend) do i
+        @inbounds v[i] = convert_stored(eltype(v), w[i])
+    end
+    return v
+end
+@inline convert_stored(::Type{D}, x::X) where {D, X} =
+    Base.promote_op(convert, Type{D}, X) === Union{} ? Core.throw_inexacterror(:convert, D, x) :
+                                                       convert(D, x)
 
 # Scan into `w` along `dims` (at most `ndims(w)`), from the elements `load(src[i])` (`src` is
 # `w`, with `load === identity`, for a scan in place)

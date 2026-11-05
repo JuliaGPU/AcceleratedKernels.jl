@@ -22,6 +22,7 @@
     output_size, reduce_size, groups,
     ::Val{K}, ::Val{W}, subgroups::Val,
 ) where {F, OP, K, W}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     totals = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)

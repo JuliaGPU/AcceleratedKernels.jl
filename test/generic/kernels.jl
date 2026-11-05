@@ -29,6 +29,13 @@
             AK.accumulate(mymax, A; dims=d, inclusive=false, init=zero(T), alg)
         end
         AK.accumulate(+, B; dims=2, alg=slice_alg())
+        # (with running values of a bits union, whose seed and start would be kernel arguments of
+        # more combinations of the union's members than inference splits)
+        u = array_from_host(mixed_numbers(300, 300))
+        for d in (nothing, 1, 2)
+            alg = d === nothing ? scan_alg() : slice_alg()
+            AK.accumulate!(+, similar(u, Union{Float32, Int32, Int64}), u; dims=d, init=0, alg)
+        end
         AK.findall(x -> x > 0.5f0, v; alg=FINDALL_ALG)
         for alg in (AK.ConcurrentWrite(), AK.ViaReduce(AK.BlockReduce()))
             AK.any(x -> x > 2f0, v; alg); AK.all(x -> x < 2f0, v; alg)

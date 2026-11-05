@@ -538,8 +538,8 @@ end
     @test AK.accumulator_type(+, Int64, String) === Union{}
     @test only(Base.return_types(v -> AK.sum(v), (Vector{IF},))) == Union{Float32, Int}
 
-    # BlockReduce needs a bits-type accumulator; the host algorithm does not
-    @test_throws ArgumentError resolve_reduce(AK.Auto(); T=Union{Missing, Int32})
+    # BlockReduce needs an accumulator of a bits type or bits union; the host algorithm does not
+    @test resolve_reduce(AK.Auto(); T=Union{Missing, Int32}) isa AK.BlockReduce
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); T=String)
     @test resolve_reduce(AK.Auto(); T=String, backend=HOST) isa AK.CPUThreads.Partitioned
 
@@ -623,9 +623,17 @@ end
                               typeof(AK.Optional{NTuple{3, Int32}}())) === AK.ScanPrefixes(256, 7)
     end
 
-    # Kernels need a bits-type element
+    # Kernels need elements and partial results of a bits type or bits union, which an
+    # `Optional` of a bits union takes 8 bytes of local memory for
     @test_throws ArgumentError resolve_scan(AK.ScanPrefixes(); T=String)
-    @test_throws ArgumentError resolve_scan(AK.Auto(); T=Union{Missing, Int}, dims=1)
+    @test_throws ArgumentError AK.resolve_scan(AK.ScanPrefixes(), FAKE, String, nothing,
+                                               typeof(AK.Optional{String}()))
+    U = Union{Missing, Int32}
+    @test resolve_scan(AK.Auto(); T=U, dims=1) isa AK.SliceScan
+    with_tuning(AK.ScanTuning(block_size=256, local_mem_bytes=32 * 1024, max_items=32)) do
+        @test AK.resolve_scan(AK.Auto(), FAKE, U, nothing, typeof(AK.Optional{U}())) ===
+              AK.ScanPrefixes(256, 15)
+    end
 
     # Capabilities: the threaded algorithm only on the host, kernels only where they run
     @test_throws ArgumentError resolve_scan(AK.CPUThreads.Partitioned())

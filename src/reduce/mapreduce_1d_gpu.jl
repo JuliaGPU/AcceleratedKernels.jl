@@ -12,6 +12,7 @@
 @kernel inbounds=true cpu=false unsafe_indices=true function mapreduce_1d_kernel!(
     @Const(src), dst, f::F, op::OP, seed, init, nblocks, ::Val{NI}, ::Val{K},
 ) where {F, OP, NI, K}
+    seed = kernel_value(seed)
 
     sdata = @localmem typeof(seed) (NI,)
     mapf, accop = seeded_ops(f, op, seed)

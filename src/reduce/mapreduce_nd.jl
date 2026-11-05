@@ -260,7 +260,7 @@ function mapreduce_slices!(f::F, op::OP, dst, src, backend; init, seed, launch..
     foreachindex_on(eachindex(dst), backend; launch...) do idst
         @inbounds begin
             Iother = Rother[idst]
-            res = seed
+            res = kernel_value(seed)
             for Ireduce in Rreduce
                 J = max(Iother, Ireduce)
                 res = accop(res, mapf(src[J]))

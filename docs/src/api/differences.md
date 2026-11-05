@@ -13,13 +13,14 @@ GPU arrays on top of AcceleratedKernels and reproduces Base's results. The diffe
 | `mapreduce(f, op, A; dims)` with an empty reduced dimension, no `init` | `Base.reducedim_init`: e.g. `[0 0]` for `x -> x + 1` with `+`, an error for `max` | `ArgumentError` where there are outputs (`sum`, `prod` and `count` give zero or one) |
 | a one-element reduction, e.g. `reduce((a, b) -> a + b, [true])` | `true` (`Base.mapreduce_first`) | `1`, the accumulator type |
 | the element type of `mapreduce(f, op, A; dims, init)` | `typeof(init)` | the accumulator type: `sum(Int8[1 2]; dims=1, init=Int16(0))` is a `Matrix{Int}` |
+| the element type of `mapreduce(f, op, A; dims)` of a bits-union `A` | the fold type from `Base.promote_union(eltype(A))`: `sum(Union{Int32, Float32}[Int32(1) 2f0]; dims=1)` is a `Matrix{Float32}` | the accumulator type, here `Union{Float32, Int}` |
 | the accumulator type of reductions into an array (`sum!`, reductions along `dims`) | depends on the code path, e.g. on the reduced dimension | one rule, the fold type from `eltype(R)` (see [`mapreducedim!`](@ref AcceleratedKernels.mapreducedim!)) |
 | an `init` that is not a neutral element of `op` | outside the contract: `init` must be neutral, and it is unspecified whether it is used for non-empty collections | any value, applied exactly once |
 | `reduce(op, A; dims)` for an `op` without `Base.reducedim_init`, such as a closure | `MethodError` | works |
 | a non-commutative `op` in a reduction | works (elements keep their order) | needs `commutative=false` |
 | the running-value type of `accumulate!(op, B, A)` | depends on the code path: the fold type from `init` or the elements for vectors and `dims=1`, `eltype(B)` along `dims ≥ 2` | the fold type from `eltype(B)` joined with `init`'s type and the elements (unless `acctype` is given), so for the usual operators not narrower than `eltype(B)` |
-| the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
 | the element type of `accumulate(op, A)` of a bits-union `A` of several members | `Any` where inference gives up on the union: `cumsum(Union{Missing, Int32, Float32}[...])` | the bits union, here `Union{Missing, Float32, Int}` |
+| the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
 | `accumulate(op, A; dims, init)` with `dims > ndims(A)` | copies `A`, ignoring `init` | applies `init` to every element |
 | a non-associative `op` in a scan, such as `-` | works (a sequential recurrence) | unsupported |
 | `findall(pred, A)` of a 0-dimensional `A` | `Int` indices | `CartesianIndex{0}`, `keys(A)`'s, unless `items=LinearIndices(A)` |
