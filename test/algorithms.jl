@@ -529,6 +529,15 @@ end
     @test only(Base.return_types(v -> AK.mapreduce(tuple, (a, b) -> a, v, v),
                                  (Vector{Int32},))) === Tuple{Int32, Int32}
 
+    # Bits unions stay unions where `promote_type` would give an abstract type, and elements of
+    # one enter as each member's `Base.reduce_first`, as in Base's inference
+    IF = Union{Int32, Float32}
+    @test AK.accumulator_type(Base.add_sum, Union{}, IF) == Union{Float32, Int}
+    @test AK.accumulator_type(+, Int64, IF) == Union{Float32, Int32, Int64}
+    @test AK.accumulator_type(+, Union{}, Union{Missing, Int32}) == Union{Missing, Int32}
+    @test AK.accumulator_type(+, Int64, String) === Union{}
+    @test only(Base.return_types(v -> AK.sum(v), (Vector{IF},))) == Union{Float32, Int}
+
     # BlockReduce needs a bits-type accumulator; the host algorithm does not
     @test_throws ArgumentError resolve_reduce(AK.Auto(); T=Union{Missing, Int32})
     @test_throws ArgumentError resolve_reduce(AK.BlockReduce(); T=String)

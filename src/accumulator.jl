@@ -20,13 +20,15 @@ function materialize_source(bc::Base.Broadcast.Broadcasted, backend)
     return dst
 end
 
-# The type of a reduction's first partial value when no `init` is given.
-first_type(op::OP, ::Type{M}) where {OP, M} =
-    Base.promote_op(Base.reduce_first, Core.Typeof(op), M)
+# The type of a reduction's first partial value when no `init` is given. (Inferred for a call,
+# which splits a bits union into its members: the return type of the signature takes every method
+# the whole union matches, such as `Base.reduce_first`'s fallback for `Union{Int32, Float32}`
+# with `Base.add_sum`, which gives `Union{Float32, Int32, Int64}` though no `Int32` is returned.)
+first_type(op::OP, ::Type{M}) where {OP, M} = Base.promote_op(x -> Base.reduce_first(op, x), M)
 
 # The accumulator type of a reduction of mapped elements of type `M` into `S` (the type of `init`
 # or of the destination, `Union{}` for neither): the types Base's fold `op(op(S, M), M)...` goes
-# through, joined with `promote_type`. In a parallel reduction every element is also a
+# through, joined with `join_type`. In a parallel reduction every element is also a
 # one-element partial result (`Base.reduce_first(op, x)`), and partial results are combined with
 # each other, so those types are joined as well; `S` itself is not a partial result (`init` and
 # the destination's values are applied once, at the end). So `sum(Int8[...])` accumulates in
@@ -36,21 +38,45 @@ first_type(op::OP, ::Type{M}) where {OP, M} =
 function accumulator_type(op::OP, ::Type{S}, ::Type{M}) where {OP, S, M}
     A = first_type(op, M)
     if S !== Union{}
-        B = Base.promote_op(op, S, M)
+        B = op_type(op, S, M)
         B === Union{} && return Union{}
-        A = A === Union{} ? B : promote_type(A, B)
+        A = A === Union{} ? B : join_type(A, B)
     end
     A === Union{} && return Union{}
     for _ in 1:8
-        B = Base.promote_op(op, A, M)
+        B = op_type(op, A, M)
         B === Union{} && return Union{}
-        B = promote_type(A, B)
-        C = Base.promote_op(op, B, B)
-        C === Union{} || (B = promote_type(B, C))
+        B = join_type(A, B)
+        C = op_type(op, B, B)
+        C === Union{} || (B = join_type(B, C))
         B == A && return A
         A = B
     end
     return A
+end
+
+# The type of `op(a, b)` for `a::A` and `b::B`. Inference splits bits unions into their members
+# only for a few combinations of them, and else gives an abstract type (`Any` for `+` of
+# `Union{Float32, Int32, Int64}` and `Union{Int32, Float32}`); those combinations are joined here.
+function op_type(op::OP, ::Type{A}, ::Type{B}) where {OP, A, B}
+    T = Base.promote_op(op, A, B)
+    (T === Union{} || isconcretetype(T) || isinline(T)) && return T
+    Base.isbitsunion(A) || Base.isbitsunion(B) || return T
+    T = Union{}
+    for a in Base.uniontypes(A), b in Base.uniontypes(B)
+        T = Union{T, Base.promote_op(op, a, b)}
+    end
+    return T
+end
+
+# The type of a variable that takes values of types `A` and `B`: `promote_type`, except where
+# that is abstract and the values fit in a bits union, which Base's inference keeps (as for
+# `accumulate(+, Union{Int32, Float32}[...]; init=0)`, where `promote_type(Union{Float32, Int32},
+# Union{Float32, Int64})` is `Real`).
+function join_type(::Type{A}, ::Type{B}) where {A, B}
+    P = promote_type(A, B)
+    (isconcretetype(P) || isinline(P)) && return P
+    return isinline(Union{A, B}) ? Union{A, B} : P
 end
 
 check_combinable(op, f, ::Type{A}) where {A} = A === Union{} && throw(ArgumentError(

@@ -19,6 +19,7 @@ GPU arrays on top of AcceleratedKernels and reproduces Base's results. The diffe
 | a non-commutative `op` in a reduction | works (elements keep their order) | needs `commutative=false` |
 | the running-value type of `accumulate!(op, B, A)` | depends on the code path: the fold type from `init` or the elements for vectors and `dims=1`, `eltype(B)` along `dims ≥ 2` | the fold type from `eltype(B)` joined with `init`'s type and the elements (unless `acctype` is given), so for the usual operators not narrower than `eltype(B)` |
 | the element type of `accumulate(op, A)` on Julia 1.10 | `Base.promote_op(op, T, T)` | the fold type, as Base's on Julia 1.13 |
+| the element type of `accumulate(op, A)` of a bits-union `A` of several members | `Any` where inference gives up on the union: `cumsum(Union{Missing, Int32, Float32}[...])` | the bits union, here `Union{Missing, Float32, Int}` |
 | `accumulate(op, A; dims, init)` with `dims > ndims(A)` | copies `A`, ignoring `init` | applies `init` to every element |
 | a non-associative `op` in a scan, such as `-` | works (a sequential recurrence) | unsupported |
 | `findall(pred, A)` of a 0-dimensional `A` | `Int` indices | `CartesianIndex{0}`, `keys(A)`'s, unless `items=LinearIndices(A)` |
