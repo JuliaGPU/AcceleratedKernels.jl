@@ -244,6 +244,29 @@ if TEST_KERNELS
         @test Array(y) == accumulate(+, xh; dims)
     end
 end
+
+@testset "accumulate: runs of each parity" begin
+    # Partials of 1 to 16 bytes, `Optional`s for an operator without a neutral element, whose
+    # runs of even length are padded in local memory (all but the primitive types of up to 4
+    # bytes)
+    Random.seed!(0)
+    for T in valid_backend_eltypes(BACKEND, [Int8, Int32, Float64]),
+        items_per_thread in (2, 5, 6, 16)
+        xh = T.(rand(-9:9, rand(1000:20_000)))
+        for op in (+, (a, b) -> a + b, (a, b) -> max(a, b))
+            y = AK.accumulate!(op, array_from_host(xh);
+                               alg=AK.ScanPrefixes(; block_size=64, items_per_thread))
+            @test Array(y) == accumulate(op, xh)
+            # (slices of a block each)
+            for (xm, dims) in ((reshape(xh[1:end - end % 2], 2, :), 2),
+                               (reshape(xh[1:end - end % 3], :, 3), 1))
+                y = AK.accumulate!(op, array_from_host(xm); dims,
+                                   alg=AK.SliceScan(; block_size=64, items_per_thread))
+                @test Array(y) == accumulate(op, xm; dims)
+            end
+        end
+    end
+end
 end
 
 

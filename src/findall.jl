@@ -86,7 +86,7 @@ end
     subgroups::Val,
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
-    tile = @localmem UInt8 (block_size * ITEMS,)
+    tile = @localmem UInt8 (tile_length(UInt8, block_size, ITEMS),)
     thread_counts = @localmem Int32 (block_size,)
 
     len = length(bools)
@@ -99,10 +99,11 @@ end
     @synchronize()
 
     run = ithread * ITEMS
+    slot = ithread * tile_stride(UInt8, ITEMS)
     count = Int32(0)
     k = 0
     while k < ITEMS
-        count += tile[run + k + 0x1]
+        count += tile[slot + k + 0x1]
         k += 1
     end
     thread_counts[ithread + 0x1] = count
@@ -114,7 +115,7 @@ end
 
     k = 0
     while k < ITEMS
-        if tile[run + k + 0x1] != 0x0
+        if tile[slot + k + 0x1] != 0x0
             pos += 1
             position = block_offset + run + k + 0x1
             out[pos] = ordinal_index(output_indices, position)

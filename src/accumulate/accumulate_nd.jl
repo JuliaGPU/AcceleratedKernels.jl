@@ -252,7 +252,7 @@ end
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
 ) where {L, OP, ITEMS}
     @uniform block_size = @groupsize()[1]
-    tile = @localmem typeof(seed) (block_size * ITEMS,)
+    tile = @localmem typeof(seed) (tile_length(typeof(seed), block_size, ITEMS),)
     thread_totals = @localmem typeof(seed) (block_size,)
     _, op = seeded_ops(PartialInputs(), op, seed)
 
