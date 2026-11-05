@@ -107,6 +107,19 @@ jobs:
       - name: Promote OpenCL to test dependency
         run: julia test/promote.jl opencl
       - uses: julia-actions/julia-runtest@v1
+      # GPUCompiler writes the module of a failed back-end compilation or SPIR-V validation
+      # to $RUNNER_TEMP/gpucompiler-dumps (releases before JuliaGPU/GPUCompiler.jl#1077: to
+      # /tmp/jl_*), to attach to a bug report
+      - name: Upload compilation dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compilation-dumps-${{ github.job }}-${{ matrix.version }}
+          path: |
+            ${{ runner.temp }}/gpucompiler-dumps/
+            /tmp/jl_*.bc
+            /tmp/jl_*.spv
+          if-no-files-found: ignore
   cpuKA:
     # KernelAbstractions 0.10 (unreleased, `main`) runs AcceleratedKernels' kernels on the host
     # backend, through PoCL; `--cpu-ka` tests them there.
@@ -142,6 +155,19 @@ jobs:
       - name: Run tests
         # only the generic tests: the others, Aqua included, do not depend on the backend
         run: julia --project=test test/runtests.jl --cpu-ka cpu-ka/
+      # GPUCompiler writes the module of a failed back-end compilation or SPIR-V validation
+      # to $RUNNER_TEMP/gpucompiler-dumps (releases before JuliaGPU/GPUCompiler.jl#1077: to
+      # /tmp/jl_*), to attach to a bug report
+      - name: Upload compilation dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compilation-dumps-${{ github.job }}-${{ matrix.version }}
+          path: |
+            ${{ runner.temp }}/gpucompiler-dumps/
+            /tmp/jl_*.bc
+            /tmp/jl_*.spv
+          if-no-files-found: ignore
   docs:
     name: Documentation
     runs-on: ubuntu-latest
