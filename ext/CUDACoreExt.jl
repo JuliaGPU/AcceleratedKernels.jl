@@ -2,6 +2,7 @@ module CUDACoreExt
 
 using CUDACore
 import AcceleratedKernels as AK
+using PrecompileTools: @setup_workload, @compile_workload
 
 # Groups of threads read runs of up to 4096 Float32s: on an RTX 5080, summing a 4096×4096 matrix
 # along `dims=1` takes 17% less time than with a block per output.
@@ -20,5 +21,32 @@ AK.sort_tuning(::CUDABackend, ::Type{T}) where {T} =
     AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 22, bitonic_max_slice_len=256,
                   radix_min_slice_len=1 << 19) :
     AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 23, bitonic_max_slice_len=256)
+
+
+# CUDACore's own workload can't cache these operations: it doesn't use the GPU, and this
+# extension isn't loaded while CUDACore precompiles, so its kernels would use the default
+# tunings rather than the ones above. The arrays are just large enough to select the kernels
+# that a vector of 10^6 elements and a 1000×1000 matrix do. Without a functional GPU while
+# precompiling, these operations are only compiled when first used. Like CUDACore's own
+# workload, this needs 1.12: before, GPU code compiled while precompiling leaks into the host
+# code of the image.
+@static if VERSION >= v"1.12-"
+@setup_workload begin
+    if CUDACore.functional()
+        @compile_workload begin
+            m = CuArray(ones(Float32, 256, 32))
+            v = vec(m)
+            sum(v)
+            sum(m; dims=1)
+            sum(m; dims=2)
+            cumsum(v)
+            any(iszero, v)
+            all(iszero, v)
+            sum(CuArray(ones(Int, 8192)))
+            synchronize()
+        end
+    end
+end
+end
 
 end
