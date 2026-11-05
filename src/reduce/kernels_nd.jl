@@ -84,17 +84,19 @@ end
 
 # `ByLanes`: each output reduces `reduce_size` consecutive elements (from the offset
 # of its outer index), with `lanes` threads that read them in an interleaved order; a block of
-# `N` threads covers `N ÷ lanes` outputs, which are combined in local memory with log2(lanes)
-# steps.
+# `N` threads covers `N ÷ lanes` outputs, whose lanes are combined with sub-group operations
+# where they fit a sub-group of width `W` (see `reduce_subgroup_width`), else in local memory with
+# log2(lanes) steps.
 @kernel inbounds=true cpu=false unsafe_indices=true function by_lanes_kernel!(
     @Const(src), dst,
     f::F, op::OP, seed, init,
     base_offset, outer_strides, outer_sizes,
-    output_size, reduce_size, ::Val{lanes},
-) where {F, OP, lanes}
+    output_size, reduce_size, ::Val{lanes}, ::Val{W},
+) where {F, OP, lanes, W}
     seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
+    # (no local memory where the lanes of an output are a segment of a sub-group)
+    sdata = @localmem typeof(seed) (lanes <= W ? 1 : N,)
     mapf, accop = seeded_ops(f, op, seed)
 
     iblock  = @index(Group, Linear) - 0x1
@@ -115,20 +117,25 @@ end
         end
     end
 
-    sdata[ithread + 0x1] = acc
-    @synchronize()
-
-    step = lanes ÷ 2
-    while step >= 1
-        if lane < step
-            sdata[ithread + 0x1] = accop(sdata[ithread + 0x1], sdata[ithread + step + 0x1])
-        end
+    total = if lanes <= W
+        KI.sub_group_reduce(accop, acc, lanes)
+    else
+        sdata[ithread + 0x1] = acc
         @synchronize()
-        step ÷= 2
+
+        step = lanes ÷ 2
+        while step >= 1
+            if lane < step
+                sdata[ithread + 0x1] = accop(sdata[ithread + 0x1], sdata[ithread + step + 0x1])
+            end
+            @synchronize()
+            step ÷= 2
+        end
+        sdata[ithread + 0x1]
     end
 
     if lane == 0x0 && iout < output_size
-        dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[ithread + 0x1])
+        dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, total)
     end
 end
 
@@ -277,11 +284,11 @@ end
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    output_size, reduce_size, num_blocks,
+    output_size, reduce_size, num_blocks, subgroups::Val,
 ) where {F, OP}
     seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
+    sdata = @localmem typeof(seed) (block_slots(N, subgroups),)
     mapf, accop = seeded_ops(f, op, seed)
 
     iblock  = @index(Group, Linear) - 0x1
@@ -298,13 +305,10 @@ end
             j  += N
         end
 
-        sdata[ithread + 0x1] = acc
-        @synchronize()
-
-        @inline reduce_group!(@context, accop, sdata, ithread)
+        total = @inline block_reduce(@context, accop, sdata, acc, ithread, subgroups)
 
         if ithread == 0x0
-            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[0x1])
+            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, total)
         end
 
         next_iout = iout + num_blocks
@@ -323,11 +327,11 @@ end
     base_offset,
     outer_strides, outer_sizes,
     output_size, reduce_size, num_blocks,
-    ::Val{W},
+    ::Val{W}, subgroups::Val,
 ) where {F, OP, W}
     seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
+    sdata = @localmem typeof(seed) (block_slots(N, subgroups),)
     mapf, accop = seeded_ops(f, op, seed)
 
     iblock  = @index(Group, Linear) - 0x1
@@ -350,13 +354,10 @@ end
             jw += UInt32(1)
         end
 
-        sdata[ithread + 0x1] = acc
-        @synchronize()
-
-        @inline reduce_group!(@context, accop, sdata, ithread)
+        total = @inline block_reduce(@context, accop, sdata, acc, ithread, subgroups)
 
         if ithread == 0x0
-            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, sdata[0x1])
+            dst[iout + 0x1] = finish(op, init, dst, iout + 0x1, total)
         end
 
         next_iout = iout + num_blocks
@@ -377,11 +378,11 @@ end
     base_offset,
     outer_strides, outer_sizes,
     reduce_strides, reduce_sizes,
-    ::Val{output_size}, reduce_size, groups,
+    ::Val{output_size}, reduce_size, groups, subgroups::Val,
 ) where {F, OP, output_size}
     seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
-    sdata = @localmem typeof(seed) (N,)
+    sdata = @localmem typeof(seed) (block_slots(N, subgroups),)
     mapf, accop = seeded_ops(f, op, seed)
 
     iblock  = @index(Group, Linear) - 0x1
@@ -401,12 +402,9 @@ end
         j  += N * groups
     end
 
-    sdata[ithread + 0x1] = acc
-    @synchronize()
-
-    @inline reduce_group!(@context, accop, sdata, ithread)
+    total = @inline block_reduce(@context, accop, sdata, acc, ithread, subgroups)
 
     if ithread == 0x0
-        partial[iout + igroup * output_size + 0x1] = sdata[0x1]
+        partial[iout + igroup * output_size + 0x1] = total
     end
 end

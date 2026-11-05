@@ -10,11 +10,11 @@
 # `iblock` reduces the tiles `iblock`, `iblock + nblocks`, ... of `src`, and stores
 # `finish(op, init, dst, iblock + 1, partial)` in `dst[iblock + 1]`.
 @kernel inbounds=true cpu=false unsafe_indices=true function mapreduce_1d_kernel!(
-    @Const(src), dst, f::F, op::OP, seed, init, nblocks, ::Val{NI}, ::Val{K},
+    @Const(src), dst, f::F, op::OP, seed, init, nblocks, ::Val{NI}, ::Val{K}, subgroups::Val,
 ) where {F, OP, NI, K}
     seed = kernel_value(seed)
 
-    sdata = @localmem typeof(seed) (NI,)
+    sdata = @localmem typeof(seed) (block_slots(NI, subgroups),)
     mapf, accop = seeded_ops(f, op, seed)
     len = length(src)
 
@@ -42,14 +42,10 @@
             end
         end
     end
-    sdata[ithread + 0x1] = acc
-
-    @synchronize()
-
-    @inline reduce_group!(@context, accop, sdata, ithread)
+    total = @inline block_reduce(@context, accop, sdata, acc, ithread, subgroups)
 
     if ithread == 0x0
-        dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, sdata[0x1])
+        dst[iblock + 0x1] = finish(op, init, dst, iblock + 0x1, total)
     end
 end
 
@@ -126,7 +122,9 @@ function mapreduce_1d_pass!(commutative::Bool, backend, block_size, items_per_th
     if commutative
         kernel! = mapreduce_1d_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(src, dst, f, op, seed, init, blocks, Val(block_size),
-                                       Val(items_per_thread); ndrange=(block_size * blocks,))
+                                       Val(items_per_thread),
+                                       reduce_subgroup_width(backend, typeof(seed), block_size);
+                                       ndrange=(block_size * blocks,))
     else
         len = length(src)
         src, base_offset = something(buffer, (src, 0))

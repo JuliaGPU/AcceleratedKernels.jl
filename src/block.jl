@@ -17,19 +17,54 @@
 end
 
 
-# The sub-group width `W` for a block scan of `T` in blocks of `block_size` threads, as a `Val`,
-# or `Val(0)` for the local-memory scan. Sub-groups must be enabled by the scan tuning, linear
-# (from KernelAbstractions 0.10), able to shuffle `T`, and `W ≤ block_size ≤ W²`, as one
-# sub-group scans the sub-groups' totals.
+# The sub-group width `W` for a block scan or reduction of `T` in blocks of `block_size` threads,
+# as a `Val`, or `Val(0)` for the local-memory one. Sub-groups must be enabled by the tuning,
+# linear (from KernelAbstractions 0.10), able to shuffle `T`, and `W ≤ block_size ≤ W²`, as one
+# sub-group combines the sub-groups' values.
 @static if isdefined(KernelAbstractions, :KernelInterface)
-    function scan_subgroup_width(backend, ::Type{T}, block_size) where {T}
-        tuning(scan_tuning, backend, T).subgroups || return Val(0)
+    function subgroup_width(backend, ::Type{T}, block_size) where {T}
         KI.supports_linear_subgroups(backend) && KI.supports_shuffle(backend, T) || return Val(0)
         W = KI.sub_group_size(backend)
         return ispow2(W) && W <= block_size <= W * W ? Val(W) : Val(0)
     end
 else
-    scan_subgroup_width(backend, T, block_size) = Val(0)
+    subgroup_width(backend, T, block_size) = Val(0)
+end
+scan_subgroup_width(backend, ::Type{T}, block_size) where {T} =
+    tuning(scan_tuning, backend, T).subgroups ? subgroup_width(backend, T, block_size) : Val(0)
+reduce_subgroup_width(backend, ::Type{T}, block_size) where {T} =
+    tuning(reduce_tuning, backend, T).subgroups ? subgroup_width(backend, T, block_size) : Val(0)
+
+# The local memory of a block reduction of `N` values (see `block_reduce`): a value per
+# sub-group, or per thread without sub-groups
+@inline block_slots(N, ::Val{W}) where {W} = W == 0 ? N : N ÷ W
+
+# Reduce the values `x` of the block's threads with `op` into the result of thread 0, with
+# `sdata` of `block_slots(@groupsize()[1], subgroups)` elements. All threads in the block must
+# call it. With a sub-group width `W` (see `reduce_subgroup_width`), each sub-group reduces its
+# values, and then the sub-groups' values (as CUB's `BLOCK_REDUCE_WARP_REDUCTIONS`), in the order
+# of the threads; else a tree in local memory, which needs `op` to be commutative. It does
+# not synchronize after reading `sdata`, so a block that reduces again must first.
+@inline function block_reduce(@context, op, sdata, x, ithread, ::Val{0})
+    sdata[ithread + 0x1] = x
+    @synchronize()
+    @inline reduce_group!(@context, op, sdata, ithread)
+    return sdata[0x1]
+end
+@static if isdefined(KernelAbstractions, :KernelInterface)
+@inline function block_reduce(@context, op, sdata, x, ithread, ::Val{W}) where {W}
+    N = @groupsize()[1]
+    x = KI.sub_group_reduce(op, x)
+    N == W && return x
+    nsg = N ÷ W
+    if ithread % W == 0x0
+        sdata[ithread ÷ W + 0x1] = x
+    end
+    @synchronize()
+    # (every sub-group combines the sub-groups' values, as some backends (PoCL) need the
+    # sub-groups of a block to run the same sub-group operations; thread 0's is the result)
+    return KI.sub_group_reduce(op, sdata[ithread % nsg + 0x1], nsg)
+end
 end
 
 
