@@ -213,7 +213,7 @@ end
     # in turn. Tiles of exactly one and two blocks' worth, and one element more, for both block
     # sizes.
     for neutral in (I2, nothing), inclusive in (true, false), block_size in (64, 256)
-        S = neutral === nothing ? AK.Optional{Mat2} : Mat2
+        S = neutral === nothing ? typeof(AK.Optional{Mat2}()) : Mat2
         tile = !TEST_KERNELS ? 2 * block_size :
                block_size * AK.resolve_scan(AK.SliceScan(; block_size), BACKEND, Mat2, 1,
                                             S).items_per_thread

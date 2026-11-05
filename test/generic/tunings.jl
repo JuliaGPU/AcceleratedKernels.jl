@@ -34,7 +34,8 @@ end
         end
         for dims in (nothing, 1)
             @test AK.resolve_scan(AK.Auto(), BACKEND, T, dims) isa AK.Algorithm
-            @test AK.resolve_scan(AK.Auto(), BACKEND, T, dims, AK.Optional{T}) isa AK.Algorithm
+            @test AK.resolve_scan(AK.Auto(), BACKEND, T, dims, typeof(AK.Optional{T}())) isa
+                  AK.Algorithm
         end
         if kernels
             @test AK.resolve_scan(AK.ScanPrefixes(), BACKEND, T, nothing) isa AK.ScanPrefixes
