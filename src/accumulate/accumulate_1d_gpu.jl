@@ -29,7 +29,10 @@
 
     # Scan each thread's run, then the runs' totals from the block's start
     thread_total = thread_scan!(op, tile, seed, ithread, Val(ITEMS))
-    block_start = iblock == 0x0 ? start : isnothing(tile_prefixes) ? seed : tile_prefixes[iblock]
+    # Index 1 for block 0, which never uses it: llvmpipe runs a load at an address uniform over
+    # the group even in a branch no thread takes, and index 0 is before the array.
+    block_start = iblock == 0x0 ? start : isnothing(tile_prefixes) ? seed :
+                  tile_prefixes[max(iblock, one(iblock))]
     thread_prefix, block_total = block_exclusive_scan(
         @context, op, sdata, thread_total, block_start, block_size, ithread, subgroups,
     )
