@@ -20,13 +20,15 @@ function materialize_source(bc::Base.Broadcast.Broadcasted, backend)
     return dst
 end
 
-# The type of a reduction's first partial value when no `init` is given.
-first_type(op::OP, ::Type{M}) where {OP, M} =
-    Base.promote_op(Base.reduce_first, Core.Typeof(op), M)
+# The type of a reduction's first partial value when no `init` is given. (Inferred for a call,
+# which splits a bits union into its members: the return type of the signature takes every method
+# the whole union matches, such as `Base.reduce_first`'s fallback for `Union{Int32, Float32}`
+# with `Base.add_sum`, which gives `Union{Float32, Int32, Int64}` though no `Int32` is returned.)
+first_type(op::OP, ::Type{M}) where {OP, M} = Base.promote_op(x -> Base.reduce_first(op, x), M)
 
 # The accumulator type of a reduction of mapped elements of type `M` into `S` (the type of `init`
 # or of the destination, `Union{}` for neither): the types Base's fold `op(op(S, M), M)...` goes
-# through, joined with `promote_type`. In a parallel reduction every element is also a
+# through, joined with `join_type`. In a parallel reduction every element is also a
 # one-element partial result (`Base.reduce_first(op, x)`), and partial results are combined with
 # each other, so those types are joined as well; `S` itself is not a partial result (`init` and
 # the destination's values are applied once, at the end). So `sum(Int8[...])` accumulates in
@@ -36,21 +38,45 @@ first_type(op::OP, ::Type{M}) where {OP, M} =
 function accumulator_type(op::OP, ::Type{S}, ::Type{M}) where {OP, S, M}
     A = first_type(op, M)
     if S !== Union{}
-        B = Base.promote_op(op, S, M)
+        B = op_type(op, S, M)
         B === Union{} && return Union{}
-        A = A === Union{} ? B : promote_type(A, B)
+        A = A === Union{} ? B : join_type(A, B)
     end
     A === Union{} && return Union{}
     for _ in 1:8
-        B = Base.promote_op(op, A, M)
+        B = op_type(op, A, M)
         B === Union{} && return Union{}
-        B = promote_type(A, B)
-        C = Base.promote_op(op, B, B)
-        C === Union{} || (B = promote_type(B, C))
+        B = join_type(A, B)
+        C = op_type(op, B, B)
+        C === Union{} || (B = join_type(B, C))
         B == A && return A
         A = B
     end
     return A
+end
+
+# The type of `op(a, b)` for `a::A` and `b::B`. Inference splits bits unions into their members
+# only for a few combinations of them, and else gives an abstract type (`Any` for `+` of
+# `Union{Float32, Int32, Int64}` and `Union{Int32, Float32}`); those combinations are joined here.
+function op_type(op::OP, ::Type{A}, ::Type{B}) where {OP, A, B}
+    T = Base.promote_op(op, A, B)
+    (T === Union{} || isconcretetype(T) || isinline(T)) && return T
+    Base.isbitsunion(A) || Base.isbitsunion(B) || return T
+    T = Union{}
+    for a in Base.uniontypes(A), b in Base.uniontypes(B)
+        T = Union{T, Base.promote_op(op, a, b)}
+    end
+    return T
+end
+
+# The type of a variable that takes values of types `A` and `B`: `promote_type`, except where
+# that is abstract and the values fit in a bits union, which Base's inference keeps (as for
+# `accumulate(+, Union{Int32, Float32}[...]; init=0)`, where `promote_type(Union{Float32, Int32},
+# Union{Float32, Int64})` is `Real`).
+function join_type(::Type{A}, ::Type{B}) where {A, B}
+    P = promote_type(A, B)
+    (isconcretetype(P) || isinline(P)) && return P
+    return isinline(Union{A, B}) ? Union{A, B} : P
 end
 
 check_combinable(op, f, ::Type{A}) where {A} = A === Union{} && throw(ArgumentError(
@@ -83,10 +109,10 @@ resolve_acctype(op, ::Type, ::Type, acctype) =
 # returns the other operand, keeping the order of the operands. For associative operators this
 # gives the same result as seeding with a neutral element.
 #
-# An unset `Optional` of a bits type (every one kernels see) holds zero bits; one of another type
-# leaves the value undefined, which is how it is recognised. The flag `F` is `flag_type(T)`, or
-# `Bool` on backends whose tuning asks for it (see `with_flag_layout`); kernels take it from the
-# seed, so every `Optional` they make has the seed's type.
+# An unset `Optional` of a bits type or bits union (every one kernels see) holds zero bits; one of
+# another type leaves the value undefined, which is how it is recognised. The flag `F` is
+# `flag_type(T)`, or `Bool` on backends whose tuning asks for it (see `with_flag_layout`); kernels
+# take it from the seed, so every `Optional` they make has the seed's type.
 struct Optional{T, F}
     value::T
     isset::F
@@ -110,7 +136,46 @@ Optional{T}(value, isset::Bool) where {T} = Optional{T, flag_type(T)}(value, iss
 end
 
 isinline(::Type{T}) where {T} = isbitstype(T) || Base.isbitsunion(T)
+# Whether kernels can hold values of type `T` in arrays and local memory: those of a bits type or
+# bits union, and `Optional`s of them
+kernel_storable(::Type{T}) where {T} =
+    isinline(T) || T !== Union{} && T <: Optional && isinline(fieldtype(T, :value))
 @inline isset(l::Optional{T}) where {T} = isinline(T) ? !iszero(l.isset) : isdefined(l, :value)
+
+# An `Optional` of a bits union as a kernel argument. Such an `Optional` (the seed of a
+# reduction or scan whose accumulator type is a bits union) is stored inline, in arrays and local
+# memory, but is not a bits type, which kernel arguments must be; this holds a value of each of
+# the union's members, all-zero bits but that of the `member`th one, which is the value. Kernels
+# rebuild the `Optional` with `kernel_value`.
+#
+# Its type depends only on the `Optional`'s. Holding only the value, with its member's type, made
+# the adapted arguments of a launch union-typed. KernelAbstractions calls the kernel function on
+# the host to find its `@Const` arguments, and with both the seed and the start of a scan of
+# three members, that call has more combinations than inference splits: it specialized the
+# kernel on the unions.
+struct OptionalArg{T, F, V <: Tuple}
+    values::V
+    member::UInt8
+    isset::Bool
+end
+@generated function OptionalArg(x::Optional{T, F}) where {T, F}
+    members = Base.uniontypes(T)
+    values = (:(value isa $U ? value : zero_bits($U)) for U in members)
+    member = foldr((i, other) -> :(value isa $(members[i]) ? $(UInt8(i)) : $other),
+                   1:length(members)-1; init=UInt8(length(members)))
+    return quote
+        value = x.value
+        values = ($(values...),)
+        OptionalArg{T, F, typeof(values)}(values, $member, isset(x))
+    end
+end
+Adapt.adapt_structure(to, x::Optional{T}) where {T} = isbitstype(T) ? x : OptionalArg(x)
+@inline kernel_value(x) = x
+@inline kernel_value(x::OptionalArg{T, F}) where {T, F} =
+    Optional{T, F}(member_value(x.values, x.member), x.isset)
+@inline member_value(values::Tuple{Any}, i) = values[1]
+@inline member_value(values::Tuple, i) =
+    i == 0x1 ? values[1] : member_value(Base.tail(values), i - 0x1)
 
 # A value of the bits type or bits union `T` with all-zero bits
 function zero_bits(::Type{T}) where {T}
@@ -138,7 +203,7 @@ end
     if !isprimitivetype(T)
         isset(a) || return b
         isset(b) || return a
-        return set_like(S, o.op(a.value, b.value))
+        return set_like(S, op_value(o.op, a.value, b))
     end
     # One result built from the operands' fields: returning either operand made the compiler
     # merge the possible results through stack slots. (Only for primitive types: Julia selects
@@ -147,6 +212,11 @@ end
     value = sa & sb ? convert(T, o.op(a.value, b.value)) : ifelse(sa, a.value, b.value)
     return S(value, sa | sb)
 end
+
+# `op(x, b.value)`, through calls with one argument of a bits union each: inference splits such
+# arguments into their members only for a few combinations of them (two values of
+# `Union{Float32, Int32, Int64}` have nine), else the call is dynamic, which kernels cannot make
+@inline op_value(op, x, b::Optional) = op(x, b.value)
 
 # The map `f` of a reduction pass whose inputs are already partial results.
 struct PartialInputs end

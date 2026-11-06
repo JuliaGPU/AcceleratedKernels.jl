@@ -142,9 +142,9 @@ function check_reduce(a::BlockReduce, backend, ::Type{T}, dims) where {T}
     check_fields(a)
     require_kernels(a, backend)
     # `Union{}`: no accumulator type, which only an empty reduction gets past
-    T === Union{} || isbitstype(T) || throw(ArgumentError(
-        "BlockReduce: the accumulator type $T is not a bits type; pass an `init` of the type " *
-        "to accumulate in, or make `f` and `op` inferable"))
+    T === Union{} || isinline(T) || throw(ArgumentError(
+        "BlockReduce: the accumulator type $T is not a bits type or bits union; pass an " *
+        "`init` of the type to accumulate in, or make `f` and `op` inferable"))
     if iswhole(dims)
         # Each pass reduces a tile to one value, so a tile of one element never shrinks the input
         check_tile(a; min=2)

@@ -22,7 +22,12 @@ pocl_jll = "627d6b7a-bbe6-5189-83e7-98cc0a5aeadd"
 AcceleratedKernels = {path = ".."}
 
 [compat]
+AMDGPU = "2.10"
 Adapt = "4"
+CUDACore = "6.5"
+KernelAbstractions = "0.9.43, 0.10.5"
 MappedArrays = "0.4"
+Metal = "1.12"
+OpenCL = "1"
 ParallelTestRunner = "2"
-oneAPI = "2.9.2"
+oneAPI = "2.10"

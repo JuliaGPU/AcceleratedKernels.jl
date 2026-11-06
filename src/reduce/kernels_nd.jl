@@ -37,6 +37,7 @@ end
     output_size, reduce_size,
     ::Val{rows},
 ) where {F, OP, rows}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     @uniform reduce_threads = N ÷ rows
     sdata = @localmem typeof(seed) (N,)
@@ -91,6 +92,7 @@ end
     base_offset, outer_strides, outer_sizes,
     output_size, reduce_size, ::Val{lanes},
 ) where {F, OP, lanes}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -146,6 +148,7 @@ end
     output_size, run, runs, run_strides, run_sizes, reduce_size, groups,
     ::Val{cols}, ::Val{ordered},
 ) where {F, OP, cols, ordered}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     @uniform lanes = N ÷ cols
     sdata = @localmem typeof(seed) (N,)
@@ -246,6 +249,7 @@ end
     reduce_strides, reduce_sizes,
     output_size, reduce_size,
 ) where {F, OP}
+    seed = kernel_value(seed)
     mapf, accop = seeded_ops(f, op, seed)
     N       = @groupsize()[1]
     iblock  = @index(Group, Linear) - 0x1
@@ -275,6 +279,7 @@ end
     reduce_strides, reduce_sizes,
     output_size, reduce_size, num_blocks,
 ) where {F, OP}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -320,6 +325,7 @@ end
     output_size, reduce_size, num_blocks,
     ::Val{W},
 ) where {F, OP, W}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)
@@ -373,6 +379,7 @@ end
     reduce_strides, reduce_sizes,
     ::Val{output_size}, reduce_size, groups,
 ) where {F, OP, output_size}
+    seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
     sdata = @localmem typeof(seed) (N,)
     mapf, accop = seeded_ops(f, op, seed)

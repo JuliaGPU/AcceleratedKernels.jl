@@ -917,10 +917,9 @@ end
     R = array_from_host(zeros(Int32, 1, 2))
     @test Array(AK.mapreducedim!(identity, +, R, bc; overwrite=true, alg)) == [3 7]
 
-    # Kernels need a bits-type accumulator
-    if TEST_KERNELS
-        @test_throws ArgumentError AK.mapreduce(x -> x > 0 ? x : missing, +, dx; alg)
-    end
+    # An accumulator of a bits union
+    @test isequal(AK.mapreduce(x -> x > 0 ? x : missing, +, dx; alg),
+                  mapreduce(x -> x > 0 ? x : missing, +, x))
 
     # A source whose wrappers `@Const` rebuilds on the device: a reshaped view
     hr = rand(Int32(0):Int32(9), 50, 40)
@@ -933,10 +932,9 @@ end
         @test Array(AK.reduce(+, rr; dims, alg)) == sum(hrr; dims)
     end
 
-    # A source of a bits-union element type, with every kernel shape (where the backend's arrays
-    # can hold one)
+    # A source of a bits-union element type, with every kernel shape
     code(x) = x === missing ? 0x01 : x ? 0x02 : 0x00
-    TEST_BITS_UNIONS && for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
+    for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
                           ((20_000, 2), (1, 2)), ((5, 3), 3))
         hm = rand([true, false, missing], shape...)
         dm = array_from_host(hm)
@@ -944,6 +942,49 @@ end
         @test Array(AK.mapreduce(code, max, dm; dims, init=0x00, alg)) ==
               mapreduce(code, max, hm; dims)
     end
+end
+
+
+@testset "reduce: bits-union accumulators" begin
+    Random.seed!(0)
+    alg = REDUCE_ALG
+
+    # Partial results of a bits-union type (`Optional`s of one, as these operators have no neutral
+    # element for it) give Base's values, of Base's types: one block, several, and two passes
+    for n in (1, 5, 1000, 300_000), mk in (mixed_numbers, some_missing)
+        h = mk(n)
+        v = array_from_host(h)
+        for (r, ref) in ((AK.sum(v; alg), sum(h)), (AK.maximum(v; alg), maximum(h)),
+                         (AK.reduce(+, v; commutative=false, alg), reduce(+, h)),
+                         (AK.mapreduce(abs, +, v; init=Int32(0), alg),
+                          mapreduce(abs, +, h; init=Int32(0))))
+            @test isequal(r, ref) && typeof(r) == typeof(ref)
+        end
+    end
+
+    # Along `dims`, with every kernel shape; the result has the accumulator type (Base's is the
+    # fold of `Base.promote_union` of the element type, `Float32` for the mixed numbers)
+    for (shape, dims) in (((1000, 300), 1), ((1000, 300), 2), ((256, 256), 2),
+                          ((20_000, 2), (1, 2)), ((5, 3), 3)), mk in (mixed_numbers, some_missing)
+        h = mk(shape...)
+        d = array_from_host(h)
+        r = AK.sum(d; dims, alg)
+        @test eltype(r) == AK.accumulator_type(Base.add_sum, Union{}, eltype(h)) &&
+              isequal(Array(r), sum(h; dims))
+        @test isequal(Array(AK.maximum(d; dims, alg)), maximum(h; dims))
+        @test isequal(Array(AK.reduce(+, d; dims, commutative=false, alg)), reduce(+, h; dims))
+        # into a destination of GPUArrays' element type for the mixed numbers
+        if mk === mixed_numbers
+            R = array_from_host(Array{Union{Float32, Int32, Int64}}(undef, size(r)))
+            @test isequal(Array(AK.mapreducedim!(identity, Base.add_sum, R, d; overwrite=true,
+                                                 alg)), sum(h; dims))
+        end
+    end
+
+    # A source without a dense buffer, which a thread per output reduces
+    h, cols = mixed_numbers(8, 10), [1, 3, 5]
+    v = view(array_from_host(h), :, array_from_host(Int32.(cols)))
+    @test isequal(Array(AK.sum(v; dims=2, alg)), sum(view(h, :, cols); dims=2))
 end
 
 

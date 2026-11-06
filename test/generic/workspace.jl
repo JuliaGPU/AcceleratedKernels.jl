@@ -290,6 +290,8 @@ end
     @test only(Base.return_types(x -> AK.sum(x), (V,))) === Float32
     @test only(Base.return_types(x -> AK.reduce(+, x), (V,))) === Float32
     @test only(Base.return_types(x -> AK.sum(x; dims=1), (V,))) <: AbstractVector{Float32}
+    @test only(Base.return_types((x, dims) -> AK.accumulate(+, x; dims), (V, Int))) <:
+          AbstractVector{Float32}
     # ... and so do merge sort's plans, whatever the length and `lowmem`, and its workspaces where
     # the backend's allocations infer (OpenCL.jl chooses their memory at run time)
     infers(f, types...) = isconcretetype(only(Base.return_types(f, types)))

@@ -136,7 +136,8 @@ end
 # placeholder.
 function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
-    slots = t.local_mem_bytes ÷ (block_size * (isbitstype(T) ? max(sizeof(T), 1) : 1)) - 1
+    bytes = kernel_storable(T) ? max(local_sizeof(T), 1) : 1
+    slots = t.local_mem_bytes ÷ (block_size * bytes) - 1
     items = clamp(slots, 1, max(t.max_items, 1))
     return tile_stride(T, items) <= slots ? items : max(items - 1, 1)
 end
@@ -182,5 +183,5 @@ function check_scan(a::CPUThreads.Partitioned, backend, T, dims)
     nothing
 end
 
-check_bits_eltype(a, ::Type{T}) where {T} = isbitstype(T) || throw(ArgumentError(
-    "$(algname(a)): the element type $T is not a bits type, which the kernels need"))
+check_bits_eltype(a, ::Type{T}) where {T} = kernel_storable(T) || throw(ArgumentError(
+    "$(algname(a)): the element type $T is not a bits type or bits union, which the kernels need"))

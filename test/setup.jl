@@ -3,11 +3,10 @@
 # A copy of the host array on the backend (on the host for the threaded algorithms)
 array_from_host(h_arr::AbstractArray, dtype=nothing) = array_from_host(BACKEND, h_arr, dtype)
 function array_from_host(backend, h_arr::AbstractArray, dtype=nothing)
-    d_arr = if !TEST_KERNELS
-        zeros(isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
-    else
-        KernelAbstractions.zeros(backend, isnothing(dtype) ? eltype(h_arr) : dtype, size(h_arr))
-    end
+    T = isnothing(dtype) ? eltype(h_arr) : dtype
+    # (not `zeros`, which bits unions such as `Union{Int32, Float32}` have no `zero` for)
+    d_arr = TEST_KERNELS ? KernelAbstractions.allocate(backend, T, size(h_arr)) :
+                           Array{T}(undef, size(h_arr))
     copyto!(d_arr, h_arr isa Array ? h_arr : Array(h_arr))
     d_arr
 end
@@ -66,9 +65,16 @@ findall_alg(; block_size=nothing, items_per_thread=nothing, max_tasks=nothing, m
 # The element types the backend supports
 valid_backend_eltypes(backend, eltypes) = filter(T -> T !== Float64 || KernelAbstractions.supports_float64(backend), eltypes)
 
-# Whether the backend's arrays can hold bits unions such as `Union{Missing, Bool}` (Metal.jl's,
-# oneAPI.jl's and OpenCL.jl's cannot yet)
-const TEST_BITS_UNIONS = nameof(typeof(BACKEND)) ∉ (:MetalBackend, :oneAPIBackend, :OpenCLBackend)
+# Arrays of bits-union elements: integers and floats, and floats with some `missing`s (small
+# integers, so that sums are exact in any order)
+mixed_numbers(sz...) = Union{Int32, Float32}[rand(Bool) ? Int32(rand(-3:3)) : Float32(rand(-3:3))
+                                             for _ in CartesianIndices(sz)]
+function some_missing(sz...)
+    h = Union{Missing, Float32}[rand() < 0.001 ? missing : Float32(rand(-3:3))
+                                for _ in CartesianIndices(sz)]
+    h[rand(eachindex(h))] = missing
+    return h
+end
 
 using Adapt: Adapt, adapt
 

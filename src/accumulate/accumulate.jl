@@ -201,9 +201,24 @@ function scan_run!(op, v, src, s, bufs, seed)
     else
         scan_into!(op, w, src, ScanLoad{A}(op), backend, a, bufs; init, seed, dims, inclusive)
     end
-    w === v || copyto_on!(v, w, backend)
+    w === v || copy_stored!(v, w, backend)
     return v
 end
+
+# Copy the running values in the scratch array `w` to `v`, converting them. A member of a
+# bits-union running-value type that `eltype(v)` has no conversion from is one the stored values
+# need not take (a one-element partial result's, without the `init` that outputs include): it is
+# an `InexactError` when one does, rather than a dynamic `MethodError`, which kernels cannot throw.
+function copy_stored!(v, w, backend)
+    Base.isbitsunion(eltype(w)) || return copyto_on!(v, w, backend)
+    foreachindex_on(Base.OneTo(length(v)), backend) do i
+        @inbounds v[i] = convert_stored(eltype(v), w[i])
+    end
+    return v
+end
+@inline convert_stored(::Type{D}, x::X) where {D, X} =
+    Base.promote_op(convert, Type{D}, X) === Union{} ? Core.throw_inexacterror(:convert, D, x) :
+                                                       convert(D, x)
 
 # Scan into `w` along `dims` (at most `ndims(w)`), from the elements `load(src[i])` (`src` is
 # `w`, with `load === identity`, for a scan in place)
@@ -271,10 +286,10 @@ end
 function scan_acctype(op, ::Type{D}, ::Type{T}, init, inclusive::Bool, combines::Bool,
                       acctype=nothing) where {D, T}
     acctype === nothing || return resolve_acctype(op, Union{}, T, acctype)
-    S = init isa NoInit ? D : promote_type(D, typeof(init))
+    S = init isa NoInit ? D : join_type(D, typeof(init))
     A = accumulator_type(op, S, T)
     if !inclusive && !(init isa NoInit) && A !== Union{}
-        A = promote_type(A, typeof(init))
+        A = join_type(A, typeof(init))
     end
     if A === Union{}
         # `op` always throws for these types, which only a scan that never calls it gets past
@@ -319,9 +334,11 @@ end
     accumulate(op, v::AbstractArray; init=<none>, kwargs...)
 
 Out-of-place version of [`accumulate!`](@ref), with the same keywords. The result's element type
-is `acctype` when it is given, else the type the fold of `op` settles on from `init`'s type (when
-given) and the elements, e.g. an `Int` array for `accumulate(+, Int8[1, 2]; init=0)` and for
-`accumulate(Base.add_sum, Int8[1, 2])`.
+is `acctype` when it is given, else, as in Base, the type of the values the fold of `op` stores,
+from `init` (when given) and the elements: e.g. an `Int` array for `accumulate(+, Int8[1, 2];
+init=0)` and for `accumulate(Base.add_sum, Int8[1, 2])`, and a `Union{Float32, Int}` array for
+`cumsum(Union{Int32, Float32}[...])`. Where Base's inference widens a union of several members to
+`Any` (e.g. for `cumsum(Union{Missing, Int32, Float32}[...])`), the result keeps the bits union.
 """
 function accumulate(op, v::AbstractArray; backend::Union{Nothing, Backend}=nothing,
                     init=NoInit(), dims=nothing, inclusive::Bool=true, acctype=nothing,
@@ -340,10 +357,34 @@ function plan(::typeof(accumulate), op, v::AbstractArray; backend=nothing, init=
                inclusive, acctype, kwargs...).plan
 end
 
-# The element type `accumulate` allocates: the running-value type from `init`'s type alone
-accumulate_eltype(op, v, init, dims, inclusive, acctype) =
-    scan_acctype(op, Union{}, eltype(v), init, inclusive,
-                 scan_calls_op(size(v), dims, init, inclusive), acctype)
+# The element type `accumulate` allocates: `acctype`, else the type of the values the scan
+# stores, as Base's: the fold of `op` from `Base.reduce_first(op, x)` or `op(init, x)` (and `init`
+# itself, for an exclusive scan). The running values also hold partial results of one element,
+# so their type, from `init`'s type alone, may be wider; it is the result's type where nothing
+# else is (an exclusive scan from the neutral element), or where the fold always throws.
+function accumulate_eltype(op, v, init, dims, inclusive, acctype)
+    T = eltype(v)
+    A = scan_acctype(op, Union{}, T, init, inclusive,
+                     scan_calls_op(size(v), dims, init, inclusive), acctype)
+    acctype === nothing && (inclusive || !(init isa NoInit)) || return A
+    # (branching on `init`'s type: inference does not propagate a constant `inclusive` into
+    # this function, so a join with `init`'s type under `!inclusive` alone would also join
+    # `NoInit` into the inferred element type)
+    R = if init isa NoInit
+        first_type(op, T)
+    else
+        R = op_type(op, typeof(init), T)
+        inclusive ? R : join_type(R, typeof(init))
+    end
+    for _ in 1:8
+        R === Union{} && return A
+        B = op_type(op, R, T)
+        B = B === Union{} ? R : join_type(R, B)
+        B == R && return R
+        R = B
+    end
+    return A
+end
 
 
 """

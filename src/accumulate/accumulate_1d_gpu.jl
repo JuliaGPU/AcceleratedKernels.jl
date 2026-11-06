@@ -10,6 +10,7 @@
     aggregates, tile_prefixes,
     ::Val{ITEMS}, subgroups::Val,
 ) where {OP, L, ITEMS}
+    seed, start = kernel_value(seed), kernel_value(start)
     # `block_size` is a power of two.
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (tile_length(typeof(seed), block_size, ITEMS),)
@@ -48,6 +49,7 @@ end
 @kernel cpu=false inbounds=true unsafe_indices=true function tile_aggregates_kernel!(
     op, totals, src, load, start, seed, ::Val{ITEMS}, subgroups::Val,
 ) where ITEMS
+    seed, start = kernel_value(seed), kernel_value(start)
     @uniform block_size = @groupsize()[1]
     thread_totals = @localmem typeof(seed) (block_size,)
     _, op = seeded_ops(PartialInputs(), op, seed)
@@ -82,6 +84,7 @@ end
 @kernel cpu=false inbounds=true unsafe_indices=true function add_tile_prefixes_kernel!(
     op, v, totals, seed, inclusive, ::Val{ITEMS},
 ) where ITEMS
+    seed = kernel_value(seed)
     _, op = seeded_ops(PartialInputs(), op, seed)
     len = length(v)
     @uniform block_size = @groupsize()[1]

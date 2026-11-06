@@ -291,6 +291,49 @@ end
 end
 
 
+@testset "accumulate: bits-union elements" begin
+    Random.seed!(0)
+
+    # Running values of a bits-union type (`Optional`s of one, as these operators have no neutral
+    # element for it), with Base's result types: one tile, several, and with small tiles several
+    # levels of tile totals
+    for n in (1, 5, 1000, 70_001), mk in (mixed_numbers, some_missing),
+        alg in (scan_alg(), scan_alg(; block_size=32, items_per_thread=2, max_tasks=4))
+        h = mk(n)
+        v = array_from_host(h)
+        for (r, ref) in ((AK.cumsum(v; alg), cumsum(h)),
+                         (AK.accumulate(max, v; alg), accumulate(max, h)),
+                         (AK.accumulate(+, v; init=Int32(1), alg), accumulate(+, h; init=Int32(1))),
+                         (AK.accumulate(+, v; init=0f0, alg), accumulate(+, h; init=0f0)))
+            @test eltype(r) == eltype(ref) && isequal(Array(r), ref)
+        end
+        r = AK.accumulate(+, v; init=0f0, inclusive=false, alg)
+        @test isequal(Array(r), [0f0; accumulate(+, h; init=0f0)[1:end-1]])
+        # into a destination of Base's element type, which an `Int` `init` widens to an abstract
+        # type with `promote_type`
+        ref = accumulate(+, h; init=0)
+        @test isequal(Array(AK.accumulate!(+, similar(v, eltype(ref)), v; init=0, alg)), ref)
+    end
+
+    # A union of three members, which Base's inference widens to `Any`
+    h = Union{Missing, Int32, Float32}[i == 700 ? missing :
+                                       isodd(i) ? Int32(i % 5) : Float32(i % 3) for i in 1:1000]
+    r = AK.cumsum(array_from_host(h); alg=scan_alg())
+    @test eltype(r) == Union{Missing, Float32, Int} && isequal(Array(r), cumsum(h))
+
+    # Along `dims`, with every launch shape
+    for (sz, dims) in (((40, 300), 1), ((40, 5, 30), 2), ((3, 2000), 2), ((2000, 3), 1),
+                       ((64, 3, 500), 2), ((3, 200_000), 2), ((600_000, 1), 1)),
+        mk in (mixed_numbers, some_missing)
+        h = mk(sz...)
+        x = array_from_host(h)
+        r, ref = AK.cumsum(x; dims, alg=slice_alg()), cumsum(h; dims)
+        @test eltype(r) == eltype(ref) && isequal(Array(r), ref)
+        @test isequal(Array(AK.accumulate(min, x; dims, alg=slice_alg())), accumulate(min, h; dims))
+    end
+end
+
+
 @testset "accumulate: dims" begin
     Random.seed!(0)
 

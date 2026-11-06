@@ -108,7 +108,7 @@ function slice_shape(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{
 end
 
 # The elements of type `S` that the local memory of a `:rows` block holds
-slice_rows_max(t::ScanTuning, ::Type{S}) where {S} = t.local_mem_bytes ÷ max(sizeof(S), 1)
+slice_rows_max(t::ScanTuning, ::Type{S}) where {S} = t.local_mem_bytes ÷ max(local_sizeof(S), 1)
 
 # The number of chunk totals a scan of slices of `len` elements stores, at every level
 function slice_scratch(n_inner, len, n_outer, a::SliceScan, t::ScanTuning, ::Type{S}) where {S}
@@ -184,6 +184,7 @@ end
 @kernel inbounds=true cpu=false unsafe_indices=true function slice_rows_kernel!(
     v, src, load, op::OP, start, seed, inclusive, len, nslices, ::Val{MAX},
 ) where {OP, MAX}
+    seed, start = kernel_value(seed), kernel_value(start)
     @uniform block_size = @groupsize()[1]
     rows = @localmem typeof(seed) (MAX,)
     _, op = seeded_ops(PartialInputs(), op, seed)
@@ -219,6 +220,7 @@ end
     v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, chunk_len, nthreads,
 ) where {L, OP}
+    seed, start = kernel_value(seed), kernel_value(start)
     _, op = seeded_ops(PartialInputs(), op, seed)
     block_size = @groupsize()[1]
     tid = (@index(Group, Linear) - 1) * block_size + (@index(Local, Linear) - 1)
@@ -251,6 +253,7 @@ end
     v, src, load::L, op::OP, start, seed, carries, totals, inclusive,
     n_inner, len, nchunks, tiles_per_chunk, ::Val{ITEMS}, subgroups::Val,
 ) where {L, OP, ITEMS}
+    seed, start = kernel_value(seed), kernel_value(start)
     @uniform block_size = @groupsize()[1]
     tile = @localmem typeof(seed) (tile_length(typeof(seed), block_size, ITEMS),)
     thread_totals = @localmem typeof(seed) (block_size,)
