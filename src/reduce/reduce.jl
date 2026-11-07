@@ -188,8 +188,8 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
     empty = A === Union{} ? nothing : empty
 
     if iswhole(dims)
-        a = resolve_reduce(alg, backend, A, dims)
         seed = mapreduce_seed(op, A, neutral)
+        a = resolve_reduce(alg, backend, A, dims, typeof(seed))
         # (the buffer's name does not depend on the length, so that results infer)
         sizes = if a isa BlockReduce && seed !== nothing
             n = mapreduce_1d_host_partials(length(src), a.block_size, a.items_per_thread,
@@ -212,8 +212,8 @@ function mapreduce_dims_setup(f::F, op::OP, src, backend, init, neutral, ::Type{
     # empty reduction can succeed
     R = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
     dst_sizes = ntuple(d -> d in rdims ? 1 : srcsize(src, d), ndims(src))
-    a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
+    a = resolve_reduce(alg, backend, A, rdims, typeof(seed))
     launch = select_launch(src, backend, a, A, rdims, Base.prod(dst_sizes), commutative)
     sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
     return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, rdims,
@@ -375,8 +375,8 @@ end
 function reducedim_setup(f::F, op::OP, src, dst, rdims, backend, init, neutral,
                          overwrite, acctype, alg, commutative) where {F, OP}
     A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
-    a = resolve_reduce(alg, backend, A, rdims)
     seed = mapreduce_seed(op, A, neutral)
+    a = resolve_reduce(alg, backend, A, rdims, typeof(seed))
     launch = select_launch(src, backend, a, A, rdims, length(dst), commutative)
     sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init

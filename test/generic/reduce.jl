@@ -988,6 +988,29 @@ end
 end
 
 
+# Elements whose partial results take a smaller block than the tuning's to fit local memory (648
+# and 2080 bytes: blocks of 32, a sub-group, and of 8, smaller than one), with and without a
+# neutral element, in any order and in element order. (Level Zero limits a kernel's arguments
+# to 2 KiB, which the seed of the larger ones exceeds.)
+@testset "reduce: large elements" begin
+    for N in (@isdefined(oneAPI) && BACKEND isa oneAPI.oneAPIBackend ? (162,) : (162, 520))
+        W = Large{N}
+        TEST_KERNELS && @test AK.resolve_reduce(REDUCE_ALG, BACKEND, W, :).block_size *
+                              sizeof(W) <= AK.LOCAL_MEMORY_BUDGET
+        for (sz, dims) in (((5000,), :), ((40, 300), 1), ((300, 40), 1), ((300, 40), 2),
+                           ((3, 2000), 2), ((2000, 3), 1))
+            xh = [W(rand(1:1000)) for _ in CartesianIndices(sz)]
+            x = array_from_host(xh)
+            ref = reduce(large_add, xh; dims, init=zero(W))
+            for neutral in (nothing, zero(W)), commutative in (true, false)
+                res = AK.reduce(large_add, x; dims, neutral, commutative, alg=REDUCE_ALG)
+                @test (dims isa Colon ? res : Array(res)) == ref
+            end
+        end
+    end
+end
+
+
 # A reduction keeps no reference to its source, so `unsafe_free!` frees the source's memory at
 # once (measured where the backend's pool counts it)
 if @isdefined(CUDACore) && BACKEND isa CUDACore.CUDABackend && CUDACore.used_memory() !== missing
