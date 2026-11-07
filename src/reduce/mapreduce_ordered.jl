@@ -77,8 +77,7 @@ end
 # The reduction of the values `x` of the block's threads in their order, into the result of thread
 # 0: with sub-groups (`block_reduce`, which is in order), or with the local-memory scan
 @inline function ordered_block_reduce(@context, op, totals, x, seed, N, ithread, ::Val{0})
-    totals[ithread + 0x1] = x
-    _, total = block_exclusive_scan!(@context, op, totals, seed, N, ithread, Val(0))
+    _, total = block_exclusive_scan(@context, op, totals, x, seed, N, ithread, Val(0))
     return total
 end
 @inline function ordered_block_reduce(@context, op, totals, x, seed, N, ithread,

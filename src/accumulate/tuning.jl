@@ -39,7 +39,10 @@ end
 Values that drive `Auto` selection and fill unset algorithm fields for scans on one device, as
 returned by [`scan_tuning`](@ref).
 
-- `block_size`: the block size of every scan kernel algorithm.
+- `block_size`: the block size of every scan kernel algorithm. The kernels hold a tile of
+  partial results and a partial result per thread in local memory, so for large element types
+  it is lowered, to a power of two, until a tile of one item per thread fits `local_mem_bytes`;
+  an explicit `block_size` is kept.
 - `local_mem_bytes`, `max_items`: the default `items_per_thread` of the kernel algorithms is the
   largest that keeps a tile of the element type within `local_mem_bytes`, and at most
   `max_items`. It is derived from the effective `block_size`, so an explicit `block_size` gets a
@@ -130,21 +133,32 @@ function check_fields(a::Union{ScanPrefixes, SliceScan})
     nothing
 end
 
+# The size of a partial result of type `T` in the scans' local memory; types that kernels cannot
+# store, which `check_scan` rejects, get a placeholder
+scan_sizeof(::Type{T}) where {T} = kernel_storable(T) ? max(local_sizeof(T), 1) : 1
+
 # The largest number of items per thread whose tile fits the tuning's local-memory budget, next
 # to the block's `block_size` per-thread totals (hence the `- 1`), with the runs padded to
-# `tile_stride`. Types without a definite size and block sizes that `check_scan` rejects get a
-# placeholder.
+# `tile_stride`. Block sizes that `check_scan` rejects get a placeholder.
 function default_items_per_thread(t::ScanTuning, block_size::Int, ::Type{T}) where {T}
     1 <= block_size <= 1024 || return 1
-    bytes = kernel_storable(T) ? max(local_sizeof(T), 1) : 1
-    slots = t.local_mem_bytes ÷ (block_size * bytes) - 1
+    slots = t.local_mem_bytes ÷ (block_size * scan_sizeof(T)) - 1
     items = clamp(slots, 1, max(t.max_items, 1))
     return tile_stride(T, items) <= slots ? items : max(items - 1, 1)
 end
 
+# The tuning's block size, lowered to a power of two whose tile of one item per thread and
+# per-thread totals, two partial results per thread, fit its local-memory budget (as CUB's
+# `MemBoundScaling`). It is not lowered below 2, as `ScanPrefixes` needs tiles of two elements,
+# so partial results of more than a quarter of the budget exceed it.
+function default_block_size(t::ScanTuning, ::Type{T}) where {T}
+    n = t.local_mem_bytes ÷ (2 * scan_sizeof(T))
+    return min(t.block_size, n < 2 ? 2 : prevpow(2, n))
+end
+
 function fill_defaults(a::A, t::ScanTuning,
                        ::Type{T}) where {A <: Union{ScanPrefixes, SliceScan}, T}
-    block_size = something(a.block_size, t.block_size)
+    block_size = something(a.block_size, default_block_size(t, T))
     items_per_thread = isnothing(a.items_per_thread) ? default_items_per_thread(t, block_size, T) :
                                                        a.items_per_thread
     return A(block_size, items_per_thread)

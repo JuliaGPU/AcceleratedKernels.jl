@@ -87,7 +87,7 @@ end
 ) where ITEMS
     @uniform block_size = @groupsize()[1]
     tile = @localmem UInt8 (tile_length(UInt8, block_size, ITEMS),)
-    thread_counts = @localmem Int32 (block_size,)
+    sdata = @localmem Int32 (block_slots(block_size, subgroups),)
 
     len = length(bools)
     iblock  = @index(Group, Linear) - 0x1
@@ -106,10 +106,9 @@ end
         count += tile[slot + k + 0x1]
         k += 1
     end
-    thread_counts[ithread + 0x1] = count
 
-    thread_offset, _ = block_exclusive_scan!(
-        @context, +, thread_counts, Int32(0), block_size, ithread, subgroups,
+    thread_offset, _ = block_exclusive_scan(
+        @context, +, sdata, count, Int32(0), block_size, ithread, subgroups,
     )
     pos = (iblock == 0x0 ? 0 : block_counts[iblock]) + thread_offset
 
