@@ -135,6 +135,7 @@ function launch!(shape::ByLanes, f::F, op::OP, dst, src, buffer, backend, alg, b
     by_lanes_kernel!(backend, block_size)(
         buffer, dst, f, op, seed, init,
         base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(shape.lanes),
+        reduce_subgroup_width(backend, typeof(seed), block_size),
         ndrange=(block_size * blocks,),
     )
 end
@@ -152,6 +153,7 @@ function launch!(shape::ByBlock, f::F, op::OP, dst, src, buffer, backend, alg, b
         Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
             dst_size, reduce_size, blocks, Val(W),
+            reduce_subgroup_width(backend, typeof(seed), block_size),
             ndrange=(block_size * blocks,),
         )
     else
@@ -159,6 +161,7 @@ function launch!(shape::ByBlock, f::F, op::OP, dst, src, buffer, backend, alg, b
         Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
             reduce_strides, reduce_sizes, dst_size, reduce_size, blocks,
+            reduce_subgroup_width(backend, typeof(seed), block_size),
             ndrange=(block_size * blocks,),
         )
     end
@@ -174,6 +177,7 @@ function launch!(shape::ByBlocks, f::F, op::OP, dst, src, buffer, backend, alg, 
         buffer, partials, f, op, seed,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
         Val(dst_size), reduce_size, groups,
+        reduce_subgroup_width(backend, typeof(seed), block_size),
         ndrange=(block_size * dst_size * groups,),
     )
     combine_groups!(backend, partials, dst, op, seed, init, dst_size, groups, false,
@@ -238,7 +242,9 @@ function combine_groups!(backend, partials, dst, op::OP, seed, init, dst_size, g
     else
         by_block_kernel!(backend, block_size)(
             partials, dst, PartialInputs(), op, seed, init, 0, (1,), (dst_size,), (dst_size,),
-            (groups,), dst_size, groups, dst_size, ndrange=(block_size * dst_size,))
+            (groups,), dst_size, groups, dst_size,
+            reduce_subgroup_width(backend, typeof(seed), block_size),
+            ndrange=(block_size * dst_size,))
     end
 end
 

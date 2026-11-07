@@ -35,9 +35,9 @@ Values that fill unset algorithm fields for reductions on one device, as returne
 - `block_size`, `items_per_thread`, `switch_below`: settings for unset `BlockReduce` fields;
   `items_per_thread=nothing` chooses it by the size of the accumulator type, enough elements for
   64 bytes, from 4 to 16.
-- `local_mem_bytes`: the kernels hold a partial result per thread in local memory, so an unset
-  `block_size` is lowered, to a power of two, until a block's partial results fit in this many
-  bytes; an explicit `block_size` is kept.
+- `local_mem_bytes`: an unset `block_size` is lowered, to a power of two, until a partial result
+  per thread fits in this many bytes, as the kernels keep without sub-groups (see `subgroups`),
+  and the strided ones always; an explicit `block_size` is kept.
 - `target_blocks`: the number of blocks a reduction aims to launch to fill the device: along
   `dims` when there are few outputs, and at most in the first pass of a whole-array reduction
   (whose second pass reduces their partial results in one block). Must be positive.
@@ -56,6 +56,10 @@ Values that fill unset algorithm fields for reductions on one device, as returne
   flag that they are set with an integer that fills the padding after the value, up to 8 bytes
   (so that Compute Sanitizer's initcheck doesn't see reads of unwritten bytes there), or with a
   `Bool`, which some compilers handle better in local memory. The results are the same.
+- `subgroups`: whether the kernels combine the values of a block with sub-group operations,
+  where the backend has them (from KernelAbstractions 0.10), keeping a value per sub-group
+  rather than per thread in local memory. CPUs, whose sub-group operations synchronize the
+  whole block, reduce faster without.
 
 `items_per_thread` defaults to the choice by type, and `columns_split_min_elems` to 2^18,
 measured on CUDA. `lanes_max_bytes` defaults to 128, beyond which AMD and Intel GPUs stop gaining
@@ -73,6 +77,7 @@ Base.@kwdef struct ReduceTuning
     lanes_max_bytes::Int = 128
     lanes_short_runs::Bool = true
     wide_optional_flag::Bool = true
+    subgroups::Bool = true
 end
 
 """
@@ -87,7 +92,8 @@ tuning_type(::typeof(reduce_tuning)) = ReduceTuning
 # with a thread per output, and long ones faster with groups of threads: with PoCL on a Ryzen
 # 9950X, summing an 8×10^6 matrix along `dims=1` takes half the time, and a 4096×4096 one along
 # `dims=1` also half the time.
-cpu_reduce_tuning(; kwargs...) = ReduceTuning(; lanes_short_runs=false, lanes_max_bytes=512, kwargs...)
+cpu_reduce_tuning(; kwargs...) =
+    ReduceTuning(; lanes_short_runs=false, lanes_max_bytes=512, subgroups=false, kwargs...)
 reduce_tuning(::HostBackend, ::Type) = cpu_reduce_tuning()
 
 # Elements each thread loads per tile of a whole-array reduction: enough for 64 bytes of
