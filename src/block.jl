@@ -35,8 +35,8 @@ scan_subgroup_width(backend, ::Type{T}, block_size) where {T} =
 reduce_subgroup_width(backend, ::Type{T}, block_size) where {T} =
     tuning(reduce_tuning, backend, T).subgroups ? subgroup_width(backend, T, block_size) : Val(0)
 
-# The local memory of a block reduction of `N` values (see `block_reduce`): a value per
-# sub-group, or per thread without sub-groups
+# The local memory of a block reduction or scan of `N` values (see `block_reduce` and
+# `block_exclusive_scan`): a value per sub-group, or per thread without sub-groups
 @inline block_slots(N, ::Val{W}) where {W} = W == 0 ? N : N ÷ W
 
 # Reduce the values `x` of the block's threads with `op` into the result of thread 0, with
@@ -68,40 +68,41 @@ end
 end
 
 
-# Exclusive scan of one value per thread, `totals[ithread + 1]`, seeded with `seed`: returns the
-# thread's prefix and the block's total. All threads in the block must call it. Operands are
-# combined in element order (earlier on the left), so `op` need not be commutative. With a
-# sub-group width `W` (see `scan_subgroup_width`), it scans with sub-group operations, else in local
-# memory. It overwrites `totals`. (It keeps its bounds checks: without them, the carry pass of
-# `slice_tiles_kernel!` took 101 instead of 64 registers on an RTX 5080, and scanned a
-# `(2, 10^7)` array along `dims=2` 72% slower.)
-@inline block_exclusive_scan!(@context, op, totals, seed, block_size, ithread, ::Val{0}) =
-    block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
+# Exclusive scan of the values `x` of the block's threads, seeded with `seed`, with `sdata` of
+# `block_slots(block_size, subgroups)` elements: returns the thread's prefix and the block's
+# total. All threads in the block must call it. Operands are combined in element order (earlier
+# on the left), so `op` need not be commutative. With a sub-group width `W` (see
+# `scan_subgroup_width`), each sub-group scans its values, and then the sub-groups' totals (every
+# sub-group does, as PoCL needs the sub-groups of a block to run the same sub-group operations);
+# else it scans in local memory. A block that scans again must synchronize first. (It
+# keeps its bounds checks: without them, the carry pass of `slice_tiles_kernel!` took 101 instead
+# of 64 registers on an RTX 5080, and scanned a `(2, 10^7)` array along `dims=2` 72% slower.)
+@inline function block_exclusive_scan(@context, op, sdata, x, seed, block_size, ithread,
+                                      ::Val{0})
+    sdata[ithread + 0x1] = x
+    return block_exclusive_scan!(@context, op, sdata, seed, block_size, ithread)
+end
 
-@inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread,
-                                       ::Val{W}) where {W}
-    # scan each sub-group's values, then the sub-groups' totals, in one sub-group
-    x = totals[ithread + 0x1]
+@inline function block_exclusive_scan(@context, op, sdata, x, seed, block_size, ithread,
+                                      ::Val{W}) where {W}
     lane = ithread % W
     sg = ithread ÷ W
     nsg = block_size ÷ W
     incl = KI.sub_group_scan(op, x)
-    @synchronize()
     if lane == W - 1
-        totals[sg + 0x1] = incl
+        sdata[sg + 0x1] = incl
     end
     @synchronize()
     # (lanes beyond the sub-groups only affect results that are not used)
-    t = lane < nsg ? totals[lane + 0x1] : seed
+    t = lane < nsg ? sdata[lane + 0x1] : seed
     sg_excl = KI.sub_group_exclusive_scan(op, t, seed)
     sg_prefix = KI.shfl(sg_excl, sg + 0x1)
     block_total = KI.shfl(op(sg_excl, t), nsg)
     prev = KI.shfl_up(incl, 1)
-    @synchronize()
     return (lane == 0 ? sg_prefix : op(sg_prefix, prev)), block_total
 end
 
-# The scan in local memory
+# The scan in local memory of one value per thread, `totals[ithread + 1]`, which it overwrites
 @inline function block_exclusive_scan!(@context, op, totals, seed, block_size, ithread)
     # Up-sweep
     offset = one(ithread)
@@ -198,9 +199,8 @@ Base.@propagate_inbounds function tile_store!(v, tile, index, offset, len, ithre
     end
 end
 
-# Scan each thread's run in place, as CUB's ThreadScan, and store its total in `thread_totals`
-# for the block scan
-Base.@propagate_inbounds function thread_scan!(op, tile, thread_totals, seed, ithread,
+# Scan each thread's run in place, as CUB's ThreadScan, and return its total for the block scan
+Base.@propagate_inbounds function thread_scan!(op, tile, seed, ithread,
                                                ::Val{ITEMS}) where {ITEMS}
     run = ithread * tile_stride(eltype(tile), ITEMS)
     acc = seed
@@ -210,7 +210,7 @@ Base.@propagate_inbounds function thread_scan!(op, tile, thread_totals, seed, it
         tile[run + k + 0x1] = acc
         k += 1
     end
-    thread_totals[ithread + 0x1] = acc
+    return acc
 end
 
 # Combine the thread's scanned run with its `prefix` from the block scan, into the run's

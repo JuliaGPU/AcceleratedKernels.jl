@@ -590,7 +590,7 @@ resolve_scan(alg; T=Float32, dims=nothing, backend=FAKE) = AK.resolve_scan(alg, 
         @test resolve_scan(AK.Auto(); T=ComplexF64) === AK.ScanPrefixes(256, 7)
         # (4 items would fit, but they are padded to 5)
         @test resolve_scan(AK.Auto(); T=NTuple{3, Float64}) === AK.ScanPrefixes(256, 3)
-        @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(256, 1)
+        @test resolve_scan(AK.Auto(); T=NTuple{8, Float64}) === AK.ScanPrefixes(256, 1)
         @test resolve_scan(AK.Auto(); dims=2) === AK.SliceScan(256, 8)
     end
 
@@ -598,6 +598,30 @@ resolve_scan(alg; T=Float32, dims=nothing, backend=FAKE) = AK.resolve_scan(alg, 
     for dims in (nothing, 1)
         @test resolve_scan(AK.Auto(); backend=HOST, dims) ===
               resolve_scan(AK.CPUThreads.Partitioned(); backend=HOST, dims)
+    end
+end
+
+
+@testset "scan resolution: local memory" begin
+    # An unset block size is the largest power of two up to the tuning's whose tile of one item
+    # per thread and per-thread totals, of the partial results `S`, fit the tuning's local
+    # memory; an explicit one is kept. (It stays at 2 for partial results too large to fit.)
+    with_tuning(AK.ScanTuning(block_size=512, local_mem_bytes=32 * 1024, max_items=8)) do
+        for (S, block_size) in ((Float32, 512), (NTuple{4, Float64}, 512),
+                                (NTuple{8, Float64}, 256), (NTuple{16, Float64}, 128),
+                                (NTuple{81, Float64}, 16), (NTuple{2048, Float64}, 2),
+                                (NTuple{8192, Float64}, 2))
+            for dims in (nothing, 1)
+                @test AK.resolve_scan(AK.Auto(), FAKE, Float32, dims, S).block_size == block_size
+            end
+        end
+        # (an `Optional` partial result of an operator without a neutral element is larger)
+        @test resolve_scan(AK.Auto(); T=NTuple{16, Float64}) === AK.ScanPrefixes(128, 1)
+        @test AK.resolve_scan(AK.Auto(), FAKE, NTuple{16, Float64}, nothing,
+                              typeof(AK.Optional{NTuple{16, Float64}}())) ===
+              AK.ScanPrefixes(64, 1)
+        @test AK.resolve_scan(AK.ScanPrefixes(block_size=512), FAKE, Float32, nothing,
+                              NTuple{81, Float64}) === AK.ScanPrefixes(512, 1)
     end
 end
 
