@@ -176,7 +176,8 @@ function launch!(shape::ByBlocks, f::F, op::OP, dst, src, buffer, backend, alg, 
         Val(dst_size), reduce_size, groups,
         ndrange=(block_size * dst_size * groups,),
     )
-    combine_groups!(backend, partials, dst, op, seed, init, dst_size, groups, false)
+    combine_groups!(backend, partials, dst, op, seed, init, dst_size, groups, false,
+                    block_size)
 end
 
 function launch!(shape::Columns, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
@@ -195,7 +196,8 @@ function launch!(shape::Columns, f::F, op::OP, dst, src, buffer, backend, alg, b
         run, dst_size ÷ run, runs..., reduce_size, groups, Val(outputs), Val(ordered);
         ndrange=(threads * blocks,),
     )
-    groups == 1 || combine_groups!(backend, out, dst, op, seed, init, dst_size, groups, ordered)
+    groups == 1 || combine_groups!(backend, out, dst, op, seed, init, dst_size, groups, ordered,
+                                   threads)
 end
 
 function launch!(::Tiled, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
@@ -225,10 +227,11 @@ end
 
 # The second pass of a reduction split across `groups` blocks per output: a block per output
 # combines the partial results `partials` of its groups (`dst_size` apart) into `dst`, in order if
-# `ordered`
+# `ordered`, with blocks of at most `max_block_size` threads (the first pass's, which fit local
+# memory)
 function combine_groups!(backend, partials, dst, op::OP, seed, init, dst_size, groups,
-                         ordered) where {OP}
-    block_size = combine_block_size(groups)
+                         ordered, max_block_size) where {OP}
+    block_size = min(combine_block_size(groups), max_block_size)
     if ordered
         ordered_pass!(backend, block_size, 1, partials, dst, PartialInputs(), op, seed, init,
                       0, (1,), (dst_size,), (dst_size,), (groups,), dst_size, groups, 1)
