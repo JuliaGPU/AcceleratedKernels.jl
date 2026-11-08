@@ -166,7 +166,7 @@ scan_run!(op, v, src, s, bufs) =
         scan_run!(op, v, src, s, bufs, seed)
     end
 function scan_run!(op, v, src, s, bufs, seed)
-    backend, a = s.plan.backend, s.plan.alg
+    backend, a = s.plan.backend, one_task(s.plan.alg, v)
     init, dims, inclusive = s.init, s.dims, s.inclusive
     A = unval(s.A)
 

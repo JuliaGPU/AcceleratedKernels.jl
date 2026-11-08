@@ -384,7 +384,7 @@ function reducedim_setup(f::F, op::OP, ::Type{M}, layout, dst, rdims, backend, i
                          overwrite, acctype, alg, commutative) where {F, OP, M}
     A = resolve_acctype(op, eltype(dst), M, acctype)
     seed = mapreduce_seed(op, A, neutral)
-    a = resolve_reduce(alg, backend, A, rdims, typeof(seed))
+    a = one_task(resolve_reduce(alg, backend, A, rdims, typeof(seed)), dst)
     launch = select_launch(layout, backend, a, A, rdims, length(dst), commutative)
     sizes = launch_scratch(launch, layout.size, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init

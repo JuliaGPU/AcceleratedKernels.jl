@@ -84,7 +84,7 @@ function sort_setup(
     # MergeSort sorts the keys `by.(v)` carrying `v` along
     merge_eltypes = by === identity ? (eltype(v), Nothing) :
                     (Base.promote_op(by, eltype(v)), eltype(v))
-    a = resolve_sort(alg, backend, v, dims, ord; merge_eltypes)
+    a = one_task(resolve_sort(alg, backend, v, dims, ord; merge_eltypes), v)
     return (; plan=sort_plan(a, v, backend, dims, by), ord)
 end
 
@@ -379,8 +379,8 @@ function sort_by_key_setup(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
     keys, values = one_based(keys), one_based(values)
-    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true,
-                     merge_eltypes=(eltype(keys), eltype(values)))
+    a = one_task(resolve_sort(alg, backend, keys, dims, ord; pairs=true,
+                              merge_eltypes=(eltype(keys), eltype(values))), keys, values)
     return (; plan=Plan(backend, a, sort_by_key_scratch(a, keys, values, dims)), ord)
 end
 

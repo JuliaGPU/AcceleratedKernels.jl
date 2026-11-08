@@ -106,7 +106,7 @@ function reverse!(
     min_elems::Int=1,
 )
     backend = resolve_backend(backend, v)
-    launch = (; block_size, max_tasks, min_elems)
+    launch = (; block_size, max_tasks=one_task(max_tasks, v), min_elems)
     check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(v, dims)
     if !(dims isa Colon)
@@ -161,7 +161,7 @@ function reverse!(
     min_elems::Int=1,
 )
     backend = resolve_backend(backend, dst, src)
-    launch = (; block_size, max_tasks, min_elems)
+    launch = (; block_size, max_tasks=one_task(max_tasks, dst), min_elems)
     check_launch(; launch...)      # before the early returns
     dims = check_reverse_dims(src, dims)
     check_dst(dst, src, "reverse!"; shape=dims isa Colon ? length : size, in_place=false)
