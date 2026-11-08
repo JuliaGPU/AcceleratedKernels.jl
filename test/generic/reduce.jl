@@ -1011,6 +1011,39 @@ end
 end
 
 
+# CPU devices reduce without sub-groups (`cpu_reduce_tuning`), so on the host backend the tuning
+# turns them on, to check the sub-group reductions under PoCL, which runs sub-group operations
+# as barriers of the whole block: whole arrays (also in element order, over several tiles),
+# runs of consecutive elements (`ByLanes`), blocks that reduce several outputs in turn
+# (`ByBlock`), split reductions (`ByBlocks`), and in element order along `dims`; with and
+# without a neutral element (`plus` has none)
+plus(a, b) = a + b
+function subgroup_reductions()
+    @test AK.reduce_subgroup_width(BACKEND, Int32, 256) !== Val(0)
+    for (sz, dims) in (((10^6,), :), ((64, 1000), 1), ((20_000, 300), 1), ((100_000, 4), 1))
+        xh = rand(Int32, sz...)
+        x = array_from_host(xh)
+        for op in (+, plus)
+            res = AK.reduce(op, x; dims, alg=REDUCE_ALG)
+            @test (dims isa Colon ? res : Array(res)) == reduce(+, xh; dims)
+        end
+    end
+    for (sz, dims) in (((70_000,), :), ((3000, 300), 1))
+        xh = [randmat2() for _ in CartesianIndices(sz)]
+        res = AK.reduce(matmul2, array_from_host(xh); dims, commutative=false, alg=REDUCE_ALG)
+        @test (dims isa Colon ? res : Array(res)) == reduce(matmul2, xh; dims, init=I2)
+    end
+end
+if HOST_KERNELS
+    @testset "reduce: sub-groups on the host backend" begin
+        @eval AK.reduce_tuning(::typeof(BACKEND), ::Type) = AK.ReduceTuning(subgroups=true)
+        try
+            Base.invokelatest(subgroup_reductions)
+        finally
+            @eval AK.reduce_tuning(::typeof(BACKEND), ::Type) = AK.cpu_reduce_tuning()
+        end
+    end
+end
 # A reduction keeps no reference to its source, so `unsafe_free!` frees the source's memory at
 # once (measured where the backend's pool counts it)
 if @isdefined(CUDACore) && BACKEND isa CUDACore.CUDABackend && CUDACore.used_memory() !== missing

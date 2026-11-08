@@ -6,9 +6,9 @@
 # Block `iblock` reduces group `g` of output `iout` (`iblock = iout + g * output_size`): the
 # outputs' slices are split into tiles of `N * K` elements, and each of the `groups` groups takes
 # a contiguous range of them (an even share, as CUB's `GridEvenShare`). In each tile, every thread
-# reduces a run of `K` consecutive elements, and the block combines the runs in order (with the
-# scans' block scan, which uses sub-groups where `subgroups` says so) and appends the tile's total
-# to the group's. Indices and `f`, `seed` and `init` are those of the other reduction kernels (see
+# reduces a run of `K` consecutive elements, and the block combines the runs in order (with
+# sub-group reductions where `subgroups` says so, else the scans' block scan) and appends the
+# tile's total to the group's. Indices and `f`, `seed` and `init` are those of the other reduction kernels (see
 # `by_block_kernel!` and `mapreduce_1d_kernel!`); with several groups, `dst` holds
 # `output_size × groups` partial results, for a second pass of this kernel with
 # `f === PartialInputs()`. With a vector width `W`, the runs of full tiles are read with `K ÷ W`
@@ -24,7 +24,7 @@
 ) where {F, OP, K, W}
     seed = kernel_value(seed)
     @uniform N = @groupsize()[1]
-    totals = @localmem typeof(seed) (N,)
+    totals = @localmem typeof(seed) (block_slots(N, subgroups),)
     mapf, accop = seeded_ops(f, op, seed)
 
     iblock  = @index(Group, Linear) - 0x1
@@ -63,10 +63,8 @@
                 end
             end
         end
-        totals[ithread + 0x1] = acc
-        _, tile_total = block_exclusive_scan!(@context, accop, totals, seed, N, ithread,
-                                              subgroups)
-        total = accop(total, tile_total)
+        total = accop(total, ordered_block_reduce(@context, accop, totals, acc, seed, N, ithread,
+                                                  subgroups))
         tile += 1
     end
 
@@ -74,6 +72,21 @@
         i = iout + g * output_size + 0x1
         dst[i] = finish(op, init, dst, i, total)
     end
+end
+
+# The reduction of the values `x` of the block's threads in their order, into the result of thread
+# 0: with sub-groups (`block_reduce`, which is in order), or with the local-memory scan
+@inline function ordered_block_reduce(@context, op, totals, x, seed, N, ithread, ::Val{0})
+    totals[ithread + 0x1] = x
+    _, total = block_exclusive_scan!(@context, op, totals, seed, N, ithread, Val(0))
+    return total
+end
+@inline function ordered_block_reduce(@context, op, totals, x, seed, N, ithread,
+                                      subgroups::Val)
+    total = @inline block_reduce(@context, op, totals, x, ithread, subgroups)
+    # (before the next tile's values overwrite `totals`)
+    @synchronize()
+    return total
 end
 
 # One pass of `ordered_kernel!`, of `groups` blocks per output; `dense_buffer` is whether
@@ -90,7 +103,7 @@ function ordered_pass!(
         src, dst, f, op, seed, init,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
         output_size, reduce_size, groups, Val(items_per_thread), Val(W),
-        scan_subgroup_width(backend, typeof(seed), block_size),
+        reduce_subgroup_width(backend, typeof(seed), block_size),
         ndrange=(block_size * output_size * groups,),
     )
     return nothing
