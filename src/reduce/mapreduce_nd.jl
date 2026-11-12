@@ -60,10 +60,14 @@ function mapreduce_nd!(
     end
     shape = launch.shape
 
+    # (`linear_source` and `kernel_buffer` are dynamic calls too: inferred, they would visit every
+    # kind of buffer for each new type of source)
+
     # A single output of a contiguous source: the whole-array kernels, finishing on the device
     if shape isa Whole
         Base.inferencebarrier(mapreduce_1d_gpu)(
-            f, op, linear_source(src, launch.buffer, launch.offset), backend; init, seed,
+            f, op, Base.inferencebarrier(linear_source)(src, launch.buffer, launch.offset),
+            backend; init, seed,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
             max_blocks=tuning(reduce_tuning, backend, A).target_blocks,
             partials=get(bufs, :partials, nothing), switch_below=0,
@@ -72,20 +76,19 @@ function mapreduce_nd!(
     end
 
     # (the kernels below index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`)
-    # (a function barrier: the type of a `LinearBroadcast` buffer depends on the sizes)
-    launch_segments!(shape, f, op, dst, src, kernel_buffer(src, launch.buffer),
-                     isdense_buffer(src, launch.buffer), backend, alg, bufs, init, seed,
-                     launch, dst_size, len)
+    buffer = Base.inferencebarrier(kernel_buffer)(src, launch.buffer)
+    Base.inferencebarrier(launch!)(shape, f, op, dst, src, buffer, backend, alg, bufs, init, seed,
+                                   segment_indices(launch, dst_size, len))
     return dst
 end
 
-function launch_segments!(shape, f::F, op::OP, dst, src, buffer, dense, backend, alg, bufs,
-                          init, seed, launch, dst_size, len) where {F, OP}
+# The indices `launch!` takes, from the setup's `launch` alone: inference of a function that also
+# takes the source is repeated for every new type of source, and grows with the size of that type
+function segment_indices(launch, dst_size, len)
+    dense = isdense_buffer(launch.buffer)
     with_segments(launch.segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
-        ix = (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
-              outer_sizes, dst_size, reduce_size=len, dense)
-        Base.inferencebarrier(launch!)(shape, f, op, dst, src, buffer, backend, alg, bufs, init,
-                                       seed, ix)
+        (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
+         outer_sizes, dst_size, reduce_size=len, dense)
     end
 end
 

@@ -62,7 +62,7 @@ buffer_kind(src, strided) =
 kernel_buffer(src, kind::Symbol) =
     kind === :parent ? parent(src) : kind === :linear ? linear_view(src) : src
 # ... and whether it is a dense buffer, which the kernels can read with vector loads
-isdense_buffer(src, kind::Symbol) = kind === :parent || kind === :source
+isdense_buffer(kind::Symbol) = kind === :parent || kind === :source
 
 # The source of a reduction along `dims` into a single output of a contiguous source, as a
 # linearly indexed collection of its elements for the whole-array kernels (`mapreduce_1d_gpu`):
