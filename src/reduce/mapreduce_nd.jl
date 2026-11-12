@@ -60,10 +60,16 @@ function mapreduce_nd!(
     end
     shape = launch.shape
 
+    # (the kernels index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`; the launches
+    # take its kind as a type and build it themselves, so that inference of a launch for a new type
+    # of source visits only the buffer that launch reads)
+    kind = buffer_val(launch.buffer)
+
     # A single output of a contiguous source: the whole-array kernels, finishing on the device
     if shape isa Whole
         Base.inferencebarrier(mapreduce_1d_gpu)(
-            f, op, linear_source(src, launch.buffer, launch.offset), backend; init, seed,
+            f, op, Base.inferencebarrier(linear_source)(src, kind, launch.offset),
+            backend; init, seed,
             block_size=alg.block_size, items_per_thread=alg.items_per_thread,
             max_blocks=tuning(reduce_tuning, backend, A).target_blocks,
             partials=get(bufs, :partials, nothing), switch_below=0,
@@ -71,23 +77,18 @@ function mapreduce_nd!(
         return dst
     end
 
-    # (the kernels below index a flat buffer at `buffer[offset + Σ coordᵈ·strideᵈ + 1]`)
-    # (a function barrier: the type of a `LinearBroadcast` buffer depends on the sizes)
-    launch_segments!(shape, f, op, dst, src, kernel_buffer(src, launch.buffer),
-                     isdense_buffer(src, launch.buffer), backend, alg, bufs, init, seed,
-                     launch, dst_size, len)
+    Base.inferencebarrier(launch!)(shape, f, op, dst, src, kind, backend, alg, bufs, init, seed,
+                                   segment_indices(launch, dst_size, len))
     return dst
 end
 
-function launch_segments!(shape, f::F, op::OP, dst, src, buffer, dense, backend, alg, bufs,
-                          init, seed, launch, dst_size, len) where {F, OP}
+# The indices `launch!` takes, from the setup's `launch` alone: inference of a function that also
+# takes the source is repeated for every new type of source, and grows with the size of that type
+segment_indices(launch, dst_size, len) =
     with_segments(launch.segs) do reduce_strides, reduce_sizes, outer_strides, outer_sizes
-        ix = (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
-              outer_sizes, dst_size, reduce_size=len, dense)
-        Base.inferencebarrier(launch!)(shape, f, op, dst, src, buffer, backend, alg, bufs, init,
-                                       seed, ix)
+        (; base_offset=launch.offset, reduce_strides, reduce_sizes, outer_strides,
+         outer_sizes, dst_size, reduce_size=len)
     end
-end
 
 # Reductions whose every output reduces a single element, a partial result of the accumulator
 # type `A`: `dst` and `src` have the same length.
@@ -99,25 +100,25 @@ function mapreduce_singles!(f::F, op::OP, dst, src, backend, ::Type{A}; init,
     end
 end
 
-# Launch the kernels of a reduction along `dims` of shape `shape` into `dst`, reading `buffer`
-# (see `kernel_buffer`) with the indices `ix`: the offsets of the segments `reduce_*` and `outer_*`
-# from `base_offset`, the sizes, and whether `buffer` is the source's dense buffer (`dense`), which
-# some kernels read with vector loads.
+# Launch the kernels of a reduction along `dims` of shape `shape` of `src` into `dst`, reading the
+# buffer of kind `kind` (see `kernel_buffer`) with the indices `ix`: the offsets of the segments
+# `reduce_*` and `outer_*` from `base_offset`, and the sizes. Some kernels read a dense buffer
+# (`isdense_buffer`) with vector loads.
 #
 # This and the other GPU launches of a reduction are called through `Base.inferencebarrier`.
 # Inferring a launch through KernelAbstractions and the back-end takes far longer than the launch,
 # and without the barrier a reduction with a new `f`, `op` or element type infers every launch it
 # could make: all shapes, segment layouts and vector widths. A dynamic dispatch costs a fraction of
 # a microsecond.
-function launch!(::ByThread, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(::ByThread, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes, dst_size,
-       reduce_size, dense) = ix
+       reduce_size) = ix
     block_size = alg.block_size
     blocks = cld(dst_size, block_size)
-    if dense
+    if isdense_buffer(kind)
         by_thread_kernel!(backend, block_size)(
-            buffer, dst, f, op, seed, init,
+            kernel_buffer(src, kind), dst, f, op, seed, init,
             base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
             dst_size, reduce_size,
             ndrange=(block_size * blocks,),
@@ -127,13 +128,13 @@ function launch!(::ByThread, f::F, op::OP, dst, src, buffer, backend, alg, bufs,
     end
 end
 
-function launch!(shape::ByLanes, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(shape::ByLanes, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, outer_strides, outer_sizes, dst_size, reduce_size) = ix
     block_size = alg.block_size
     blocks = cld(dst_size, block_size ÷ shape.lanes)
     by_lanes_kernel!(backend, block_size)(
-        buffer, dst, f, op, seed, init,
+        kernel_buffer(src, kind), dst, f, op, seed, init,
         base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(shape.lanes),
         reduce_subgroup_width(backend, typeof(seed), block_size),
         ndrange=(block_size * blocks,),
@@ -141,13 +142,14 @@ function launch!(shape::ByLanes, f::F, op::OP, dst, src, buffer, backend, alg, b
 end
 
 # (with vector loads where `buffer` is a dense buffer they suit)
-function launch!(shape::ByBlock, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(shape::ByBlock, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes, dst_size,
-       reduce_size, dense) = ix
+       reduce_size) = ix
+    buffer = kernel_buffer(src, kind)
     block_size, blocks = alg.block_size, shape.blocks
-    W = dense ? vector_width(buffer, base_offset, outer_strides, reduce_strides, reduce_size,
-                             block_size) : 0
+    W = isdense_buffer(kind) ? vector_width(buffer, base_offset, outer_strides, reduce_strides,
+                                            reduce_size, block_size) : 0
     if W > 0
         kernel! = by_block_vector_kernel!(backend, block_size)
         Base.inferencebarrier(kernel!)(
@@ -167,14 +169,14 @@ function launch!(shape::ByBlock, f::F, op::OP, dst, src, buffer, backend, alg, b
     end
 end
 
-function launch!(shape::ByBlocks, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(shape::ByBlocks, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes, dst_size,
        reduce_size) = ix
     block_size, groups = alg.block_size, shape.groups
     partials = bufs.partials
     multigroup_kernel!(backend, block_size)(
-        buffer, partials, f, op, seed,
+        kernel_buffer(src, kind), partials, f, op, seed,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
         Val(dst_size), reduce_size, groups,
         reduce_subgroup_width(backend, typeof(seed), block_size),
@@ -184,7 +186,7 @@ function launch!(shape::ByBlocks, f::F, op::OP, dst, src, buffer, backend, alg, 
                     block_size)
 end
 
-function launch!(shape::Columns, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(shape::Columns, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, reduce_strides, outer_strides, outer_sizes, dst_size, reduce_size) = ix
     (; outputs, groups, ordered) = shape
@@ -196,36 +198,37 @@ function launch!(shape::Columns, f::F, op::OP, dst, src, buffer, backend, alg, b
     # (with several groups, the partial results of each output's groups, for a second pass)
     out, out_init = groups == 1 ? (dst, init) : (bufs.partials, Unfinished())
     columns_kernel!(backend, threads)(
-        buffer, out, f, op, seed, out_init, base_offset, reduce_strides[1], dst_size,
-        run, dst_size ÷ run, runs..., reduce_size, groups, Val(outputs), Val(ordered);
+        kernel_buffer(src, kind), out, f, op, seed, out_init, base_offset, reduce_strides[1],
+        dst_size, run, dst_size ÷ run, runs..., reduce_size, groups, Val(outputs), Val(ordered);
         ndrange=(threads * blocks,),
     )
     groups == 1 || combine_groups!(backend, out, dst, op, seed, init, dst_size, groups, ordered,
                                    threads)
 end
 
-function launch!(::Tiled, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(::Tiled, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, reduce_strides, dst_size, reduce_size) = ix
     block_size = alg.block_size
     blocks = cld(dst_size, TILED_OUTPUTS)
     tiled_strided_kernel!(backend, block_size)(
-        buffer, dst, f, op, seed, init,
+        kernel_buffer(src, kind), dst, f, op, seed, init,
         base_offset, reduce_strides[1], dst_size, reduce_size, Val(TILED_OUTPUTS),
         ndrange=(block_size * blocks,),
     )
 end
 
-function launch!(shape::Ordered, f::F, op::OP, dst, src, buffer, backend, alg, bufs, init,
+function launch!(shape::Ordered, f::F, op::OP, dst, src, kind, backend, alg, bufs, init,
                  seed, ix) where {F, OP}
     (; base_offset, reduce_strides, reduce_sizes, outer_strides, outer_sizes, dst_size,
-       reduce_size, dense) = ix
+       reduce_size) = ix
     groups = shape.groups
     launch_ordered!(
-        backend, alg.block_size, alg.items_per_thread, buffer, dst, f, op, seed, init,
+        backend, alg.block_size, alg.items_per_thread, kernel_buffer(src, kind), dst, f, op,
+        seed, init,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
         dst_size, reduce_size, groups, groups > 1 ? bufs.partials : nothing;
-        dense_buffer=dense,
+        dense_buffer=isdense_buffer(kind),
     )
 end
 
