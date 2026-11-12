@@ -58,6 +58,17 @@ firstn(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 buffer_kind(src, strided) =
     isnothing(strided) ? :linear : strided.buffer === src ? :source : :parent
 
+# What the setup of a reduction along `dims` takes from its source: its size, and the
+# `buffer_kind`, offset and strides of its elements. (The setup does not take the source itself:
+# inference of a function is repeated for every new type of its arguments, and takes longer the
+# larger the type, which for lazy sources can be thousands of characters.)
+function source_layout(src)
+    strided = strided_layout(src)
+    layout = isnothing(strided) ? linear_layout(src) : strided
+    return (; size=size(src), kind=buffer_kind(src, strided), offset=layout.offset::Int,
+            strides=layout.strides)
+end
+
 # The `buffer_kind` as a type, which the launches take to build the buffer they read
 buffer_val(kind::Symbol) =
     kind === :parent ? Val(:parent) : kind === :linear ? Val(:linear) : Val(:source)

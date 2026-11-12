@@ -202,20 +202,22 @@ function mapreduce_setup(f::F, op::OP, src, backend, init, neutral, acctype, dim
         return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, commutative)
     end
 
-    return mapreduce_dims_setup(f, op, src, backend, init, neutral, A, M,
+    return mapreduce_dims_setup(f, op, source_layout(src), backend, init, neutral, A, M,
                                 reduced_dims(dims, ndims(src)), alg, empty, commutative)
 end
-# (a function barrier: the type of `rdims` depends on the number of reduced dimensions)
-function mapreduce_dims_setup(f::F, op::OP, src, backend, init, neutral, ::Type{A}, ::Type{M},
+# (a function barrier: the type of `rdims` depends on the number of reduced dimensions; it takes
+# the `source_layout`, not the source, so that sources of every type share its inference)
+function mapreduce_dims_setup(f::F, op::OP, layout, backend, init, neutral, ::Type{A}, ::Type{M},
                               rdims, alg, empty, commutative) where {F, OP, A, M}
     # The result has the accumulator type; where there is none (`op` always throws), only an
     # empty reduction can succeed
     R = A !== Union{} ? A : !(init isa NoInit) ? typeof(init) : M === Union{} ? Nothing : M
-    dst_sizes = ntuple(d -> d in rdims ? 1 : srcsize(src, d), ndims(src))
+    src_size = layout.size
+    dst_sizes = ntuple(d -> d in rdims ? 1 : src_size[d], length(src_size))
     seed = mapreduce_seed(op, A, neutral)
     a = resolve_reduce(alg, backend, A, rdims, typeof(seed))
-    launch = select_launch(src, backend, a, A, rdims, Base.prod(dst_sizes), commutative)
-    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, Base.prod(dst_sizes))
+    launch = select_launch(layout, backend, a, A, rdims, Base.prod(dst_sizes), commutative)
+    sizes = launch_scratch(launch, src_size, backend, a, A, seed, rdims, Base.prod(dst_sizes))
     return (; plan=Plan(backend, a, sizes), A=Val(A), seed, empty, rdims,
             R=Val(R), dst_sizes, launch)
 end
@@ -344,7 +346,7 @@ function mapreducedim_run!(f::F, op::OP, R, src, s, workspace) where {F, OP}
     backend = s.plan.backend
     with_flag_layout(s.seed, scratch_buffers(s.plan, workspace, R, src), reduce_tuning,
                      backend, unval(s.A)) do seed, bufs
-        mapreduce_nd!(f, op, s.dst, kernel_source(s.src, backend), backend, s.plan.alg,
+        mapreduce_nd!(f, op, s.dst, kernel_source(one_based(src), backend), backend, s.plan.alg,
                       unval(s.A); init=s.init, seed, rdims=s.rdims, bufs, launch=s.launch)
     end
 end
@@ -368,19 +370,25 @@ function mapreducedim_setup(f::F, op::OP, R, src, backend, init, neutral, overwr
     R, src = one_based(R), one_based(src)
     dst_sizes = ntuple(d -> size(R, d), nd)
     dst = size(R) == dst_sizes ? R : reshape(R, dst_sizes)
-    rdims = Tuple(d for d in 1:nd if dst_sizes[d] == 1 && srcsize(src, d) != 1)
-    return reducedim_setup(f, op, src, dst, rdims, backend, init, neutral, overwrite,
-                           acctype, alg, commutative)
+    layout = source_layout(src)
+    return reducedim_setup(f, op, mapped_eltype(f, src), layout, dst,
+                           reduced_dims_of(dst_sizes, layout.size), backend, init, neutral,
+                           overwrite, acctype, alg, commutative)
 end
-function reducedim_setup(f::F, op::OP, src, dst, rdims, backend, init, neutral,
-                         overwrite, acctype, alg, commutative) where {F, OP}
-    A = resolve_acctype(op, eltype(dst), mapped_eltype(f, src), acctype)
+# The dimensions a reduction from `src_size` into `dst_size` reduces
+reduced_dims_of(dst_size::Dims{N}, src_size::Dims{N}) where {N} =
+    Tuple(d for d in 1:N if dst_size[d] == 1 && src_size[d] != 1)
+# (a function barrier: the type of `rdims` depends on the number of reduced dimensions; it takes
+# the `source_layout`, not the source, so that sources of every type share its inference)
+function reducedim_setup(f::F, op::OP, ::Type{M}, layout, dst, rdims, backend, init, neutral,
+                         overwrite, acctype, alg, commutative) where {F, OP, M}
+    A = resolve_acctype(op, eltype(dst), M, acctype)
     seed = mapreduce_seed(op, A, neutral)
     a = resolve_reduce(alg, backend, A, rdims, typeof(seed))
-    launch = select_launch(src, backend, a, A, rdims, length(dst), commutative)
-    sizes = launch_scratch(launch, src, backend, a, A, seed, rdims, length(dst))
+    launch = select_launch(layout, backend, a, A, rdims, length(dst), commutative)
+    sizes = launch_scratch(launch, layout.size, backend, a, A, seed, rdims, length(dst))
     init = init isa NoInit && !overwrite ? FoldInto() : init
-    return (; plan=Plan(backend, a, sizes), src, dst, A=Val(A), seed, rdims, init, launch)
+    return (; plan=Plan(backend, a, sizes), dst, A=Val(A), seed, rdims, init, launch)
 end
 
 function check_noalias(R, src::AbstractArray)
