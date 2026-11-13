@@ -346,6 +346,8 @@ end
     @test_throws ArgumentError AK.resolve_backend(nothing, d, h)
     @test_throws ArgumentError AK.resolve_backend(nothing, h, d)
     @test_throws ArgumentError AK.resolve_backend(nothing, h, (1, d))
+    # (`BitArray`s vote for the host backend)
+    @test_throws ArgumentError AK.resolve_backend(nothing, d, falses(4))
     # An explicit backend wins over the votes
     @test AK.resolve_backend(FAKE, h) === FAKE
     @test AK.resolve_backend(HOST, d, h) == HOST

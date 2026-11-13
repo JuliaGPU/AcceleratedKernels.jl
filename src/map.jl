@@ -48,7 +48,7 @@ function map!(
         length(s) == length(dst) || throw(ArgumentError(
             "destination and sources must have the same length, $(length(dst)) != $(length(s))"))
     end
-    launch = (; block_size, max_tasks, min_elems)
+    launch = (; block_size, max_tasks=one_task(max_tasks, dst), min_elems)
     if Base.all(s -> axes(s) == axes(dst), srcs)
         # Index all arrays alike, linearly if they all support it
         foreachindex_on(eachindex(dst, srcs...), backend; launch...) do i
