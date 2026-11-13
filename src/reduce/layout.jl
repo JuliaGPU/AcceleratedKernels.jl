@@ -58,18 +58,34 @@ firstn(t::Tuple, n::Int) = ntuple(i -> t[i], n)
 buffer_kind(src, strided) =
     isnothing(strided) ? :linear : strided.buffer === src ? :source : :parent
 
+# What the setup of a reduction along `dims` takes from its source: its size, and the
+# `buffer_kind`, offset and strides of its elements. (The setup does not take the source itself:
+# inference of a function is repeated for every new type of its arguments, and takes longer the
+# larger the type, which for lazy sources can be thousands of characters.)
+function source_layout(src)
+    strided = strided_layout(src)
+    layout = isnothing(strided) ? linear_layout(src) : strided
+    return (; size=size(src), kind=buffer_kind(src, strided), offset=layout.offset::Int,
+            strides=layout.strides)
+end
+
+# The `buffer_kind` as a type, which the launches take to build the buffer they read
+buffer_val(kind::Symbol) =
+    kind === :parent ? Val(:parent) : kind === :linear ? Val(:linear) : Val(:source)
+
 # The buffer the kernels index, from the source `src` and the `buffer_kind`
-kernel_buffer(src, kind::Symbol) =
-    kind === :parent ? parent(src) : kind === :linear ? linear_view(src) : src
+kernel_buffer(src, ::Val{:parent}) = parent(src)
+kernel_buffer(src, ::Val{:linear}) = linear_view(src)
+kernel_buffer(src, ::Val{:source}) = src
 # ... and whether it is a dense buffer, which the kernels can read with vector loads
-isdense_buffer(src, kind::Symbol) = kind === :parent || kind === :source
+isdense_buffer(::Val{kind}) where {kind} = kind === :parent || kind === :source
 
 # The source of a reduction along `dims` into a single output of a contiguous source, as a
 # linearly indexed collection of its elements for the whole-array kernels (`mapreduce_1d_gpu`):
 # the source itself, or the range of its elements in the dense buffer it wraps, from `offset` on
 # (that buffer itself where the range covers it: see `mapreduce_1d_view`)
-function linear_source(src, kind::Symbol, offset::Int)
-    kind === :parent || return src
+linear_source(src, ::Val, offset::Int) = src
+function linear_source(src, ::Val{:parent}, offset::Int)
     p = parent(src)
     return offset == 0 && length(p) == length(src) ? p : view(p, offset + 1:offset + length(src))
 end

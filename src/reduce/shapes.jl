@@ -226,12 +226,12 @@ accsize(::Type{A}) where {A} = isbitstype(A) && sizeof(A) > 0 ? sizeof(A) : 8
 # The outputs per block of the columns kernel
 columns_outputs(dst_size) = min(nextpow(2, dst_size), COLUMNS_OUTPUTS)
 
-# The launch of a reduction along `dims` of `src` into `dst_size` outputs, chosen once by its
-# setup; the threaded algorithm takes none. `shape` is that of `reduce_shape`, or of
-# `ordered_shape` for `commutative=false`, or `Whole` for a single output of a contiguous source;
-# `nothing` where no kernel runs (at most one element per output, no outputs, or no accumulator
-# type). `buffer` is where the kernels find the source's elements (see `buffer_kind`), from
-# `offset` on, and `segs` the segments of its layout (see `strided_layout`, `linear_layout` and
+# The launch of a reduction along `dims` of a source with the `source_layout` `layout` into
+# `dst_size` outputs, chosen once by its setup; the threaded algorithm takes none. `shape` is
+# that of `reduce_shape`, or of `ordered_shape` for `commutative=false`, or `Whole` for a single
+# output of a contiguous source; `nothing` where no kernel runs (at most one element per output,
+# no outputs, or no accumulator type). `buffer` is where the kernels find the source's elements
+# (see `buffer_kind`), from `offset` on, and `segs` the segments of its layout (see
 # `merge_dims`).
 struct DimsLaunch{G}
     # (abstract, so that the setups holding it infer; the launch dispatches on it)
@@ -241,18 +241,15 @@ struct DimsLaunch{G}
     segs::G
 end
 
-select_launch(src, backend, alg, ::Type{A}, rdims, dst_size, commutative) where {A} = nothing
-function select_launch(src, backend, alg::BlockReduce, ::Type{A}, rdims, dst_size,
+select_launch(layout, backend, alg, ::Type{A}, rdims, dst_size, commutative) where {A} = nothing
+function select_launch(layout, backend, alg::BlockReduce, ::Type{A}, rdims, dst_size,
                        commutative) where {A}
-    strided = strided_layout(src)
-    layout = isnothing(strided) ? linear_layout(src) : strided
-    segs = merge_dims(size(src), layout.strides, rdims)
-    kind, offset = buffer_kind(src, strided), layout.offset::Int
-    launch(shape) = DimsLaunch(shape, kind, offset, segs)
-    len = Base.prod(size(src)[d] for d in rdims; init=1)
+    segs = merge_dims(layout.size, layout.strides, rdims)
+    launch(shape) = DimsLaunch(shape, layout.kind, layout.offset, segs)
+    len = Base.prod(layout.size[d] for d in rdims; init=1)
     (len <= 1 || dst_size == 0 || A === Union{}) && return launch(nothing)
     (rstrides, _, nr), _ = segs
-    if dst_size == 1 && (isnothing(strided) || nr == 1 && rstrides[1] == 1)
+    if dst_size == 1 && (layout.kind === :linear || nr == 1 && rstrides[1] == 1)
         return launch(Whole(!commutative))
     end
     shape = reduce_shape(dst_size, len, segs, alg.block_size, tuning(reduce_tuning, backend, A), A)
@@ -260,15 +257,15 @@ function select_launch(src, backend, alg::BlockReduce, ::Type{A}, rdims, dst_siz
     return launch(shape)
 end
 
-# The scratch of the launch `launch` of a reduction along `dims` of `src` into `dst_size`
-# outputs: the partial results of a reduction in two passes, with the type of the partial-result
-# seed `seed` (see `reduce_seed`)
-launch_scratch(launch, src, backend, alg, A, seed, rdims, dst_size) = (;)
-function launch_scratch(launch::DimsLaunch, src, backend, alg, ::Type{A}, seed, rdims,
+# The scratch of the launch `launch` of a reduction along `dims` of a source of size `src_size`
+# into `dst_size` outputs: the partial results of a reduction in two passes, with the type of the
+# partial-result seed `seed` (see `reduce_seed`)
+launch_scratch(launch, src_size, backend, alg, A, seed, rdims, dst_size) = (;)
+function launch_scratch(launch::DimsLaunch, src_size, backend, alg, ::Type{A}, seed, rdims,
                         dst_size) where {A}
     shape = launch.shape
     if shape isa Whole
-        len = Base.prod(size(src)[d] for d in rdims; init=1)
+        len = Base.prod(src_size[d] for d in rdims; init=1)
         n = mapreduce_1d_partials(len, alg.block_size, alg.items_per_thread,
                                   tuning(reduce_tuning, backend, A).target_blocks)
         return n == 0 ? (;) : (; partials=scratch(typeof(seed), n))
