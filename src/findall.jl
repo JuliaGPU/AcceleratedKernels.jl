@@ -110,7 +110,8 @@ end
     thread_offset, _ = block_exclusive_scan(
         @context, +, sdata, count, Int32(0), block_size, ithread, subgroups,
     )
-    pos = (iblock == 0x0 ? 0 : block_counts[iblock]) + thread_offset
+    # Index 1 for block 0, which never uses it: see `scan_tile_kernel!`.
+    pos = (iblock == 0x0 ? 0 : block_counts[max(iblock, one(iblock))]) + thread_offset
 
     k = 0
     while k < ITEMS
