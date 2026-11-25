@@ -84,7 +84,7 @@ function sort_setup(
     # MergeSort sorts the keys `by.(v)` carrying `v` along
     merge_eltypes = by === identity ? (eltype(v), Nothing) :
                     (Base.promote_op(by, eltype(v)), eltype(v))
-    a = one_task(resolve_sort(alg, backend, v, dims, ord; merge_eltypes), v)
+    a = resolve_sort(alg, backend, v, dims, ord; merge_eltypes)
     return (; plan=sort_plan(a, v, backend, dims, by), ord)
 end
 
@@ -131,12 +131,15 @@ function sort_run!(a::BitonicSort, v, backend, dims, ord, by, bufs)
                   dims)
 end
 
+# (a `BitArray` gets its single task here, not in the plan, which `sort` makes for its input
+# rather than for the copy it sorts)
 function sort_run!(a::CPUThreads.SampleSort, v, backend, dims, ord, by, bufs)
+    max_tasks = one_task(a.max_tasks, v)
     if dims isa Colon
         # `vec`: the local sorts use `Base.sort!`, which needs `dims` for other arrays
-        sample_sort!(vec(v), ord; max_tasks=a.max_tasks, min_elems=a.min_elems, temp=bufs.temp)
+        sample_sort!(vec(v), ord; max_tasks, min_elems=a.min_elems, temp=bufs.temp)
     else
-        foreach_slice(v, dims; max_tasks=a.max_tasks, min_elems=a.min_elems) do slice
+        foreach_slice(v, dims; max_tasks, min_elems=a.min_elems) do slice
             Base.sort!(slice; order=ord)
         end
     end
@@ -379,8 +382,8 @@ function sort_by_key_setup(
             "keys and values must have the same axes, $(axes(keys)) != $(axes(values))"))
     end
     keys, values = one_based(keys), one_based(values)
-    a = one_task(resolve_sort(alg, backend, keys, dims, ord; pairs=true,
-                              merge_eltypes=(eltype(keys), eltype(values))), keys, values)
+    a = resolve_sort(alg, backend, keys, dims, ord; pairs=true,
+                     merge_eltypes=(eltype(keys), eltype(values)))
     return (; plan=Plan(backend, a, sort_by_key_scratch(a, keys, values, dims)), ord)
 end
 
@@ -402,6 +405,6 @@ function sort_by_key_run!(a::MergeSort, keys, values, backend, dims, ord, bufs)
 end
 
 function sort_by_key_run!(a::CPUThreads.SampleSort, keys, values, backend, dims, ord, bufs)
-    sample_sort_by_key!(keys, values, ord, dims, bufs; max_tasks=a.max_tasks,
-                        min_elems=a.min_elems)
+    max_tasks = one_task(a.max_tasks, keys, values)
+    sample_sort_by_key!(keys, values, ord, dims, bufs; max_tasks, min_elems=a.min_elems)
 end

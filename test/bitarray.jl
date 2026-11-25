@@ -91,3 +91,19 @@ Base.@propagate_inbounds Base.setindex!(x::OffsetBits, v, i::Int) = (x.parent[i 
                                               alg=AK.BlockReduce()) == trues(1000)) == 0
     end
 end
+
+
+# A read-only wrapper of a `BitVector`, whose copies are `Vector{Bool}`s
+struct ReadBits <: AbstractVector{Bool}
+    parent::BitVector
+end
+Base.parent(x::ReadBits) = x.parent
+Base.size(x::ReadBits) = size(x.parent)
+Base.getindex(x::ReadBits, i::Int) = x.parent[i]
+
+@testset "BitArray: workspaces" begin
+    # `sort` plans for its input, a wrapper of a `BitArray` here, but sorts a dense copy
+    x = ReadBits(BitVector(rand(Bool, 100)))
+    alg = AK.CPUThreads.SampleSort(max_tasks=2)
+    @test AK.sort(x; alg, workspace=AK.workspace(AK.sort, x; alg)) == sort(collect(x))
+end

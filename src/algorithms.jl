@@ -236,8 +236,8 @@ launch_kwargs(a::Algorithm, dst) =
 # elements race on a chunk: operations that write to one use a single task for it
 writes_packed(dsts...) = Base.any(x -> storage(x) isa BitArray, dsts)
 one_task(max_tasks::Int, dsts...) = writes_packed(dsts...) ? min(max_tasks, 1) : max_tasks
-one_task(a::A, dsts...) where {A <: Union{CPUThreads.SampleSort, CPUThreads.Partitioned}} =
-    writes_packed(dsts...) ? A(min(a.max_tasks, 1), a.min_elems) : a
+one_task(a::CPUThreads.Partitioned, dsts...) =
+    writes_packed(dsts...) ? CPUThreads.Partitioned(min(a.max_tasks, 1), a.min_elems) : a
 one_task(a::Algorithm, dsts...) = a
 
 
