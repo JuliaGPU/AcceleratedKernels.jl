@@ -178,7 +178,7 @@ function scan_run!(op, v, src, s, bufs, seed)
     # element (which no kernel scans) copy `src` to `w` first, apply `init` there, and scan `w`
     # in place.
     w = haskey(bufs, :work) ? bufs.work : v
-    launch = launch_kwargs(a)
+    launch = launch_kwargs(a, w)
     singletons = dims !== nothing && dims > ndims(w)
     separate_init = inclusive && !(init isa NoInit) && !isempty(w) &&
                     (singletons || !(init isa A))
@@ -211,7 +211,8 @@ end
 # an `InexactError` when one does, rather than a dynamic `MethodError`, which kernels cannot throw.
 function copy_stored!(v, w, backend)
     Base.isbitsunion(eltype(w)) || return copyto_on!(v, w, backend)
-    foreachindex_on(Base.OneTo(length(v)), backend) do i
+    max_tasks = one_task(Threads.nthreads(), v)
+    foreachindex_on(Base.OneTo(length(v)), backend; max_tasks) do i
         @inbounds v[i] = convert_stored(eltype(v), w[i])
     end
     return v

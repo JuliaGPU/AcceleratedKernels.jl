@@ -225,12 +225,15 @@ function require_threads(a, backend)
     nothing
 end
 
-# The settings of `foreachindex_on` for the loops of an operation that resolved to `a`
-launch_kwargs(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
-launch_kwargs(a::Algorithm) = (; block_size=a.block_size)
+# The settings of `foreachindex_on` for the loops of an operation that resolved to `a`, writing to
+# `dst` (which, for a kernel algorithm on the host backend, still run on Julia threads)
+launch_kwargs(a::CPUThreads.Partitioned, dst) =
+    (; max_tasks=one_task(a.max_tasks, dst), min_elems=a.min_elems)
+launch_kwargs(a::Algorithm, dst) =
+    (; block_size=a.block_size, max_tasks=one_task(Threads.nthreads(), dst))
 
 # A `BitArray` packs 64 elements into each chunk of its memory, so tasks that write neighbouring
-# elements race on a chunk: operations that write to one use a single task
+# elements race on a chunk: operations that write to one use a single task for it
 writes_packed(dsts...) = Base.any(x -> storage(x) isa BitArray, dsts)
 one_task(max_tasks::Int, dsts...) = writes_packed(dsts...) ? min(max_tasks, 1) : max_tasks
 one_task(a::A, dsts...) where {A <: Union{CPUThreads.SampleSort, CPUThreads.Partitioned}} =

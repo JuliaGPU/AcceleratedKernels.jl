@@ -39,6 +39,17 @@ end
 end
 
 
+# A vector whose axes start at `1 + offset`, like an `OffsetArray`
+struct OffsetBits{T, A <: AbstractVector{T}} <: AbstractVector{T}
+    parent::A
+    offset::Int
+end
+Base.parent(x::OffsetBits) = x.parent
+Base.axes(x::OffsetBits) = (Base.IdentityUnitRange(axes(x.parent, 1) .+ x.offset),)
+Base.size(x::OffsetBits) = size(x.parent)
+Base.@propagate_inbounds Base.getindex(x::OffsetBits, i::Int) = x.parent[i - x.offset]
+Base.@propagate_inbounds Base.setindex!(x::OffsetBits, v, i::Int) = (x.parent[i - x.offset] = v)
+
 @testset "BitArray: writes from one task" begin
     # Many tasks on small arrays put the boundaries between tasks inside chunks; count the
     # corrupted results of each operation
@@ -62,4 +73,21 @@ end
         m = reshape(v, 40, 25)
         AK.mapreducedim!(identity, |, falses(1, 25), m; init=false, alg=part) == any(m; dims=1)
     end == 0
+    @test corrupted(v -> AK.searchsortedfirst!(copy(v), Int[], zeros(Int, 1000); kw...) ==
+                         trues(1000)) == 0
+    # (a `BitVector` result, for `Bool` items)
+    @test corrupted(v -> AK.findall(v; items=fill(true, 1000), alg=part) == trues(count(v))) == 0
+    # Through a wrapper with offset axes, the scans copy their results in on a loop of their own
+    @test corrupted() do v
+        dst = OffsetBits(falses(1000), 5)
+        AK.accumulate!((_, b) -> b, dst, OffsetBits(Int.(v), 5); alg=part)
+        parent(dst) == v
+    end == 0
+    if AK.runs_kernels(AK.HOST_BACKEND)
+        # Kernel algorithms on the host write degenerate shapes on Julia threads
+        @test corrupted(v -> AK.accumulate!(|, copy(v), trues(1000); dims=2,
+                                            alg=AK.SliceScan()) == trues(1000)) == 0
+        @test corrupted(v -> AK.mapreducedim!(identity, |, copy(v), trues(1000); overwrite=true,
+                                              alg=AK.BlockReduce()) == trues(1000)) == 0
+    end
 end

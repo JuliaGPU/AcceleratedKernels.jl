@@ -111,7 +111,8 @@ function searchsortedfirst!(
     min_elems::Int=1000,
 )
     searchsorted_each!(searchsorted_first, ix, v, xs, resolve_backend(backend, ix, v, xs),
-                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
+                       Base.Order.ord(lt, by, rev, order); block_size,
+                       max_tasks=one_task(max_tasks, ix), min_elems)
 end
 
 
@@ -142,7 +143,8 @@ function searchsortedlast!(
     min_elems::Int=1000,
 )
     searchsorted_each!(searchsorted_last, ix, v, xs, resolve_backend(backend, ix, v, xs),
-                       Base.Order.ord(lt, by, rev, order); block_size, max_tasks, min_elems)
+                       Base.Order.ord(lt, by, rev, order); block_size,
+                       max_tasks=one_task(max_tasks, ix), min_elems)
 end
 
 # `ix[i] = search(v, xs[i], ...)` for every query

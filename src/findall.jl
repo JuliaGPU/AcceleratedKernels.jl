@@ -176,7 +176,10 @@ function compact(
     end
     cumsum!(task_counts, task_counts)
 
+    # (a `BitVector` for `Bool` items of a `BitArray` mask, which one task writes)
     out = similar(bools, I, task_counts[end])
+    writes_packed(out) &&
+        return compact_serial!(out, bools, input_indices, output_indices, 1:length(bools), 0)
     itask_partition(tp) do itask, positions
         offset = itask == 1 ? 0 : task_counts[itask - 1]
         compact_serial!(out, bools, input_indices, output_indices, positions, offset)
@@ -199,7 +202,7 @@ end
 function findall_mask!(bools, pred, v::AbstractArray, backend::Backend, alg)
     input_indices = eachindex(v)
     bool_indices = eachindex(bools)
-    foreachindex_on(Base.OneTo(length(v)), backend; launch_kwargs(alg)...) do position
+    foreachindex_on(Base.OneTo(length(v)), backend; launch_kwargs(alg, bools)...) do position
         input_index = ordinal_index(input_indices, position)
         bool_index = ordinal_index(bool_indices, position)
         @inbounds bools[bool_index] = pred(v[input_index]) ? true : false
