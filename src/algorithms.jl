@@ -225,9 +225,20 @@ function require_threads(a, backend)
     nothing
 end
 
-# The settings of `foreachindex_on` for the loops of an operation that resolved to `a`
-launch_kwargs(a::CPUThreads.Partitioned) = (; max_tasks=a.max_tasks, min_elems=a.min_elems)
-launch_kwargs(a::Algorithm) = (; block_size=a.block_size)
+# The settings of `foreachindex_on` for the loops of an operation that resolved to `a`, writing to
+# `dst` (which, for a kernel algorithm on the host backend, still run on Julia threads)
+launch_kwargs(a::CPUThreads.Partitioned, dst) =
+    (; max_tasks=one_task(a.max_tasks, dst), min_elems=a.min_elems)
+launch_kwargs(a::Algorithm, dst) =
+    (; block_size=a.block_size, max_tasks=one_task(Threads.nthreads(), dst))
+
+# A `BitArray` packs 64 elements into each chunk of its memory, so tasks that write neighbouring
+# elements race on a chunk: operations that write to one use a single task for it
+writes_packed(dsts...) = Base.any(x -> storage(x) isa BitArray, dsts)
+one_task(max_tasks::Int, dsts...) = writes_packed(dsts...) ? min(max_tasks, 1) : max_tasks
+one_task(a::CPUThreads.Partitioned, dsts...) =
+    writes_packed(dsts...) ? CPUThreads.Partitioned(min(a.max_tasks, 1), a.min_elems) : a
+one_task(a::Algorithm, dsts...) = a
 
 
 # Backend resolution
@@ -243,7 +254,8 @@ backendless(x::BaseWrapper) = backendless(parent(x))
 
 # Values that never determine the backend: backendless arrays, scalars, and any other value that
 # is not an array. Every other array votes with `get_backend`, which throws for array types that
-# do not implement it (and forwards wrappers to the array they wrap).
+# do not implement it (and forwards wrappers to the array they wrap), except arrays whose memory
+# is a `BitArray`: those live on the host, but KernelAbstractions only implements it for `Array`.
 backend_vote(_) = nothing
 backend_vote(x::AbstractArray) = backendless(x) ? nothing : wrapper_vote(x, parent(x))
 backend_vote(x::Tuple) = backend_votes(x...)
@@ -253,7 +265,8 @@ backend_vote(x::Base.Broadcast.Extruded) = backend_vote(x.x)
 # A wrapper whose `parent` is not an array with memory (a range, or a tuple of arrays for a lazy
 # array over several, like `mappedarray(+, A, B)`), where `get_backend` throws, votes like the
 # arrays it wraps instead, so that a lazy array over ranges does not vote either
-wrapper_vote(x, p) = p === x || wraps_storage(p) ? get_backend(x) : backend_vote(p)
+wrapper_vote(x, p) = p === x || wraps_storage(p) ? storage_backend(x) : backend_vote(p)
+storage_backend(x) = storage(x) isa BitArray ? HOST_BACKEND : get_backend(x)
 
 # Whether `x` is an array with memory, or a chain of wrappers ending in one
 wraps_storage(::IndexCollection) = false

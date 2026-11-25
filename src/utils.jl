@@ -103,7 +103,8 @@ function copyto_on!(dst, src, backend)
     has_offset_parent(dst) || has_offset_parent(src) || copies_by_kernel(backend, src) ||
         return copyto!(dst, backendless(src) ? collect(src) : src)
     d0, s0 = firstindex(dst), firstindex(src)
-    foreachindex_on(Base.OneTo(length(dst)), backend) do i
+    max_tasks = one_task(Threads.nthreads(), dst)
+    foreachindex_on(Base.OneTo(length(dst)), backend; max_tasks) do i
         @inbounds dst[d0 + i - 1] = src[s0 + i - 1]
     end
     return dst
@@ -111,7 +112,8 @@ end
 
 function fill_on!(A, x, backend)
     has_offset_parent(A) || return fill!(A, x)
-    foreachindex_on(Base.OneTo(length(A)), backend) do i
+    max_tasks = one_task(Threads.nthreads(), A)
+    foreachindex_on(Base.OneTo(length(A)), backend; max_tasks) do i
         @inbounds A[i] = x
     end
     return A

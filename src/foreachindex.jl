@@ -58,7 +58,10 @@ MtlArray, oneArray - with one GPU thread per index, in blocks of `block_size` th
 On the host backend, the loop runs on Julia threads: at most `max_tasks` tasks, or fewer such that
 each task processes at least `min_elems` indices; if a single task ends up being needed, `f` is
 inlined and no task is launched. Tune it to your function - the more expensive it is, the fewer
-elements are needed to amortise the cost of launching a task (which is a few μs).
+elements are needed to amortise the cost of launching a task (which is a few μs). As with
+`Threads.@threads`, tasks that write neighbouring elements of a `BitArray` race, since a
+`BitArray` packs 64 elements into each chunk of its memory: write to one from a single task
+(`max_tasks=1`), or loop over whole chunks.
 
 `backend` is derived from `itr`. A range or other index collection does not determine a backend,
 so loops over one run on the host unless you pass `backend`, e.g. the backend of the arrays that

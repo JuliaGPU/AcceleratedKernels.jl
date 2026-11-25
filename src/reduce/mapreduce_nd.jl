@@ -20,8 +20,7 @@ function mapreduce_nd!(
     launch,
 ) where {F, OP, A}
     # Launch settings of the elementwise passes, and of the reduction kernels
-    launch_kw = alg isa BlockReduce ? (; block_size=alg.block_size) :
-                                      (; max_tasks=alg.max_tasks, min_elems=alg.min_elems)
+    launch_kw = launch_kwargs(alg, dst)
 
     src_sizes = size(src)
 
