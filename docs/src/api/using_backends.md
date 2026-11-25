@@ -38,6 +38,11 @@ AK.reduce(+, v; init=0, alg=AK.CPUThreads.Partitioned(max_tasks=4))   # at most 
 On the host, operations run on Julia threads and by default use as many tasks as Julia has
 threads. See [Algorithms and backends](@ref) for the algorithms and their settings.
 
+Operations on a `BitArray` (what `A .> 0` returns on the host), or on Base's views and reshapes
+of one, also run on the host without a `backend`. They write to a `BitArray` from a single task:
+it packs 64 elements into each chunk of its memory, so tasks writing neighbouring elements would
+overwrite each other's.
+
 AcceleratedKernels re-exports two KernelAbstractions functions: `AK.get_backend(v)` returns the
 backend of an array, to pass as `backend` to an operation over a range (see
 [`foreachindex`](@ref AcceleratedKernels.foreachindex)), and `AK.synchronize(backend)` waits for
