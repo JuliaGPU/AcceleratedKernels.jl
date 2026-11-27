@@ -24,6 +24,16 @@ const FWD = Base.Order.Forward
 end
 
 
+@testset "tunings: select" begin
+    for T in TUNING_ELTYPES, nr in (1, 2, 3), len in (100, 10^7)
+        @test AK.resolve_select(AK.Auto(), BACKEND, T, nr, len) isa AK.SelectAlgorithm
+        if AK.runs_kernels(BACKEND) && AK.radix_supports_eltype(T) && nr <= 2
+            @test AK.resolve_select(AK.RadixSelect(), BACKEND, T, nr, len) isa AK.RadixSelect
+        end
+    end
+end
+
+
 @testset "tunings: reductions, scans, findall, any and all" begin
     kernels = AK.runs_kernels(BACKEND)
     for T in (Bool, TUNING_ELTYPES...)

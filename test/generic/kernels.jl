@@ -47,6 +47,8 @@
         end
         AK.sortperm(v; alg=SORT_ALG)
         AK.searchsortedfirst!(similar(v, Int), AK.sort(v), v)
+        # (slices of 10_000 elements take the global passes, of 300 one block, of 16 counting)
+        AK.select(v, [1, 5000]); AK.select(A, [150]; dims=1); AK.select(B, [8]; dims=1)
 
         widened = String[]
         for name in names(AK; all=true)

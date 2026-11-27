@@ -36,6 +36,8 @@ forge(ws; buffers=ws.buffers, plan=ws.plan) = AK.Workspace(plan, ws.device, buff
             (AK.findall, (x -> x > 0.5f0, v), (;)), (AK.findall, (array_from_host(rand(Bool, 100)),), (;)),
             (AK.findall, (x -> x > 0.5f0, v), (; items=v)),
             (AK.any, (x -> x > 2, v), (;)), (AK.all, (x -> x < 2, v), (;)),
+            (AK.select!, (similar(v, 2), v, [5000, 5001]), (;)), (AK.select, (v, [1, 2, 3]), (;)),
+            (AK.select, (reshape(v, 100, 100), [50]), (; dims=1)),
             # Keywords that change the buffers' types
             (AK.sum, (v,), (; acctype=Float32)), (AK.reduce, (+, reshape(v, 100, 100)), (; dims=1, acctype=Float32)),
             (AK.mapreducedim!, (identity, +, array_from_host(zeros(Float32, 1, 100)), reshape(v, 100, 100)), (; acctype=Float32)),
