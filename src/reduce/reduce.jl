@@ -337,7 +337,9 @@ function mapreducedim!(
 ) where {F, OP}
     s = mapreducedim_setup(f, op, R, src, backend, init, neutral, overwrite, acctype, alg,
                            commutative)
-    mapreducedim_run!(f, op, R, src, s, workspace)
+    # (behind a barrier: `s` is not inferred concretely, and inferring the run with it would
+    # analyze every launch it could make, for every type of source)
+    Base.inferencebarrier(mapreducedim_run!)(f, op, R, src, s, workspace)
     return R
 end
 

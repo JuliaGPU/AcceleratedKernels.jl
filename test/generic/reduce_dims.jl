@@ -754,6 +754,25 @@ if TEST_KERNELS
 end
 
 
+# The setup of a reduction along `dims` is not inferred concretely, so its run is only compiled
+# for the setup it gets: inferred with the abstract type, it would analyze every launch it could
+# make, for every new type of source
+@testset "reduce: dims, compiling the run for a new type of source" begin
+    f = x -> 2x  # (a type of source no other test reduces)
+    src = Base.Broadcast.instantiate(
+        Base.Broadcast.broadcasted(f, array_from_host(rand(Float32, 5, 4, 3))))
+    for R in (array_from_host(zeros(Float32, 5, 4, 1)),
+              view(array_from_host(zeros(Float32, 7, 6, 3)), 2:6, 2:5, 2:2))
+        AK.mapreducedim!(identity, +, R, src)
+        @test Array(R) ≈ sum(2 .* Array(src.args[1]); dims=3)
+        runs = [mi for m in methods(AK.mapreducedim_run!) for mi in Base.specializations(m)
+                if mi isa Core.MethodInstance && typeof(src) in mi.specTypes.parameters]
+        @test !isempty(runs)
+        @test all(mi -> Base.isdispatchtuple(mi.specTypes), runs)
+    end
+end
+
+
 @testset "reduce: launch paths" begin
     # The launch shape of a reduction of `x` along `dims` with operator `op`, as its setup
     # chooses it
