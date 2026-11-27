@@ -44,6 +44,12 @@ AK.sort_tuning(::MetalBackend, ::Type{T}) where {T} =
     AK.SortTuning(bitonic_max_len=512, radix_min_len=1 << 18, bitonic_max_slice_len=1024)
 
 
+# Selecting the two middle elements of each slice of Float32s along `dims` on an M1: counting
+# takes 80 ms for 2^20 slices of 64 elements, against 143 ms in one-block radix selects, but
+# 84 ms for 2^19 slices of 96, against 75 ms.
+AK.select_tuning(::MetalBackend, ::Type) = AK.SelectTuning(count_max_len=64)
+
+
 # Metal's own workload can't cache AcceleratedKernels' operations as they run with the tunings
 # above: this extension isn't loaded while Metal precompiles, so the kernels compiled there use
 # the default tunings. Before Julia 1.11, GPU code cached in a package image shadows the host

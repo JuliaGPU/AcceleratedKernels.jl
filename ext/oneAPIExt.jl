@@ -29,6 +29,11 @@ AK.sort_tuning(::oneAPIBackend, ::Type{T}) where {T} =
                   radix_min_slice_len=1 << 15) :
     AK.SortTuning(bitonic_max_len=128, bitonic_max_slice_len=128)
 
+# Selecting the two middle elements of each slice of Float32s along `dims` on an Arc A770:
+# counting takes 8.4 ms for 2^19 slices of 128 elements, against 9.2 ms in one-block radix
+# selects, but 16.3 ms for slices of 160, against 9.9 ms
+AK.select_tuning(::oneAPIBackend, ::Type) = AK.SelectTuning(count_max_len=128)
+
 
 # oneAPI's own workload can't cache these operations: this extension isn't loaded while oneAPI
 # precompiles, so the kernels it would compile use the default tunings, not the ones above. The
