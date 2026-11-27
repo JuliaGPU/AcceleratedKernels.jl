@@ -137,15 +137,15 @@ function compact(
                   scan_subgroup_width(backend, Int32, block_size), bufs, like)
 end
 
-# (a function barrier on the block size: from KernelAbstractions 0.10, constructing the kernels
-# then infers, which saved 0.5 µs per kernel and call on CUDA)
+# (a function barrier on the block size: constructing the kernels then infers, which saved 0.5 µs per kernel and call on CUDA)
 function compact_tiles(bools, ::Type{I}, output_indices, backend, ::Val{B}, items::Val{N},
                        subgroups, bufs, like) where {I, B, N}
     num_blocks = cld(length(bools), B * N)
     block_counts = bufs.counts
 
     # Count each tile's selected elements, as the scans reduce their tiles, then scan the counts
-    tile_aggregates_kernel!(backend, B)(
+    sub_group_size = sub_group_request(subgroups)
+    tile_aggregates_kernel!(backend, B; sub_group_size)(
         +, block_counts, one_based(bools), b -> Int32(b), Int32(0), Int32(0), items, subgroups;
         ndrange=num_blocks * B)
     accumulate_nested!(+, block_counts, bufs.scan; backend, init=0)
@@ -153,7 +153,7 @@ function compact_tiles(bools, ::Type{I}, output_indices, backend, ::Val{B}, item
 
     out = similar_on(backend, like, I, (n,))
     if n > 0
-        compact_kernel!(backend, B)(
+        compact_kernel!(backend, B; sub_group_size)(
             out, bools, block_counts, eachindex(bools), output_indices, items, subgroups;
             ndrange=num_blocks * B)
     end

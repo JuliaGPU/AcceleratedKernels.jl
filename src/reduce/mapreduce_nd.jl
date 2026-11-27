@@ -132,10 +132,11 @@ function launch!(shape::ByLanes, f::F, op::OP, dst, src, kind, backend, alg, buf
     (; base_offset, outer_strides, outer_sizes, dst_size, reduce_size) = ix
     block_size = alg.block_size
     blocks = cld(dst_size, block_size ÷ shape.lanes)
-    by_lanes_kernel!(backend, block_size)(
+    subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+    by_lanes_kernel!(backend, block_size; sub_group_size=sub_group_request(subgroups))(
         kernel_buffer(src, kind), dst, f, op, seed, init,
         base_offset, outer_strides, outer_sizes, dst_size, reduce_size, Val(shape.lanes),
-        reduce_subgroup_width(backend, typeof(seed), block_size),
+        subgroups,
         ndrange=(block_size * blocks,),
     )
 end
@@ -149,20 +150,20 @@ function launch!(shape::ByBlock, f::F, op::OP, dst, src, kind, backend, alg, buf
     block_size, blocks = alg.block_size, shape.blocks
     W = isdense_buffer(kind) ? vector_width(buffer, base_offset, outer_strides, reduce_strides,
                                             reduce_size, block_size) : 0
+    subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+    sub_group_size = sub_group_request(subgroups)
     if W > 0
-        kernel! = by_block_vector_kernel!(backend, block_size)
+        kernel! = by_block_vector_kernel!(backend, block_size; sub_group_size)
         Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
-            dst_size, reduce_size, blocks, Val(W),
-            reduce_subgroup_width(backend, typeof(seed), block_size),
+            dst_size, reduce_size, blocks, Val(W), subgroups,
             ndrange=(block_size * blocks,),
         )
     else
-        kernel! = by_block_kernel!(backend, block_size)
+        kernel! = by_block_kernel!(backend, block_size; sub_group_size)
         Base.inferencebarrier(kernel!)(
             buffer, dst, f, op, seed, init, base_offset, outer_strides, outer_sizes,
-            reduce_strides, reduce_sizes, dst_size, reduce_size, blocks,
-            reduce_subgroup_width(backend, typeof(seed), block_size),
+            reduce_strides, reduce_sizes, dst_size, reduce_size, blocks, subgroups,
             ndrange=(block_size * blocks,),
         )
     end
@@ -174,11 +175,11 @@ function launch!(shape::ByBlocks, f::F, op::OP, dst, src, kind, backend, alg, bu
        reduce_size) = ix
     block_size, groups = alg.block_size, shape.groups
     partials = bufs.partials
-    multigroup_kernel!(backend, block_size)(
+    subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+    multigroup_kernel!(backend, block_size; sub_group_size=sub_group_request(subgroups))(
         kernel_buffer(src, kind), partials, f, op, seed,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-        Val(dst_size), reduce_size, groups,
-        reduce_subgroup_width(backend, typeof(seed), block_size),
+        Val(dst_size), reduce_size, groups, subgroups,
         ndrange=(block_size * dst_size * groups,),
     )
     combine_groups!(backend, partials, dst, op, seed, init, dst_size, groups, false,
@@ -242,10 +243,10 @@ function combine_groups!(backend, partials, dst, op::OP, seed, init, dst_size, g
         ordered_pass!(backend, block_size, 1, partials, dst, PartialInputs(), op, seed, init,
                       0, (1,), (dst_size,), (dst_size,), (groups,), dst_size, groups, 1)
     else
-        by_block_kernel!(backend, block_size)(
+        subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+        by_block_kernel!(backend, block_size; sub_group_size=sub_group_request(subgroups))(
             partials, dst, PartialInputs(), op, seed, init, 0, (1,), (dst_size,), (dst_size,),
-            (groups,), dst_size, groups, dst_size,
-            reduce_subgroup_width(backend, typeof(seed), block_size),
+            (groups,), dst_size, groups, dst_size, subgroups,
             ndrange=(block_size * dst_size,))
     end
 end

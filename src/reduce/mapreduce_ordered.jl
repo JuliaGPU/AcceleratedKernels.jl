@@ -97,12 +97,12 @@ function ordered_pass!(
 ) where {F, OP}
     W = dense_buffer ? ordered_vector_width(src, base_offset, outer_strides, reduce_strides,
                                             reduce_size, block_size, items_per_thread) : 0
-    kernel! = ordered_kernel!(backend, block_size)
+    subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+    kernel! = ordered_kernel!(backend, block_size; sub_group_size=sub_group_request(subgroups))
     Base.inferencebarrier(kernel!)(
         src, dst, f, op, seed, init,
         base_offset, outer_strides, outer_sizes, reduce_strides, reduce_sizes,
-        output_size, reduce_size, groups, Val(items_per_thread), Val(W),
-        reduce_subgroup_width(backend, typeof(seed), block_size),
+        output_size, reduce_size, groups, Val(items_per_thread), Val(W), subgroups,
         ndrange=(block_size * output_size * groups,),
     )
     return nothing

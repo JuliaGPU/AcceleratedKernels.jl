@@ -363,7 +363,7 @@ Start Julia with multiple threads to run the tests on a multithreaded CPU backen
 $> julia --threads=4 -e 'import Pkg; Pkg.test("AcceleratedKernels")'
 ```
 
-With KernelAbstractions 0.10, whose host backend runs kernels on PoCL, `--cpu-ka` tests
+As the host backend runs kernels on PoCL, `--cpu-ka` tests
 AcceleratedKernels' GPU kernels on host arrays instead of the threaded CPU algorithms:
 ```bash
 $> julia -e 'import Pkg; Pkg.test("AcceleratedKernels"; test_args=["--cpu-ka"])'

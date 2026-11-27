@@ -67,7 +67,7 @@ returned by [`scan_tuning`](@ref).
   adds their prefix, which reads and writes the result twice. GPUs are faster with the former,
   CPUs, whose caches hold the result, with the latter.
 - `subgroups`: whether the kernel algorithms scan the values of a block with sub-group
-  operations, where the backend has them (from KernelAbstractions 0.10), rather than in local
+  operations, where the backend has them, rather than in local
   memory. CPUs, whose sub-group operations synchronize the whole block, scan faster without.
 - `wide_optional_flag`: as for [`ReduceTuning`](@ref).
 

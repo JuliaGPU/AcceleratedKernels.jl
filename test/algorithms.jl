@@ -38,7 +38,7 @@ struct SizeOnly{T, N} <: AbstractArray{T, N}
 end
 Base.size(a::SizeOnly) = a.dims
 
-# A backend that cannot run AK's kernels, like KernelAbstractions 0.9's `CPU`
+# A backend that cannot run AK's kernels
 struct NoKernelsBackend <: KernelAbstractions.Backend end
 AK.runs_kernels(::NoKernelsBackend) = false
 

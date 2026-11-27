@@ -120,10 +120,11 @@ end
 function mapreduce_1d_pass!(commutative::Bool, backend, block_size, items_per_thread, src, dst,
                             f::F, op::OP, seed, init, blocks; buffer=nothing) where {F, OP}
     if commutative
-        kernel! = mapreduce_1d_kernel!(backend, block_size)
+        subgroups = reduce_subgroup_width(backend, typeof(seed), block_size)
+        kernel! = mapreduce_1d_kernel!(backend, block_size;
+                                       sub_group_size=sub_group_request(subgroups))
         Base.inferencebarrier(kernel!)(src, dst, f, op, seed, init, blocks, Val(block_size),
-                                       Val(items_per_thread),
-                                       reduce_subgroup_width(backend, typeof(seed), block_size);
+                                       Val(items_per_thread), subgroups;
                                        ndrange=(block_size * blocks,))
     else
         len = length(src)
