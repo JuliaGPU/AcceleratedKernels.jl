@@ -5,12 +5,13 @@
 struct FakeBackend <: KernelAbstractions.Backend end
 const FAKE_TUNINGS = (sort=Ref(AK.SortTuning()), reduce=Ref(AK.ReduceTuning()),
                       scan=Ref(AK.ScanTuning()), findall=Ref(AK.FindallTuning()),
-                      predicate=Ref(AK.PredicateTuning()))
+                      predicate=Ref(AK.PredicateTuning()), select=Ref(AK.SelectTuning()))
 AK.sort_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.sort[]
 AK.reduce_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.reduce[]
 AK.scan_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.scan[]
 AK.findall_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.findall[]
 AK.predicate_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.predicate[]
+AK.select_tuning(::FakeBackend, ::Type) = FAKE_TUNINGS.select[]
 
 # Run `f` with `tuning` as the fake backend's tuning of its family (the others keep their defaults)
 function with_tuning(f, tuning)
@@ -323,6 +324,30 @@ end
                                     (AK.RadixSort, FakeBackend, A, D, Base.Order.ForwardOrdering)))
         @test rt === AK.RadixSort
     end
+end
+
+
+@testset "select resolution" begin
+    rsel(alg, T, nr, len; backend=FakeBackend()) = AK.resolve_select(alg, backend, T, nr, len)
+    # Auto: radix select where it can, else sorting
+    @test rsel(AK.Auto(), Float32, 2, 10^6) == AK.RadixSelect(512, 4, 2048)
+    @test rsel(AK.Auto(), Int64, 0, 10) isa AK.RadixSelect
+    @test rsel(AK.Auto(), Float32, 3, 100) isa AK.SortSelect
+    @test rsel(AK.Auto(), Float16, 1, 100) isa AK.SortSelect
+    # (a slice length that only fits a 64-bit Int)
+    Sys.WORD_SIZE == 64 &&
+        @test rsel(AK.Auto(), Float32, 1, Int(typemax(UInt32))) isa AK.SortSelect
+    @test rsel(AK.Auto(), Float32, 1, 100; backend=HOST) isa AK.SortSelect
+    # explicit algorithms: fields win over the tuning, and are checked
+    @test rsel(AK.RadixSelect(blocks=7), Float32, 1, 10) == AK.RadixSelect(512, 4, 7)
+    @test_throws ArgumentError rsel(AK.RadixSelect(), Float32, 3, 10)
+    @test_throws ArgumentError rsel(AK.RadixSelect(), Float16, 1, 10)
+    @test_throws ArgumentError rsel(AK.RadixSelect(block_size=128), Float32, 1, 10)
+    @test_throws ArgumentError rsel(AK.RadixSelect(items_per_thread=0), Float32, 1, 10)
+    @test_throws ArgumentError rsel(AK.RadixSelect(), Float32, 1, 10; backend=NoKernelsBackend())
+    @test rsel(AK.SortSelect(sort_alg=AK.MergeSort()), Float16, 5, 10) ==
+          AK.SortSelect(AK.MergeSort())
+    @test_throws ArgumentError rsel(AK.MergeSort(), Float32, 1, 10)
 end
 
 

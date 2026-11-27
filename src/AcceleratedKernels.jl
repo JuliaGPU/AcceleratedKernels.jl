@@ -15,6 +15,7 @@ module AcceleratedKernels
                sort!, sort, sortperm!, sortperm, sort_by_key!,
                reduce, mapreduce, mapreducedim!, sum, prod, minimum, maximum, count,
                accumulate!, accumulate, cumsum, cumprod,
+               select!, select, SelectAlgorithm, RadixSelect, SortSelect,
                searchsortedfirst!, searchsortedlast!, findall, reverse!, reverse, any, all,
                workspace, workspace_size, Workspace,
                Algorithm, Auto, CPUThreads,
@@ -55,6 +56,7 @@ include("accumulator.jl")
 include("block.jl")
 include("searchsorted.jl")
 include("sort/sort.jl")
+include("select.jl")
 include("reduce/reduce.jl")
 include("accumulate/accumulate.jl")
 include("findall.jl")
