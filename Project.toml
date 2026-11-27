@@ -27,6 +27,10 @@ MetalExt = "Metal"
 OpenCLExt = "OpenCL"
 oneAPIExt = "oneAPI"
 
+[sources]
+KernelAbstractions = {url = "https://github.com/JuliaGPU/KernelAbstractions.jl", rev = "tb/sub-group-request"}
+KernelInterface = {url = "https://github.com/JuliaGPU/KernelAbstractions.jl", rev = "tb/sub-group-request", subdir = "lib/KernelInterface"}
+
 [compat]
 AMDGPU = "2.9"
 Adapt = "4"
