@@ -768,7 +768,7 @@ end
         runs = [mi for m in methods(AK.mapreducedim_run!) for mi in Base.specializations(m)
                 if mi isa Core.MethodInstance && typeof(src) in mi.specTypes.parameters]
         @test !isempty(runs)
-        @test all(mi -> isconcretetype(mi.specTypes), runs)
+        @test all(mi -> Base.isdispatchtuple(mi.specTypes), runs)
     end
 end
 
