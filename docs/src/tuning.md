@@ -41,6 +41,8 @@ fields, and one hook returns it for a backend and element type:
 ```@docs
 AcceleratedKernels.SortTuning
 AcceleratedKernels.sort_tuning
+AcceleratedKernels.SelectTuning
+AcceleratedKernels.select_tuning
 AcceleratedKernels.ReduceTuning
 AcceleratedKernels.reduce_tuning
 AcceleratedKernels.ScanTuning

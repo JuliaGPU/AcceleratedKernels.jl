@@ -30,6 +30,7 @@ makedocs(;
             "General Loops" => "api/foreachindex.md",
             "Map" => "api/map.md",
             "Sorting" => "api/sort.md",
+            "Selection" => "api/select.md",
             "Reduce" => "api/reduce.md",
             "MapReduce" => "api/mapreduce.md",
             "Accumulate" => "api/accumulate.md",

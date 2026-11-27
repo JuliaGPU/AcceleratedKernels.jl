@@ -12,7 +12,7 @@ Parallel algorithm building blocks for the Julia ecosystem, targeting multithrea
 
 
 ### A Uniform API, Everywhere
-AcceleratedKernels.jl provides the parallel primitives that GPU code is built from, in the style of CUB: sorting (`sort`, `sortperm`, `sort_by_key!`), reductions (`reduce`, `mapreduce`, `sum`, `any`, ...), prefix scans (`accumulate`, `cumsum`), stream compaction (`findall`), binary searches, and custom loops (`foreachindex`, `foraxes`). The same code runs on all supported architectures, without separate or special-cased kernels.
+AcceleratedKernels.jl provides the parallel primitives that GPU code is built from, in the style of CUB: sorting (`sort`, `sortperm`, `sort_by_key!`), selection by rank (`select`), reductions (`reduce`, `mapreduce`, `sum`, `any`, ...), prefix scans (`accumulate`, `cumsum`), stream compaction (`findall`), binary searches, and custom loops (`foreachindex`, `foraxes`). The same code runs on all supported architectures, without separate or special-cased kernels.
 
 The functions take Base's names and arguments but follow a contract of their own, modelled on GPU libraries such as CUB: the sorts, reductions, scans, `findall` and `any`/`all` take an explicit algorithm with its settings and a reusable workspace for their scratch memory, and results have one documented type. AcceleratedKernels.jl is not a reimplementation of Base: packages such as GPUArrays.jl build Base's API on top of it, and code that needs control over the algorithm or its memory calls it directly.
 
@@ -292,6 +292,7 @@ If you need other algorithms in your work that may be of general use, please ope
 | [Sorting](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/sort/) | `sort` `sort!`                                   | `sort` `sort_team` `stable_sort` `cub::DeviceMergeSort`   |
 |                                               | `sortperm` `sortperm!`                           | `sort_permutation` `index_permutation`                    |
 |                                               | `sort_by_key!`                                   | `sort_by_key` `sort_team_by_key` `cub::DeviceRadixSort::SortPairs` |
+| [Selection](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/select/) | `select` `select!`                               | `std::nth_element` `kthvalue` `partialsort`               |
 | [Reduction](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/reduce/) | `reduce`                                         | `Kokkos::parallel_reduce` `cub::DeviceReduce` `fold` `aggregate` |
 | [MapReduce](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/mapreduce/) | `mapreduce` `mapreducedim!`                      | `transform_reduce` `fold` `cub::DeviceSegmentedReduce`    |
 | [Accumulation](https://juliagpu.github.io/AcceleratedKernels.jl/stable/api/accumulate/) | `accumulate` `accumulate!`                       | `prefix_sum` `thrust::scan` `cub::DeviceScan` `cumsum`    |
