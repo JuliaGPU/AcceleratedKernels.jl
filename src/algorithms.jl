@@ -126,7 +126,7 @@ end # module CPUThreads
 # Capabilities: correctness facts about a backend, checked for `Auto` and explicit algorithms
 # alike. Unlike tunings, they cannot be changed per device.
 
-# The host backend: `KernelAbstractions.CPU` on KernelAbstractions 0.9, its PoCL backend on 0.10.
+# The host backend: KernelAbstractions' PoCL backend
 const HOST_BACKEND = get_backend(Int[])
 const HostBackend = typeof(HOST_BACKEND)
 
@@ -143,11 +143,9 @@ runs_threads(::HostBackend) = true
     runs_kernels(backend)
 
 Whether AK's kernels (`@kernel cpu=false`) run on `backend`: every GPU backend, and the host
-backend of KernelAbstractions 0.10, which compiles kernels for PoCL. KernelAbstractions 0.9's
-`CPU` backend cannot run them.
+backend, which compiles kernels for PoCL.
 """
 runs_kernels(::Backend) = true
-runs_kernels(::HostBackend) = nameof(HostBackend) !== :CPU
 
 
 # Tunings: values chosen per device by the `*_tuning(backend, T)` hooks, to which AK's package
@@ -214,7 +212,7 @@ fill_threads(a::A, t) where {A} =
 function require_kernels(a, backend)
     runs_kernels(backend) || throw(ArgumentError(
         "$(algname(a)) runs AcceleratedKernels' GPU kernels, which " *
-        "$(backend_name(backend)) cannot run (on the host, this needs KernelAbstractions 0.10); " *
+        "$(backend_name(backend)) cannot run; " *
         "use `Auto()` or a `CPUThreads` algorithm"))
     nothing
 end

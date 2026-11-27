@@ -780,8 +780,8 @@ function radix_select!(a::RadixSelect, dst, src, rk::NTuple{NS, Int}, backend, d
         B = len <= 2048 ? 256 : 512
         items = nextpow(2, cld(len, B))
         W = scan_subgroup_width(backend, UInt32, B)
-        select_block_kernel!(backend, B)(dst, src, rev, rk, src_layout, dst_layout, Val(items),
-                                         W; ndrange=B * nslices)
+        select_block_kernel!(backend, B; sub_group_size=sub_group_request(W))(
+            dst, src, rev, rk, src_layout, dst_layout, Val(items), W; ndrange=B * nslices)
     else
         select_global!(a, dst, src, rk, backend, src_layout, dst_layout, rev, bufs)
     end
@@ -806,8 +806,8 @@ function select_global!(a, dst, src, ranks::NTuple{NR}, backend, src_layout, dst
     WS = scan_subgroup_width(backend, UInt32, 256)
     (; hist, kst, ust, pmin, pmax, comp) = bufs
     select_init_kernel!(backend, 256)(hist, kst, ust, rk, len; ndrange=256 * nslices)
-    hist! = select_hist_kernel!(backend, B)
-    resolve! = select_resolve_kernel!(backend, 256)
+    hist! = select_hist_kernel!(backend, B; sub_group_size=sub_group_request(W))
+    resolve! = select_resolve_kernel!(backend, 256; sub_group_size=sub_group_request(WS, WR))
     for pass in 0:sizeof(K) - 1
         hist!(hist, comp, pmin, pmax, kst, ust, src, rev, src_layout, pass, bps, cap, Val(NS),
               Val(a.items_per_thread), W; ndrange=B * bps * nslices)

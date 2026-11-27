@@ -65,6 +65,6 @@ Base's views and reshapes have. MappedArrays.jl does not define such rules yet, 
 #### The host backend
 
 Arrays in host memory (`Array` and views of it) are on the host backend. `Auto` processes them on
-Julia threads with the `CPUThreads` algorithms. On KernelAbstractions 0.10 the host backend also
-runs AcceleratedKernels' GPU kernels (on PoCL), so an explicit kernel algorithm such as
-`MergeSort()` works on host arrays there; on KernelAbstractions 0.9 it is an `ArgumentError`.
+Julia threads with the `CPUThreads` algorithms. The host backend also runs AcceleratedKernels'
+GPU kernels (on PoCL), so an explicit kernel algorithm such as `MergeSort()` works on host arrays
+too.

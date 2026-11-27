@@ -144,7 +144,8 @@ function accumulate_1d_gpu!(
     start = scan_start(v, init, seed)
 
     subgroups = scan_subgroup_width(backend, typeof(seed), block_size)
-    kernel! = scan_tile_kernel!(backend, block_size)
+    sub_group_size = sub_group_request(subgroups)
+    kernel! = scan_tile_kernel!(backend, block_size; sub_group_size)
     if num_blocks == 1
         kernel!(op, v, src, load, start, seed, inclusive, nothing, nothing, items,
                 subgroups, ndrange=block_size)
@@ -160,9 +161,9 @@ function accumulate_1d_gpu!(
     if tuning(scan_tuning, backend, eltype(v)).reduce_then_scan
         # Reduce the tiles, then scan them from their prefix: this reads the source twice and
         # writes the result once
-        tile_aggregates_kernel!(backend, block_size)(op, totals, src, load, start, seed,
-                                                     items, subgroups,
-                                                     ndrange=num_blocks * block_size)
+        tile_aggregates_kernel!(backend, block_size; sub_group_size)(
+            op, totals, src, load, start, seed, items, subgroups,
+            ndrange=num_blocks * block_size)
         scan_totals!()
         kernel!(op, v, src, load, start, seed, inclusive, nothing, totals, items,
                 subgroups, ndrange=num_blocks * block_size)

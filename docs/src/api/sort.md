@@ -41,7 +41,7 @@ never replaced:
 | [`BitonicSort`](@ref AcceleratedKernels.BitonicSort) | no | yes | no | no | all | kernels |
 | [`CPUThreads.SampleSort`](@ref AcceleratedKernels.CPUThreads.SampleSort) | yes | yes | yes | yes | all | host |
 
-"Kernels" means GPU backends, and the host backend on KernelAbstractions 0.10, which runs
+"Kernels" means GPU backends, and the host backend, which runs
 AcceleratedKernels' kernels on PoCL. See [Algorithms and backends](@ref) for how `Auto` chooses.
 
 ```@docs

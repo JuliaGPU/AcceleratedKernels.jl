@@ -82,11 +82,8 @@ if in_test_env("OpenCL")
                  :(OpenCL.cl.device().max_work_group_size))
 end
 
-# AK's kernels on the host backend, only with --cpu-ka: KernelAbstractions 0.10 runs them (on
-# PoCL), 0.9 does not
+# AK's kernels on the host backend (on PoCL), only with --cpu-ka
 if args.custom["cpu-ka"] !== nothing
-    AK.runs_kernels(AK.HOST_BACKEND) ||
-        error("--cpu-ka needs KernelAbstractions 0.10, whose host backend runs AK's kernels")
     add_backend!("cpu-ka", nothing, :(get_backend([])), 1024; host_kernels=true)
 end
 

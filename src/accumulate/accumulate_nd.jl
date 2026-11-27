@@ -169,10 +169,11 @@ function slice_pass!(kind, backend, block_size, nslices, v, src, load, op::OP, s
         kernel!(v, src, load, op, start, seed, carries, totals, inclusive, n_inner, len,
                 nchunks, per_chunk, nthreads; ndrange=(block_size * cld(nthreads, block_size),))
     else
-        kernel! = slice_tiles_kernel!(backend, block_size)
+        subgroups = scan_subgroup_width(backend, typeof(seed), block_size)
+        kernel! = slice_tiles_kernel!(backend, block_size;
+                                      sub_group_size=sub_group_request(subgroups))
         kernel!(v, src, load, op, start, seed, carries, totals, inclusive, n_inner, len,
-                nchunks, per_chunk, Val(items),
-                scan_subgroup_width(backend, typeof(seed), block_size);
+                nchunks, per_chunk, Val(items), subgroups;
                 ndrange=(block_size * nslices * nchunks,))
     end
     return nothing

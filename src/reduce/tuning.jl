@@ -57,7 +57,7 @@ Values that fill unset algorithm fields for reductions on one device, as returne
   (so that Compute Sanitizer's initcheck doesn't see reads of unwritten bytes there), or with a
   `Bool`, which some compilers handle better in local memory. The results are the same.
 - `subgroups`: whether the kernels combine the values of a block with sub-group operations,
-  where the backend has them (from KernelAbstractions 0.10), keeping a value per sub-group
+  where the backend has them, keeping a value per sub-group
   rather than per thread in local memory. CPUs, whose sub-group operations synchronize the
   whole block, reduce faster without.
 

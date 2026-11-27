@@ -275,7 +275,9 @@ function subgroup_scans()
         @eval AK.scan_tuning(::typeof(BACKEND), ::Type) =
             AK.ScanTuning(; subgroups=true, reduce_then_scan=$reduce_then_scan)
         Base.invokelatest() do
-            @test AK.scan_subgroup_width(BACKEND, Int32, 256) !== Val(0)
+            # (one of the widths the kernels can request)
+            @test AK.scan_subgroup_width(BACKEND, Int32, 256) in
+                  map(Val, AK.KI.sub_group_sizes(BACKEND))
             for (sz, dims) in (((100_000,), nothing), ((3, 6200), 2), ((3, 70_000), 2))
                 xh = rand(Int32(-9):Int32(9), sz...)
                 alg = dims === nothing ? scan_alg() : slice_alg()

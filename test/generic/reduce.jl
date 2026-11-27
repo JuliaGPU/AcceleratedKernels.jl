@@ -1019,7 +1019,9 @@ end
 # without a neutral element (`plus` has none)
 plus(a, b) = a + b
 function subgroup_reductions()
-    @test AK.reduce_subgroup_width(BACKEND, Int32, 256) !== Val(0)
+    # (one of the widths the kernels can request)
+    @test AK.reduce_subgroup_width(BACKEND, Int32, 256) in
+          map(Val, AK.KI.sub_group_sizes(BACKEND))
     for (sz, dims) in (((10^6,), :), ((64, 1000), 1), ((20_000, 300), 1), ((100_000, 4), 1))
         xh = rand(Int32, sz...)
         x = array_from_host(xh)

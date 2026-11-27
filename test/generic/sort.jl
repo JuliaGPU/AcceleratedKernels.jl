@@ -119,7 +119,7 @@ end
     else
         @test_throws ArgumentError AK.sort!(v; alg=AK.CPUThreads.SampleSort())
     end
-    # AK's kernels need a backend that runs them (on the host, KernelAbstractions 0.10)
+    # AK's kernels need a backend that runs them
     if !AK.runs_kernels(BACKEND)
         for alg in (AK.MergeSort(), AK.RadixSort(), AK.BitonicSort())
             @test_throws ArgumentError AK.sort!(v; alg)
